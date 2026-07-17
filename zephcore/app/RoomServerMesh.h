@@ -257,6 +257,12 @@ public:
     void setAPCTargetMargin(uint8_t margin_db) override {
         getPowerController().setTargetMargin(margin_db);
     }
+    uint32_t getAPCEchoCount() const override {
+        return getPowerController().getEchoCount();
+    }
+    uint32_t getAPCNoEchoCount() const override {
+        return getPowerController().getNoEchoCount();
+    }
 #endif
 
     void handleCommand(uint32_t sender_timestamp, char* command, char* reply);

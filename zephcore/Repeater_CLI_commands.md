@@ -181,6 +181,7 @@ All `set uplink.*` changes are saved immediately and only applied after reboot.
 | `get radio` | Radio params: `freq,bw,sf,cr` |
 | `get freq` | Frequency in MHz |
 | `get tx` | TX power: fixed dBm or APC status |
+| `get tx apc` | APC diagnostics: effective/max power, reduction, margin EMA, target, echo/noecho counters |
 | `get lat` | Stored latitude |
 | `get lon` | Stored longitude |
 | `get dutycycle` | Duty cycle as percentage (e.g. "50.0%") |
@@ -194,7 +195,7 @@ All `set uplink.*` changes are saved immediately and only applied after reboot.
 | `get flood.max.advert` | Max retransmit hops for ADVERT floods |
 | `get flood.advert.interval` | Flood advertisement interval in hours |
 | `get advert.interval` | Local advertisement interval in minutes |
-| `get apc.margin` | Adaptive Power Control target RSSI margin in dB |
+| `get apc.margin` | Adaptive Power Control target SNR link margin in dB |
 | `get allow.read.only` | Whether read-only clients are allowed |
 | `get guest.password` | Guest access password |
 | `get owner.info` | Owner/contact info (pipes `\|` display as newlines) |
@@ -240,7 +241,7 @@ Changes are persisted immediately unless noted. Some require a reboot.
 | `set flood.max.advert <count>` | 0–64 | Hop limit for ADVERT floods only (default 8); curbs advert churn independent of flood.max |
 | `set flood.advert.interval <hours>` | 3–168 | How often the repeater floods its own advertisement |
 | `set advert.interval <mins>` | min–240 | How often the repeater sends local advertisements |
-| `set apc.margin <db>` | 6–30 | Target RSSI margin for Adaptive Power Control |
+| `set apc.margin <db>` | 6–30 | Target SNR link margin for Adaptive Power Control |
 | `set allow.read.only <on\|off>` | | Allow or deny read-only client connections |
 | `set guest.password <pwd>` | | Set guest access password |
 | `set owner.info <text>` | Use `\|` for newlines | Owner/contact information |

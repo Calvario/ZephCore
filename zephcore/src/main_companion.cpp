@@ -763,6 +763,12 @@ public:
 	void setAPCTargetMargin(uint8_t margin_db) override {
 		companion_mesh.setAPCTargetMargin(margin_db);
 	}
+	uint32_t getAPCEchoCount() const override {
+		return companion_mesh.getAPCEchoCount();
+	}
+	uint32_t getAPCNoEchoCount() const override {
+		return companion_mesh.getAPCNoEchoCount();
+	}
 #endif
 
 	mesh::LocalIdentity& getSelfId() override { return companion_mesh.self_id; }

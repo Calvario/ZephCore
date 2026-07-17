@@ -127,7 +127,9 @@ DispatcherAction Mesh::routeRecvPacket(Packet *packet)
 		uint32_t h = ContentionTracker::computePacketHash32(packet);
 		_contention.trackRetransmit(h, (uint32_t)_ms->getMillis());
 #ifdef CONFIG_ZEPHCORE_APC
-		_power_ctrl.trackTransmit(h, (uint32_t)_ms->getMillis());
+		/* We appended our own hash at path index n — true echoes must
+		 * carry it there. */
+		_power_ctrl.trackTransmit(h, (uint32_t)_ms->getMillis(), n);
 #endif
 		uint32_t d = getRetransmitDelay(packet);
 		return ACTION_RETRANSMIT_DELAYED(packet->getPathHashCount(), d);  // give priority to closer sources
@@ -265,8 +267,14 @@ DispatcherAction Mesh::onRecvPacket(Packet *pkt)
 	if (pkt->isRouteFlood()) {
 		uint32_t h = ContentionTracker::computePacketHash32(pkt);
 #ifdef CONFIG_ZEPHCORE_APC
-		uint8_t first_hop = (pkt->getPathHashCount() > 0) ? pkt->path[0] : 0;
-		_power_ctrl.recordEcho(h, pkt->_snr, first_hop, (uint32_t)_ms->getMillis());
+		{
+			uint8_t hs = pkt->getPathHashSize();
+			uint8_t self_hash[4]; /* max path hash size (path_len bits 7:6 + 1) */
+			self_id.copyHashTo(self_hash, hs);
+			_power_ctrl.recordEcho(h, pkt->_snr, (uint32_t)_ms->getMillis(),
+					       pkt->path, pkt->getPathHashCount(), hs,
+					       self_hash);
+		}
 #endif
 		if (_contention.recordDupeIfTracked(h, (uint32_t)_ms->getMillis())) {
 			extendPendingRetransmit(h);
@@ -553,7 +561,8 @@ void Mesh::sendFlood(Packet *packet, uint32_t delay_millis, uint8_t path_hash_si
 #ifdef CONFIG_ZEPHCORE_APC
 	{
 		uint32_t h = ContentionTracker::computePacketHash32(packet);
-		_power_ctrl.trackTransmit(h, (uint32_t)_ms->getMillis());
+		_power_ctrl.trackTransmit(h, (uint32_t)_ms->getMillis(),
+					  PowerController::PATH_POS_ORIGINATED);
 	}
 #endif
 
@@ -588,7 +597,8 @@ void Mesh::sendFlood(Packet *packet, uint16_t *transport_codes, uint32_t delay_m
 #ifdef CONFIG_ZEPHCORE_APC
 	{
 		uint32_t h = ContentionTracker::computePacketHash32(packet);
-		_power_ctrl.trackTransmit(h, (uint32_t)_ms->getMillis());
+		_power_ctrl.trackTransmit(h, (uint32_t)_ms->getMillis(),
+					  PowerController::PATH_POS_ORIGINATED);
 	}
 #endif
 

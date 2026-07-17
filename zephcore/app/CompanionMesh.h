@@ -206,6 +206,12 @@ public:
 	void setAPCTargetMargin(uint8_t margin_db) {
 		getPowerController().setTargetMargin(margin_db);
 	}
+	uint32_t getAPCEchoCount() const {
+		return getPowerController().getEchoCount();
+	}
+	uint32_t getAPCNoEchoCount() const {
+		return getPowerController().getNoEchoCount();
+	}
 #endif
 
 	/**

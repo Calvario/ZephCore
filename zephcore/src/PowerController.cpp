@@ -4,14 +4,15 @@
  */
 
 #include <mesh/PowerController.h>
-#include <mesh/Packet.h>
 #include <string.h>
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(zephcore_apc, CONFIG_ZEPHCORE_MAIN_LOG_LEVEL);
 
-/* SNR thresholds per SF (x4 fixed point, matching radio_common.h) */
+/* SNR demodulation thresholds per SF (x4 fixed point, SX126x DS table) */
 static constexpr int8_t snr_threshold_x4[] = {
+	-10, /* SF5:  -2.5 dB */
+	-20, /* SF6:  -5.0 dB */
 	-30, /* SF7:  -7.5 dB */
 	-40, /* SF8: -10.0 dB */
 	-50, /* SF9: -12.5 dB */
@@ -24,7 +25,8 @@ namespace mesh {
 
 PowerController::PowerController()
 	: _next_idx(0), _margin_ema_x256(0), _finalized_count(0),
-	  _last_echo_ms(0), _power_reduction_db(0), _enabled(true),
+	  _last_echo_ms(0), _echo_count(0), _noecho_count(0), _noecho_streak(0),
+	  _power_reduction_db(0), _enabled(true),
 	  _sf(8), _last_source_count(0), _target_margin_x4(DEFAULT_TARGET_MARGIN_X4)
 {
 	memset(_ring, 0, sizeof(_ring));
@@ -41,6 +43,9 @@ void PowerController::setEnabled(bool en)
 		_margin_ema_x256 = 0;
 		_finalized_count = 0;
 		_last_echo_ms = 0;
+		_echo_count = 0;
+		_noecho_count = 0;
+		_noecho_streak = 0;
 		_last_source_count = 0;
 		_power_reduction_db = 0;
 	}
@@ -48,9 +53,9 @@ void PowerController::setEnabled(bool en)
 
 int8_t PowerController::sfThresholdX4(uint8_t sf)
 {
-	int idx = (int)sf - 7;
+	int idx = (int)sf - 5;
 	if (idx < 0) idx = 0;
-	if (idx > 5) idx = 5;
+	if (idx > 7) idx = 7;
 	return snr_threshold_x4[idx];
 }
 
@@ -64,7 +69,7 @@ int PowerController::findEntry(uint32_t hash32) const
 	return -1;
 }
 
-void PowerController::trackTransmit(uint32_t hash32, uint32_t now_ms)
+void PowerController::trackTransmit(uint32_t hash32, uint32_t now_ms, uint8_t path_pos)
 {
 	if (!_enabled) return;
 
@@ -78,14 +83,17 @@ void PowerController::trackTransmit(uint32_t hash32, uint32_t now_ms)
 	e.timestamp_ms = now_ms;
 	e.source_count = 0;
 	e.sf_at_track = _sf;
+	e.path_pos = path_pos;
+	e.reduction_at_track = _power_reduction_db;
 	memset(e.sources, 0, sizeof(e.sources));
 	e.active = true;
 
 	_next_idx = (_next_idx + 1) % RING_SIZE;
 }
 
-bool PowerController::recordEcho(uint32_t hash32, int8_t snr_x4,
-				 uint8_t first_hop_hash, uint32_t now_ms)
+bool PowerController::recordEcho(uint32_t hash32, int8_t snr_x4, uint32_t now_ms,
+				 const uint8_t *path, uint8_t path_count,
+				 uint8_t hash_size, const uint8_t *self_hash)
 {
 	if (!_enabled) return false;
 
@@ -100,9 +108,36 @@ bool PowerController::recordEcho(uint32_t hash32, int8_t snr_x4,
 		return false;
 	}
 
+	/* True-echo gating: for forwarded floods, only a dupe carrying our
+	 * hash at the position we appended it proves our TX was received.
+	 * Parallel retransmits of the origin's copy — including dupes heard
+	 * before our own TX even airs — don't route through us and say
+	 * nothing about our reach. */
+	if (e.path_pos != PATH_POS_ORIGINATED) {
+		if (path_count <= e.path_pos) return false;
+		if (memcmp(&path[(size_t)e.path_pos * hash_size], self_hash,
+			   hash_size) != 0) {
+			return false;
+		}
+	}
+
+	/* Echo source = the node that transmitted this copy = last path
+	 * entry (every retransmitting node appends itself; nodes that
+	 * can't append don't retransmit). */
+	uint8_t src_hash = (path_count > 0)
+			   ? path[(size_t)(path_count - 1) * hash_size] : 0;
+
+	/* Re-contact after a stale gap: the EMA predates the gap and must
+	 * be re-earned before it can drive reduction again. */
+	if (_last_echo_ms != 0 && now_ms - _last_echo_ms > STALE_MS) {
+		LOG_INF("APC: echo after stale gap, re-warming margin estimate");
+		_margin_ema_x256 = 0;
+		_finalized_count = 0;
+	}
+
 	/* Update existing source or add new one */
 	for (int i = 0; i < e.source_count; i++) {
-		if (e.sources[i].hash == first_hop_hash) {
+		if (e.sources[i].hash == src_hash) {
 			if (snr_x4 > e.sources[i].snr_x4) {
 				e.sources[i].snr_x4 = snr_x4;
 			}
@@ -112,7 +147,7 @@ bool PowerController::recordEcho(uint32_t hash32, int8_t snr_x4,
 	}
 
 	if (e.source_count < MAX_SOURCES) {
-		e.sources[e.source_count].hash = first_hop_hash;
+		e.sources[e.source_count].hash = src_hash;
 		e.sources[e.source_count].snr_x4 = snr_x4;
 		e.source_count++;
 	}
@@ -124,7 +159,8 @@ bool PowerController::recordEcho(uint32_t hash32, int8_t snr_x4,
 int8_t PowerController::computeRobustSNR(const EchoEntry &entry) const
 {
 	if (entry.source_count == 0) {
-		return sfThresholdX4(entry.sf_at_track); /* no echo = margin 0 */
+		/* Not reached in practice — finalizeEntry handles no-echo. */
+		return sfThresholdX4(entry.sf_at_track);
 	}
 
 	if (entry.source_count == 1) {
@@ -182,11 +218,27 @@ void PowerController::finalizeEntry(int idx)
 	EchoEntry &e = _ring[idx];
 	_last_source_count = e.source_count;
 
-	int8_t robust_snr = computeRobustSNR(e);
-	int32_t margin_x4 = (int32_t)robust_snr - (int32_t)sfThresholdX4(e.sf_at_track);
+	int32_t margin_x4;
+	if (e.source_count == 0) {
+		/* Nobody downstream decoded this TX.  At the reduction R in
+		 * effect when it was sent, that bounds the full-power margin:
+		 * margin - R <= 0  =>  margin <= R.  Encode the least
+		 * pessimistic consistent value (R) so occasional misses
+		 * (collision, RX duty cycle) correct gently; the no-echo
+		 * streak below handles real link loss hard. */
+		margin_x4 = (int32_t)e.reduction_at_track * 4;
+		_noecho_count++;
+		_noecho_streak++;
+	} else {
+		int8_t robust_snr = computeRobustSNR(e);
+		margin_x4 = (int32_t)robust_snr
+			  - (int32_t)sfThresholdX4(e.sf_at_track);
+		_echo_count++;
+		_noecho_streak = 0;
+	}
+
 	/* margin_x4 is in x4 units. Convert to x256 for EMA. */
 	int32_t sample_x256 = margin_x4 << 6; /* x4 * 64 = x256 */
-
 	int32_t diff = sample_x256 - _margin_ema_x256;
 
 	if (_finalized_count < WARMUP_COUNT) {
@@ -204,9 +256,20 @@ void PowerController::finalizeEntry(int idx)
 	_finalized_count++;
 	e.active = false;
 
-	LOG_DBG("APC finalize: sources=%d robust_snr=%.1f margin=%.1f ema=%.1f",
+	/* Fast recovery: consecutive unechoed transmissions while reduced
+	 * mean the EMA no longer reflects reality — restore full power NOW
+	 * and re-earn the reduction from fresh samples. */
+	if (_noecho_streak >= NOECHO_TRIP_COUNT && _power_reduction_db > 0) {
+		LOG_INF("APC: %u consecutive no-echo TX, restoring full power",
+			(unsigned)_noecho_streak);
+		_power_reduction_db = 0;
+		_margin_ema_x256 = 0;
+		_finalized_count = 0;
+		_noecho_streak = 0;
+	}
+
+	LOG_DBG("APC finalize: sources=%d margin=%.1f ema=%.1f",
 		(int)_last_source_count,
-		(double)(robust_snr / 4.0f),
 		(double)(margin_x4 / 4.0f),
 		(double)getMarginEstimate());
 }
@@ -224,33 +287,39 @@ void PowerController::tick(uint32_t now_ms)
 
 	if (!isWarmedUp()) return;
 
-	int32_t margin_x256 = _margin_ema_x256;
-	int32_t target_x256 = _target_margin_x4 << 6;
-	int32_t hyst_x256 = HYSTERESIS_X4 << 6;
-
 	int8_t old_reduction = _power_reduction_db;
 
 	/* Staleness takes priority: ramp back to full power if no echoes.
 	 * When stale, never increase reduction — old EMA data is unreliable. */
 	if (isStale(now_ms)) {
 		if (_power_reduction_db > 0) {
-			_power_reduction_db -= STEP_DOWN_DB;
+			_power_reduction_db -= STEP_UP_DB;
 			if (_power_reduction_db < 0) {
 				_power_reduction_db = 0;
 			}
 		}
-	} else if (margin_x256 > target_x256 + hyst_x256) {
-		/* Margin very good — step down */
-		if (_power_reduction_db < MAX_REDUCTION_DB) {
-			_power_reduction_db += STEP_DOWN_DB;
+	} else {
+		/* Compensated control: echo SNR is measured from the
+		 * neighbor's fixed-power TX and does NOT respond to our own
+		 * reduction, so subtract it ourselves (path reciprocity).
+		 * excess = margin the neighbor has ABOVE target at our
+		 * current reduced power; regulate it to the deadband. */
+		int32_t excess_x256 = _margin_ema_x256
+				    - ((int32_t)_target_margin_x4 << 6)
+				    - ((int32_t)_power_reduction_db << 8);
+		int32_t hyst_x256 = HYSTERESIS_X4 << 6;
+
+		if (excess_x256 > hyst_x256) {
+			int step = (int)(excess_x256 >> 8);
+			if (step > STEP_DOWN_DB) step = STEP_DOWN_DB;
+			_power_reduction_db += step;
 			if (_power_reduction_db > MAX_REDUCTION_DB) {
 				_power_reduction_db = MAX_REDUCTION_DB;
 			}
-		}
-	} else if (margin_x256 < target_x256 - hyst_x256) {
-		/* Margin too low — step up (reduce the reduction) */
-		if (_power_reduction_db > 0) {
-			_power_reduction_db -= STEP_UP_DB;
+		} else if (excess_x256 < -hyst_x256) {
+			int step = (int)((-excess_x256) >> 8);
+			if (step > STEP_UP_DB) step = STEP_UP_DB;
+			_power_reduction_db -= step;
 			if (_power_reduction_db < 0) {
 				_power_reduction_db = 0;
 			}

@@ -585,10 +585,14 @@ config ZEPHCORE_APC
 	bool "Adaptive Power Control (APC)"
 	default y
 	help
-	  Automatically reduce TX power when echo packets from neighbors
-	  indicate excess SNR margin. Saves battery and reduces channel
-	  congestion. Ramps back to full power within 2 minutes if no
-	  echoes are heard.
+	  Automatically reduce TX power when true echoes (flood dupes
+	  that provably routed through this node) show excess SNR margin
+	  downstream. The control law compensates for its own reduction
+	  (echo SNR is measured from the neighbor's fixed-power TX), so
+	  it holds the target margin instead of ratcheting to the floor.
+	  Saves battery and reduces channel congestion. Ramps back to
+	  full power within 2 minutes without echoes, or immediately
+	  after 2 consecutive unechoed transmissions.
 
 	  Uses rogue-filtering: clusters echo SNRs to avoid one badly
 	  placed high-SNR neighbor from over-reducing power.

@@ -543,9 +543,11 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                 float margin = _callbacks->getAPCMargin();
                 int effective = (int)_prefs->tx_power_dbm - (int)apc;
                 snprintf(reply, CLI_REPLY_SIZE,
-                         "> apc=on effective=%ddBm max=%d reduction=%d margin=%.1f target=%d",
+                         "> apc=on effective=%ddBm max=%d reduction=%d margin=%.1f target=%d echo=%u noecho=%u",
                          effective, (int)_prefs->tx_power_dbm, (int)apc, (double)margin,
-                         (int)_callbacks->getAPCTargetMargin());
+                         (int)_callbacks->getAPCTargetMargin(),
+                         (unsigned)_callbacks->getAPCEchoCount(),
+                         (unsigned)_callbacks->getAPCNoEchoCount());
             } else {
                 snprintf(reply, CLI_REPLY_SIZE, "> apc=off max=%ddBm target=%d",
                          (int)_prefs->tx_power_dbm, (int)_callbacks->getAPCTargetMargin());
