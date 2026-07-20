@@ -74,16 +74,6 @@ public:
     virtual uint32_t getDutyCycleTimeoutRestarts() const { return 0; }
     virtual void resetDutyCycleTimeoutRestarts() {}
 
-    // Adaptive Power Control
-    virtual int8_t getAPCReduction() const { return 0; }
-    virtual float getAPCMargin() const { return 0.0f; }
-    virtual bool isAPCEnabled() const { return false; }
-    virtual void setAPCEnabled(bool en) { (void)en; }
-    virtual uint8_t getAPCTargetMargin() const { return 16; }
-    virtual void setAPCTargetMargin(uint8_t margin_db) { (void)margin_db; }
-    virtual uint32_t getAPCEchoCount() const { return 0; }
-    virtual uint32_t getAPCNoEchoCount() const { return 0; }
-
     // Adaptive CAD (LBT detPeak calibration)
     virtual int formatCadStatus(char* buf, int cap) { (void)buf; (void)cap; return 0; }
     virtual void applyCadPrefs() {}
