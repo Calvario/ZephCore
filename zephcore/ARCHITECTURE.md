@@ -854,6 +854,7 @@ Build strings and flash methods: `boards/supported_boards.md` and `boards/exampl
 | SenseCAP Solar | nRF52840 | SX1262 | L76K | - | QSPI, battery monitor |
 | XIAO nRF52840 + Wio-SX1262 | nRF52840 | SX1262 | - | - | - |
 | ProMicro SX1262 | nRF52840 | SX1262 (E22-900M30S) | Yes | - | Button, LED, battery ADC |
+| muzi works R1 Neo | nRF52840 | SX1262 | Yes | - | Buzzer, button, RX8130CE RTC, latched-rail power-off |
 | XIAO nRF54L15 | nRF54L15 | SX1262 | - | - | Contacts capped at 450 |
 | XIAO ESP32-C3 | ESP32-C3 | SX1262 | - | - | Contacts capped at 300 |
 | XIAO ESP32-C6 | ESP32-C6 | SX1262 | - | - | - |
