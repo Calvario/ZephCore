@@ -794,6 +794,19 @@ void ZephyrDataStore::loadPrefs(NodePrefs &prefs)
 			prefs.cad_busycap = 90;
 		}
 	}
+
+	/* Offset 159: adc_multiplier (ZephCore extension, float LE, 0 = board
+	 * DT default).  Absent in pre-existing files → keep 0.0 so the DT
+	 * default stays in effect.  Same range guard as the repeater CLI path
+	 * (CommonCLI constrains 0..30000); NaN/garbage resets to default. */
+	if (off + 4 <= len) {
+		memcpy(&prefs.adc_multiplier, &buf[off], sizeof(float));
+		off += 4;
+		if (prefs.adc_multiplier != prefs.adc_multiplier ||
+		    prefs.adc_multiplier < 0.0f || prefs.adc_multiplier > 30000.0f) {
+			prefs.adc_multiplier = 0.0f;
+		}
+	}
 }
 
 void ZephyrDataStore::savePrefs(const NodePrefs &prefs)
@@ -883,7 +896,12 @@ void ZephyrDataStore::savePrefs(const NodePrefs &prefs)
 	buf[off++] = prefs.cad_probe_interval;
 	/* Offset 158: cad_busycap (ZephCore extension, percent) */
 	buf[off++] = prefs.cad_busycap;
-	/* Total: 159 bytes */
+	/* Offset 159: adc_multiplier (ZephCore extension, float LE, 0 = board
+	 * DT default).  Was applied at boot but never serialized before this
+	 * field existed — battery calibration silently reset every reboot. */
+	memcpy(&buf[off], &prefs.adc_multiplier, sizeof(float));
+	off += 4;
+	/* Total: 163 bytes */
 
 	bool ok = atomicReplaceFile(PREFS_FILE, buf, off);
 	LOG_DBG("savePrefs: wrote %s, ok=%d (%d bytes), name='%.16s'",

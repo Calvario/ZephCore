@@ -614,13 +614,26 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
             savePrefs();
             strcpy(reply, "OK");
         } else if (memcmp(config, "int.thresh ", 11) == 0) {
-            _prefs->interference_threshold = atoi(&config[11]);
-            savePrefs();
-            strcpy(reply, "OK");
+            /* Companion runtime never reads this (getInterferenceThreshold is
+             * only overridden in Repeater/RoomServer) — reject instead of a
+             * false OK. */
+            if (strcmp(_callbacks->getRole(), "companion") == 0) {
+                strcpy(reply, "Error: not supported on companion");
+            } else {
+                _prefs->interference_threshold = atoi(&config[11]);
+                savePrefs();
+                strcpy(reply, "OK");
+            }
         } else if (memcmp(config, "agc.reset.interval ", 19) == 0) {
-            _prefs->agc_reset_interval = atoi(&config[19]) / 4;
-            savePrefs();
-            snprintf(reply, CLI_REPLY_SIZE, "OK - interval rounded to %u", ((uint32_t)_prefs->agc_reset_interval) * 4);
+            /* Companion runtime never reads this (getAGCResetInterval is only
+             * overridden in Repeater/RoomServer). */
+            if (strcmp(_callbacks->getRole(), "companion") == 0) {
+                strcpy(reply, "Error: not supported on companion");
+            } else {
+                _prefs->agc_reset_interval = atoi(&config[19]) / 4;
+                savePrefs();
+                snprintf(reply, CLI_REPLY_SIZE, "OK - interval rounded to %u", ((uint32_t)_prefs->agc_reset_interval) * 4);
+            }
         } else if (memcmp(config, "cad.auto ", 9) == 0) {
             if (memcmp(&config[9], "on", 2) == 0 || memcmp(&config[9], "off", 3) == 0) {
                 _prefs->cad_auto = (config[9] == 'o' && config[10] == 'n') ? 1 : 0;
@@ -818,14 +831,21 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
             savePrefs();
             strcpy(reply, "OK (ignored: direct.txdelay is now adaptive)");
         } else if (memcmp(config, "backoff.multiplier ", 19) == 0) {
-            float f = atof(&config[19]);
-            if (f >= 0.0f && f <= 2.0f) {
-                _prefs->backoff_multiplier = f;
-                _callbacks->setBackoffMultiplier(f);
-                savePrefs();
-                strcpy(reply, "OK");
+            /* Companion's setBackoffMultiplier callback is the base-class
+             * no-op and the value isn't restored at boot — reject instead of
+             * a false OK. */
+            if (strcmp(_callbacks->getRole(), "companion") == 0) {
+                strcpy(reply, "Error: not supported on companion");
             } else {
-                strcpy(reply, "Error, range 0.0-2.0");
+                float f = atof(&config[19]);
+                if (f >= 0.0f && f <= 2.0f) {
+                    _prefs->backoff_multiplier = f;
+                    _callbacks->setBackoffMultiplier(f);
+                    savePrefs();
+                    strcpy(reply, "OK");
+                } else {
+                    strcpy(reply, "Error, range 0.0-2.0");
+                }
             }
         } else if (memcmp(config, "owner.info ", 11) == 0) {
             config += 11;
@@ -848,6 +868,12 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                 strcpy(reply, "Error, must be 0,1, or 2");
             }
         } else if (memcmp(config, "loop.detect ", 12) == 0) {
+            /* Loop detection runs only in the Repeater/RoomServer forward
+             * path — companions never consult loop_detect. */
+            if (strcmp(_callbacks->getRole(), "companion") == 0) {
+                strcpy(reply, "Error: not supported on companion");
+                return;
+            }
             config += 12;
             uint8_t mode;
             if (memcmp(config, "off", 3) == 0) {
