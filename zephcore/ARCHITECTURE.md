@@ -760,9 +760,10 @@ Shutdown.
 
 Single button; tap-count → key-code mapping comes from the board's devicetree `tap-codes` (up to 5). Typical mapping:
 - 1 tap → Page next
-- 2 taps → Flood advert
+- 2 taps → LED heartbeat toggle
 - 3 taps → Buzzer toggle
-- 4 taps → GPS toggle (immediate, no delay)
+- 4 taps → GPS toggle
+- 5 taps → Flood advert (immediate, no delay)
 
 ### 8.4 Buzzer
 

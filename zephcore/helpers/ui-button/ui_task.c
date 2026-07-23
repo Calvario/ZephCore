@@ -636,8 +636,8 @@ static void ui_input_cb(struct input_event *evt, void *user_data)
 		break;
 
 	case INPUT_KEY_B:
-		/* Double tap (400ms delayed): flood advert */
-		action_flood_advert();
+		/* Double tap (400ms delayed): toggle LED heartbeat */
+		action_leds_toggle();
 		break;
 
 	case INPUT_KEY_D:
@@ -651,8 +651,8 @@ static void ui_input_cb(struct input_event *evt, void *user_data)
 		break;
 
 	case INPUT_KEY_E:
-		/* Quintuple tap (immediate): toggle LED heartbeat */
-		action_leds_toggle();
+		/* Quintuple tap (immediate): flood advert */
+		action_flood_advert();
 		break;
 
 	/* ===== Longpress output ===== */
