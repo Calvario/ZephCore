@@ -126,7 +126,7 @@ void CommonCLI::loadPrefs(const char* path) {
     ok = ok && prefs_read(&file, &_prefs->meshtimesync, sizeof(_prefs->meshtimesync));         // 296
     ok = ok && prefs_read(&file, &_prefs->cad_auto, sizeof(_prefs->cad_auto));                 // 297
     ok = ok && prefs_read(&file, &_prefs->cad_offset, sizeof(_prefs->cad_offset));             // 298
-    ok = ok && prefs_read(&file, &_prefs->cad_probe_interval, sizeof(_prefs->cad_probe_interval)); // 299
+    ok = ok && prefs_read(&file, &_prefs->probe_interval, sizeof(_prefs->probe_interval)); // 299
     ok = ok && prefs_read(&file, &_prefs->cad_busycap, sizeof(_prefs->cad_busycap));            // 300
 
     if (!ok) {
@@ -174,8 +174,8 @@ void CommonCLI::loadPrefs(const char* path) {
     _prefs->meshtimesync = constrain(_prefs->meshtimesync, (uint8_t)0, (uint8_t)1);
     _prefs->cad_auto = constrain(_prefs->cad_auto, (uint8_t)0, (uint8_t)1);
     _prefs->cad_offset = constrain(_prefs->cad_offset, (int8_t)CAD_OFFSET_MIN, (int8_t)CAD_OFFSET_MAX);
-    if (_prefs->cad_probe_interval != 0 && _prefs->cad_probe_interval < 10) {
-        _prefs->cad_probe_interval = 10;
+    if (_prefs->probe_interval != 0 && _prefs->probe_interval < 10) {
+        _prefs->probe_interval = 10;
     }
     _prefs->cad_busycap = constrain(_prefs->cad_busycap, (uint8_t)0, (uint8_t)90);
 
@@ -249,7 +249,7 @@ void CommonCLI::savePrefs(const char* path) {
     fs_write(&file, &_prefs->meshtimesync, sizeof(_prefs->meshtimesync));
     fs_write(&file, &_prefs->cad_auto, sizeof(_prefs->cad_auto));
     fs_write(&file, &_prefs->cad_offset, sizeof(_prefs->cad_offset));
-    fs_write(&file, &_prefs->cad_probe_interval, sizeof(_prefs->cad_probe_interval));
+    fs_write(&file, &_prefs->probe_interval, sizeof(_prefs->probe_interval));
     fs_write(&file, &_prefs->cad_busycap, sizeof(_prefs->cad_busycap));
 
     fs_close(&file);
@@ -566,6 +566,11 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         } else if (memcmp(config, "dc.restarts", 11) == 0) {
             snprintf(reply, CLI_REPLY_SIZE, "> %u",
                      (uint32_t)_callbacks->getDutyCycleTimeoutRestarts());
+        } else if (memcmp(config, "probe.interval", 14) == 0) {
+            /* Seconds between periodic radio measurements — the noise-floor
+             * sample and the CAD probe that consumes it.  0 = probing off. */
+            snprintf(reply, CLI_REPLY_SIZE, "> %u",
+                     (uint32_t)_prefs->probe_interval);
         } else if (memcmp(config, "cad", 3) == 0) {
             /* Runtime state + per-level probe stats live in the radio.
              * Remote replies get the truncated buffer like meshtimesync. */
@@ -653,12 +658,14 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                 savePrefs();
                 strcpy(reply, "OK");
             }
-        } else if (memcmp(config, "cad.probe.interval ", 19) == 0) {
-            int val = atoi(&config[19]);
+        /* Governs every periodic radio measurement, not just CAD — the
+         * noise-floor sampler and the CAD probe share one reading. */
+        } else if (memcmp(config, "probe.interval ", 15) == 0) {
+            int val = atoi(&config[15]);
             if (val != 0 && (val < 10 || val > 255)) {
-                strcpy(reply, "Error: interval is 0 (off) or 10-255 seconds");
+                strcpy(reply, "Error: interval is 0 (probing off) or 10-255 seconds");
             } else {
-                _prefs->cad_probe_interval = (uint8_t)val;
+                _prefs->probe_interval = (uint8_t)val;
                 _callbacks->applyCadPrefs();
                 savePrefs();
                 strcpy(reply, "OK");

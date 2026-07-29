@@ -430,7 +430,7 @@ dBm): it gates on signal *strength* ≈ link budget, blind to distance, so
 raising it means "react to strong signals only, ignore faint/echo". The right
 LBT sensitivity is site-dependent and cannot be derived from the RSSI floor.
 `LoRaRadioBase::cadMaintenance()` (housekeeping tick) runs one calibration CAD
-probe per `cad.probe.interval` (default **15 s**) at a signed **level** relative
+probe per `probe.interval` (default **15 s**) at a signed **level** relative
 to the family's per-SF base detPeak, restarts RX, and classifies busy verdicts
 with a ground-truth filter. **Key property:** the probe is *skipped* when RSSI >
 floor+7 dB, so probes only ever sample the quiet/faint regime — the whole loop
