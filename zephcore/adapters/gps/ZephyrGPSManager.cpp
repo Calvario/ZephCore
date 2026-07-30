@@ -17,6 +17,7 @@
  */
 
 #include "ZephyrGPSManager.h"
+#include "../../helpers/pm_sleep_guard.h"
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
@@ -1513,6 +1514,15 @@ void gps_enable(bool enable)
 	if (enable) {
 		LOG_INF("GPS enabled - starting acquisition");
 
+		/* Block SoC light sleep for as long as the module is powered.
+		 * The GNSS UART is not a wake source, so a sleeping SoC drops
+		 * inbound NMEA outright — sentences would be lost mid-stream and
+		 * a fix would never converge. Balanced by the put in the disable
+		 * branch; the early return above keeps the pair 1:1, and under a
+		 * GPS duty cycle the lock is only held during the awake phase.
+		 * Compiles to nothing without CONFIG_PM. */
+		zc_pm_block_sleep();
+
 		/* Start acquiring immediately (no delay for first wake) */
 		gps_current_state = GPS_STATE_ACQUIRING;
 		consecutive_good_fixes = 0;
@@ -1542,6 +1552,9 @@ void gps_enable(bool enable)
 		}
 	} else {
 		LOG_INF("GPS disabled - canceling timers and powering off");
+
+		/* Matches the block taken in the enable branch. */
+		zc_pm_unblock_sleep();
 
 		/* Cancel any pending work */
 		k_work_cancel_delayable(&gps_wake_work);

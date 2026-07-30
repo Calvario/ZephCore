@@ -436,6 +436,45 @@ config ZEPHCORE_NOISE_FLOOR_INTERVAL_MS
 	  30000, ~4 min and ~8 min.  Past 15000 the CAD probe becomes the binding
 	  deadline instead, so raise both or neither.
 
+config ZEPHCORE_PM_BOOT_AWAKE_MS
+	int "Block light sleep for this long after boot (ms)"
+	depends on PM && SOC_FAMILY_ESPRESSIF_ESP32
+	default 600000
+	range 0 3600000
+	help
+	  How long after boot the SoC refuses to light-sleep, so the USB console
+	  is guaranteed reachable for a configuration session.
+
+	  This exists because nothing arms a UART wake source on ESP32 — see
+	  helpers/pm_esp32_console.c.  Once the window closes, characters typed at
+	  a sleeping node are DROPPED and the CLI stops answering over USB until
+	  the board resets.  In practice connecting a terminal usually does reset
+	  it (the USB bridge drives EN from DTR), which re-arms the window.
+
+	  0 disables the window entirely — the node may sleep immediately after
+	  boot, and the USB console becomes unusable except in the instants it
+	  happens to be awake.  Do not set 0 on a board you still need to
+	  configure.
+
+	  Raising it costs only the extra awake time at the start of each boot.
+
+config ZEPHCORE_PM_CONSOLE_UART_NUM
+	int "Console UART index flushed before light sleep"
+	depends on PM && SOC_FAMILY_ESPRESSIF_ESP32
+	default 0
+	range 0 2
+	help
+	  Hardware UART index (not a DT node) passed to
+	  esp_rom_uart_tx_wait_idle() before entering light sleep, so a line in
+	  the TX FIFO is not cut off mid-character by the clock stopping.
+
+	  0 is correct for every board this is currently enabled on: their
+	  console is uart0, whether via a USB-serial bridge (Heltec V3/V4/V4.3)
+	  or the ROM-default pads.  Change it only if a board's console is moved
+	  to another hardware UART — a wrong index does not fail the build, it
+	  just silently flushes the wrong peripheral and lets the console
+	  truncate again.
+
 menu "Radio Configuration"
 
 choice ZEPHCORE_RADIO_TYPE
