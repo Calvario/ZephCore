@@ -764,6 +764,50 @@ config ZEPHCORE_REPEATER_GPS_INTERVAL_SEC
 	  overrides it with "set gps duty <sec>" (persisted to flash).
 	  Companions default to ZEPHCORE_GPS_POLL_INTERVAL_SEC (300s) instead.
 
+config ZEPHCORE_GPS_NAV_MODE
+	int "GNSS navigation dynamic model (CASIC $PCAS11)"
+	range -1 7
+	default 1 if ZEPHCORE_ROLE_REPEATER || ZEPHCORE_ROLE_ROOM_SERVER
+	default 3
+	help
+	  Dynamic model sent to CASIC-family GNSS modules (Quectel L76K/L76KB,
+	  Air530Z) on boards using the generic-NMEA driver: 0 = portable,
+	  1 = stationary, 2 = pedestrian, 3 = automotive, 4 = sea,
+	  5-7 = airborne. -1 sends nothing.
+
+	  Defaults to stationary for fixed roles and automotive otherwise.
+	  Worth setting rather than leaving alone: the model is stored IN THE
+	  MODULE and survives reflashing the host, so a slot module that
+	  previously lived in another device can arrive stuck in an airborne
+	  model that quietly degrades fixes on a fixed site.
+
+	  Boards that always carry a CASIC part use the air530z driver instead
+	  — see CONFIG_GNSS_LUATOS_AIR530Z_NAV_MODE for those.
+
+config ZEPHCORE_GPS_SAT_DIAG
+	bool "GPS per-constellation satellite diagnostics"
+	select GNSS_SATELLITES
+	default y if ZEPHCORE_ROLE_REPEATER
+	help
+	  Tally tracked satellites per constellation from GSV sentences and
+	  report them in "get gps" as sys=G<n>/R<n>/E<n>/B<n>/?<n>
+	  (GPS / GLONASS / Galileo / BeiDou / other).
+
+	  This is the ground truth for whether the boot-time multi-constellation
+	  configuration (PMTK353 / UBX-CFG-GNSS) actually took: a module still in
+	  its GPS-only default emits only $GPGSV, so every counter but G stays 0.
+	  Satellite count alone cannot prove this — only the talker IDs can.
+
+	  Costs RAM: CONFIG_GNSS_SATELLITES adds 512 bytes to the driver's UART
+	  RX buffer plus a per-satellite array (~770 bytes total, measured on
+	  RAK3401). Default on for repeaters, which have the headroom; off for
+	  companions, which are RAM-bound. Enable it explicitly for a companion
+	  diagnostic build.
+
+	  Independent of "set gps diag", which is a runtime toggle and always
+	  available — this option only adds the per-constellation evidence to
+	  its report.
+
 endmenu
 
 menu "WiFi OTA Update"

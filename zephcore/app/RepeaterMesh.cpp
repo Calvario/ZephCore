@@ -1102,6 +1102,9 @@ void RepeaterMesh::formatGpsStatsReply(char* reply) {
             "on state=%s sats=%u no fix",
             state, gsi.satellites);
     }
+
+    /* Per-constellation tally is deliberately NOT appended here — "get gps"
+     * has to fit a LoRa reply. It lives in "get gps diag" instead. */
 }
 
 void RepeaterMesh::savePrefs() {

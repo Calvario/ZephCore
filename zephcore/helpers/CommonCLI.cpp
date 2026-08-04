@@ -573,6 +573,10 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
             }
         } else if (memcmp(config, "rxduty", 6) == 0) {
             snprintf(reply, CLI_REPLY_SIZE, "> %d", (int)_prefs->rx_duty_cycle);
+        } else if (memcmp(config, "gps diag", 8) == 0) {
+            // What the last module-configuration attempt actually did.
+            reply[0] = '>'; reply[1] = ' ';
+            gps_get_diag_report(reply + 2, CLI_REPLY_SIZE - 2);
         } else if (memcmp(config, "gps duty", 8) == 0) {
             uint32_t s = gps_get_poll_interval_sec();  // now-effective value
             if (s == 0) strcpy(reply, "> always on (0)");
@@ -1065,6 +1069,26 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                 snprintf(reply, CLI_REPLY_SIZE, "OK - rxduty=%d (reboot to apply)", _prefs->rx_duty_cycle);
             } else {
                 strcpy(reply, "Error: must be 0, 1, on, or off");
+            }
+        } else if (memcmp(config, "gps diag", 8) == 0) {
+            // set gps diag <0|1|on|off> — arm module-configuration reporting.
+            // Not persisted: clears on reboot, by design.
+            const char* arg = config + 8;
+            while (*arg == ' ') arg++;
+            int val = -1;
+            if (memcmp(arg, "on", 2) == 0) val = 1;
+            else if (memcmp(arg, "off", 3) == 0) val = 0;
+            else if (arg[0] == '0' || arg[0] == '1') val = atoi(arg);
+            if (val == 0 || val == 1) {
+                gps_set_diag(val == 1);
+                if (val == 1) {
+                    strcpy(reply, "OK - gps diag on; run 'gps off' then 'gps on', "
+                                  "then 'get gps diag'");
+                } else {
+                    strcpy(reply, "OK - gps diag off");
+                }
+            } else {
+                strcpy(reply, "usage: set gps diag <0|1|on|off>");
             }
         } else if (memcmp(config, "gps duty", 8) == 0) {
             // set gps duty <seconds> | default   (0 = always on)

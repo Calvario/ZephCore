@@ -133,6 +133,37 @@ Regions control which flood packets the repeater forwards. The region tree is hi
 | `gps advert prefs` | Include stored lat/lon from prefs in advertisements |
 | `set gps duty <sec>` | GPS duty interval (standby seconds between fixes). `0` = always-on (continuous; streams fresh fixes, can download a full almanac). Floor 10s, cap 604800 (1 week). Persists to flash, applied live. |
 | `set gps duty default` | Reset GPS duty to the role default (repeater/room 48h, companion 300s) |
+| `set gps diag <0\|1\|on\|off>` | Arm GPS module-configuration diagnostics (see below). Not persisted — clears on reboot |
+
+**GPS configuration diagnostics.** At boot the firmware configures the GNSS module — constellations, AssistNow/EASY, minimum elevation, fix rate — and on modules driven over raw NMEA those commands are sent **blind**: nothing reads the module's reply, so a silently rejected configuration is indistinguishable from a working one. These two commands make that visible.
+
+```
+set gps diag 1        # arm it
+gps off               # power-cycle the module...
+gps on                # ...which re-runs configuration and records the result
+get gps diag          # read it back
+```
+
+Sample reply:
+
+```
+> diag=on cfg=uart age=910s mod=URANUS5 sent=12/336B sys=G3/R4/E0/B3/?0
+```
+
+- `cfg=` which path ran — `uart` (raw PMTK+PCAS+UBX), `api` (driver GNSS API), `blind` (neither available), or `never-run`
+- `mod=` module identification captured from the `$GPTXT` reply to a version query, or `no-reply`
+- `sent=` commands/bytes written to the module (UART path), or `sys_ret=`/`rate_ret=` return codes (API path)
+- `sys=` tracked satellites per constellation from GSV talker IDs: **G**PS / GLONASS (**R**) / Galileo (**E**) / **B**eiDou / other. A constellation that stops reporting for 30 s decays to zero rather than showing a stale count
+
+`sys=` totalling more than `sats=` in `get gps` is expected, not a discrepancy: GSV counts satellites **tracked**, GGA counts satellites **used in the fix solution**.
+
+**`mod=` is the TX-path proof.** Everything else on this transport is written blind, so a module that hears nothing looks exactly like one that hears everything and ignores it. A version string means the module received a command and answered. `mod=no-reply` alongside a healthy `sats=` in `get gps` means the receive direction works but the module is not hearing us — wiring or pin assignment, not configuration.
+
+**`sent=` proves transmission, not acceptance.** Only `sys=` shows what the module actually did. A module still running its factory or previously saved configuration reports `G` non-zero with the rest at `0`. Note `B0` is expected on u-blox M8 (BeiDou is deliberately disabled — only three major constellations can run concurrently), and `?0` is normal outside Japan (QZSS is regional).
+
+The generic-NMEA path sends three protocols — PMTK (MediaTek), PCAS (CASIC: Quectel L76K/L76KB, Air530Z) and UBX (u-blox) — because a WisBlock-style GPS slot can hold any of them and each family ignores what it does not understand. Related build option: `CONFIG_ZEPHCORE_GPS_NAV_MODE` sets the CASIC navigation dynamic model (`$PCAS11`), defaulting to stationary for repeaters and room servers and automotive otherwise. It is worth setting because that model is stored *in the module* and survives reflashing the host — a slot module that previously lived in another device can arrive stuck in an airborne model that quietly degrades fixes on a fixed site.
+
+Caveats: the `sys=` tally needs `CONFIG_ZEPHCORE_GPS_SAT_DIAG` (default on for repeaters, off for companions to save RAM) — the reply says so when built without it. Only the raw-UART path is re-run on `gps on`; boards with a real GNSS driver (Air530Z, LC76G) keep reporting their boot-time result, because that path goes through `modem_chat_run_script()`, which is safe only at boot. On those boards `E0` is also expected — the Air530Z driver supports GPS/GLONASS/BeiDou but not Galileo, and the firmware falls back automatically.
 
 ---
 
@@ -216,6 +247,7 @@ All `set uplink.*` changes are saved immediately and only applied after reboot.
 | `get radio.rxgain` | RX gain boost: `0` or `1` |
 | `get rxduty` | RX duty cycle mode: `0` or `1` |
 | `get gps duty` | Now-effective GPS duty interval in seconds (`always on (0)` when continuous) |
+| `get gps diag` | What the last GPS module-configuration attempt did — which path ran, bytes sent, and tracked satellites per constellation. See **GPS configuration diagnostics** in the GPS section for the field reference |
 | `get meshtimesync` | Mesh time-sync state + live dry-run: on/off, eligible voter count, votes for/against, consensus skew and radius, would-be verdict (`ok`/`in-band`/`step±N`/`abstain (reason)`/`hold (reason)`; a recent clock set — manual or GPS — shows as `hold (suppressed)`, and a backward step a forward-only role would refuse is annotated `(skipped: forward-only)`), step counters, suppression countdown, and a per-sender evidence table (`prefix hops count skew E`, `E` = counted toward the verdict above). Entries that count print first, so a size-capped reply never hides the ones that explain the summary; if the table doesn't fully fit, a trailing `+N more` shows how many were left out. Sensing runs even while off, so this works as a dry-run before enabling. Over remote admin the reply is truncated to the packet size (summary always fits); the full table needs the USB CLI. |
 | `get probe.interval` | Seconds between periodic radio measurements (noise-floor sample + CAD probe). 0 = CAD probing off |
 | `get dc.restarts` | Duty-cycle preamble false-positive re-arm counter (RxTimeout re-arms + parked-RX watchdog recoveries). High values mean the preamble detector is tripping on noise/interference without real packets arriving — inflates RX-on time and drains battery; packets are never lost to it. Reset by `clear stats`. |
