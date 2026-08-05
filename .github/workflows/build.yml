@@ -25,7 +25,7 @@ env:
   # flash works exactly as usual.
   #
   # 1.16.8: pre-release while ESP32 light sleep is unvalidated on hardware.
-  prerelease: "true"
+  prerelease: "false"
 
 jobs:
   setup-zephyr:
