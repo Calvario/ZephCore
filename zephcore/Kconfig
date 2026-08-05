@@ -766,6 +766,7 @@ config ZEPHCORE_REPEATER_GPS_INTERVAL_SEC
 
 config ZEPHCORE_GPS_NMEA_DUMP
 	bool "Log every NMEA sentence received from the GNSS module"
+	depends on GNSS
 	help
 	  Print each sentence the GNSS driver parses, plus everything else the
 	  module emits, to the console. For diagnosing a receiver that reports
@@ -799,6 +800,12 @@ config ZEPHCORE_GPS_NAV_MODE
 
 config ZEPHCORE_GPS_SAT_DIAG
 	bool "GPS per-constellation satellite diagnostics"
+	# Must depend on GNSS, not just select GNSS_SATELLITES: on a board with
+	# no GNSS at all (native Linux, xiao_nrf52840) GNSS is n, and y-selecting
+	# a symbol whose dependencies are unmet is a Kconfig error that aborts the
+	# build — not a warning. The repeater default below would otherwise turn
+	# this on for every GNSS-less repeater target.
+	depends on GNSS
 	select GNSS_SATELLITES
 	default y if ZEPHCORE_ROLE_REPEATER
 	help
