@@ -29,6 +29,7 @@
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/pm/device.h>
 #include <string.h>
+#include <stdio.h>
 #if defined(CONFIG_SOC_NRF52840)
 #include <nrfx.h>
 #endif
@@ -81,6 +82,12 @@ LOG_MODULE_REGISTER(zephcore_gps, CONFIG_ZEPHCORE_GPS_LOG_LEVEL);
 #else
 #define HAS_GPS_POWER_REGULATOR 0
 #endif
+
+/* Runtime diagnostics toggle. Declared OUT here, not inside the HAS_GNSS
+ * block: gps_set_diag()/gps_get_diag()/gps_get_diag_report() are part of the
+ * unconditional public API and are compiled on boards with no GNSS at all,
+ * so a declaration hidden behind HAS_GNSS breaks every such board. */
+static bool gps_diag_on = false;
 
 /* ========== GPS Power Strategy ==========
  * Module power is GPIO/regulator controlled — GNSS driver PM is not used
@@ -482,7 +489,6 @@ static struct {
 	int64_t at_ms;       /* uptime when configuration last ran */
 } gps_cfg_diag;
 
-static bool gps_diag_on = false;
 
 /* Module identification string, captured by the GNSS driver from the reply to
  * its version query (CASIC parts answer in-band as a $GPTXT sentence).
