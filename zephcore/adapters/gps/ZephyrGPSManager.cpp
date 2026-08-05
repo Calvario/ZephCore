@@ -494,6 +494,14 @@ static bool gps_diag_on = false;
  * MCU's TX line reaches the module at all. */
 extern "C" int zephcore_gnss_version_get(char *buf, size_t len) __attribute__((weak));
 
+/* Count of NMEA sentences the GNSS driver has parsed. This is the one signal
+ * in the whole diagnostic that cannot be misread: no satellites, a module
+ * silenced by a disabled output protocol, and a module stranded at the wrong
+ * baud all look identical otherwise. Non-zero means the module is alive and
+ * talking at our baud, so anything still wrong is signal; zero means nothing
+ * is arriving and no antenna work will change that. */
+extern "C" uint32_t zephcore_gnss_rx_count(void) __attribute__((weak));
+
 /* True only while gps_configure_via_uart() is running (see gps_uart_send). */
 static bool gps_cfg_counting = false;
 
@@ -1429,8 +1437,23 @@ static const uint8_t pmtk_standby[] = "$PMTK161,0*28\r\n";
  *   version=0, reserved[3]=0,
  *   duration=0x00000000 (infinite),
  *   flags=0x00000006 (backup + force),
- *   wakeupSources=0x00000020 (UART RX)
- * Module stops all output and draws ~7µA. Wakes on any UART RX byte. */
+ *   wakeupSources=0x00000028 (uartrx bit3 | extint0 bit5)
+ *
+ * THE WAKE SOURCE BIT IS LOAD-BEARING. wakeupSources bit 3 is uartrx; bit 5
+ * is extint0. This frame previously sent 0x20 — extint0 only — with a comment
+ * claiming that was "UART RX (bit 5)". It is not. EXTINT is not routed to the
+ * WisBlock connector on the RAK12500 (RAK's datasheet: only UART/I2C, 1PPS,
+ * RESET, VDD and GND are connected), so the module was told to sleep forever
+ * with a wake source that can never be asserted. duration=0 means infinite,
+ * so it never came back: no NMEA at any baud, and no I2C either, because
+ * backup mode powers down the DDC interface too. Only a physical power cycle
+ * recovered it — a reboot does not, since the 3V3_S rail stays up.
+ * Confirmed on hardware: reseat -> module answers -> one fix -> first standby
+ * -> gone again.
+ *
+ * 0x28 sets both, so a board that does wire EXTINT keeps that path as well.
+ * Module stops all output and draws ~20µA (ZOE-M8Q at 3V, datasheet Table 13;
+ * the 15µA hardware-backup figure needs VCC removed entirely). */
 static const uint8_t ubx_pmreq_backup[] = {
 	0xB5, 0x62,             /* UBX sync chars */
 	0x02, 0x41,             /* Class: RXM, ID: PMREQ */
@@ -1440,9 +1463,9 @@ static const uint8_t ubx_pmreq_backup[] = {
 	0x00, 0x00, 0x00,       /* reserved1[3] */
 	0x00, 0x00, 0x00, 0x00, /* duration: 0 = infinite */
 	0x06, 0x00, 0x00, 0x00, /* flags: backup(0x02) | force(0x04) */
-	0x20, 0x00, 0x00, 0x00, /* wakeupSources: UART RX (bit 5) */
+	0x28, 0x00, 0x00, 0x00, /* wakeupSources: uartrx(bit3) | extint0(bit5) */
 	/* Checksum (Fletcher-8 over class..payload) */
-	0x79, 0xCB
+	0x81, 0xEB
 };
 
 /* Put GPS module into software sleep (for boards without GPIO power control).
@@ -2257,6 +2280,16 @@ void gps_get_diag_report(char *buf, size_t len)
 				    gps_diag_on ? "on" : "off", pname, age_s);
 	if (n >= len) {
 		return;
+	}
+
+	/* Sentences parsed from the module. Print this before anything else
+	 * that could be misinterpreted — rx=0 makes every other field moot. */
+	if (zephcore_gnss_rx_count != NULL) {
+		n += (size_t)snprintf(buf + n, len - n, " rx=%u",
+				      (unsigned)zephcore_gnss_rx_count());
+		if (n >= len) {
+			return;
+		}
 	}
 
 	/* Module identity, when the driver could obtain it. Present means the

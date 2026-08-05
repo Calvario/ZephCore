@@ -147,17 +147,18 @@ get gps diag          # read it back
 Sample reply:
 
 ```
-> diag=on cfg=uart age=910s mod=URANUS5 sent=12/336B sys=G3/R4/E0/B3/?0
+> diag=on cfg=uart age=910s rx=120 mod=URANUS5 sent=12/336B sys=G3/R4/E0/B3/?0
 ```
 
+- `rx=` NMEA sentences the driver has parsed. **Check this first** — it is the only field that cannot be misread. Non-zero means the module is alive, at the right baud, and talking, so anything still wrong is signal or antenna. Zero means nothing is arriving at all, and no antenna work will help
 - `cfg=` which path ran — `uart` (raw PMTK+PCAS+UBX), `api` (driver GNSS API), `blind` (neither available), or `never-run`
-- `mod=` module identification captured from the `$GPTXT` reply to a version query, or `no-reply`
+- `mod=` module identification, from a CASIC `$GPTXT` version reply or a u-blox `$PUBX` poll response, or `no-reply`. Only an explicit software-version token is accepted as an identity — TXT sentences also carry warnings, and a warning reported as an identity is worse than no answer
 - `sent=` commands/bytes written to the module (UART path), or `sys_ret=`/`rate_ret=` return codes (API path)
 - `sys=` tracked satellites per constellation from GSV talker IDs: **G**PS / GLONASS (**R**) / Galileo (**E**) / **B**eiDou / other. A constellation that stops reporting for 30 s decays to zero rather than showing a stale count
 
 `sys=` totalling more than `sats=` in `get gps` is expected, not a discrepancy: GSV counts satellites **tracked**, GGA counts satellites **used in the fix solution**.
 
-**`mod=` is the TX-path proof.** Everything else on this transport is written blind, so a module that hears nothing looks exactly like one that hears everything and ignores it. A version string means the module received a command and answered. `mod=no-reply` alongside a healthy `sats=` in `get gps` means the receive direction works but the module is not hearing us — wiring or pin assignment, not configuration.
+**`rx=` first, then `mod=`.** `rx=` is the only field that cannot be misread: non-zero means the module is alive, at the right baud and talking, so anything still wrong is signal or antenna; zero means nothing is arriving at all. `mod=` then tells you whether the module *heard* us — everything on this transport is written blind, so a module that hears nothing looks exactly like one that hears everything and ignores it. `mod=no-reply` with `rx=` climbing means the receive direction works but our transmit does not reach it: wiring or pin assignment, not configuration.
 
 **`sent=` proves transmission, not acceptance.** Only `sys=` shows what the module actually did. A module still running its factory or previously saved configuration reports `G` non-zero with the rest at `0`. Note `B0` is expected on u-blox M8 (BeiDou is deliberately disabled — only three major constellations can run concurrently), and `?0` is normal outside Japan (QZSS is regional).
 

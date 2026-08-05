@@ -30,6 +30,10 @@
 > as a result. Reconnecting your terminal normally resets the node and gives you another 10 minutes;
 > if it doesn't, power-cycle. Details in the light-sleep section below.
 >
+> **If your node's GPS went quiet after its first fix, this release fixes it.** A wrong bit in the
+> sleep command put u-blox modules into permanent backup mode on boards without hardware GPS power
+> control. Recovery needed a physical power cycle — a reboot was not enough. See the GPS section.
+>
 > **One CLI rename:** `set/get cad.probe.interval` is now `set/get probe.interval` — the same setting,
 > renamed because one measurement now feeds both the noise floor and the CAD probe. Your stored value
 > carries over; only the command name changed. `set/get agc.reset.interval` is gone (see below).
@@ -133,6 +137,64 @@ and the RX-entry settle delay are now derived from the SX1261/2 datasheet (rev 2
 replaced by **`sp:<mean-spread>/<zero-spread %>(<count>)`**. A **non-zero mean proves the reads are
 independent**, however high the zero-spread share climbs — only mean `0.0` with a high share indicts the
 sampler. Measured on air at BW 62.5: `0.6/90%` quiet, `0.9/84%` with the floor at −103 dBm.
+
+### GPS: module configuration was never actually running — multi-constellation now works
+
+The whole boot-time GNSS configuration path (constellations, AssistNow/EASY, elevation mask, fix rate)
+was **dead code**. A feature macro was used ~500 lines before it was defined, and an undefined
+identifier in `#if` is silently zero, so every board on the generic-NMEA driver ran on whatever its
+module happened to default to. Fixing the ordering exposed several further problems, all of which had
+been masked by the code never executing:
+
+- **u-blox `UBX-CFG-GNSS` was malformed.** Config blocks were written 7 bytes long instead of 8 (the
+  `reserved0` field was missing from every block), so the receiver rejected the whole message. Rebuilt
+  correctly, and now limited to three concurrent major constellations, which is the M8 hardware limit.
+- **`UBX-CFG-NAV5` had a one-byte checksum error**, so the elevation mask was silently discarded.
+- **Galileo could not be reported at all** until the NMEA version is raised to 4.10 — the `$GAGSV`
+  talker does not exist below it. Now sent before the constellation config.
+- **CASIC modules (Quectel L76K/L76KB, Air530Z) received no configuration whatsoever.** The generic
+  path spoke only PMTK and UBX, and CASIC parts understand neither. It now speaks PCAS as well, so a
+  L76K in a WisBlock slot is finally configured instead of sitting on its GPS+BeiDou factory default.
+  **If your Wio Tracker L1 has been tracking noticeably fewer satellites than it should, this is why.**
+- **The NMEA output stream was being over-run.** At 9600 baud a multi-GNSS receiver emits more than the
+  link can carry once GSA and GSV multiply per constellation, and the failure mode is not "slow GPS"
+  but a receiver that appears dead. The output is now trimmed to what the firmware actually parses.
+- **BeiDou satellites were being discarded by the parser** — the pre-4.10 `$BDGSV` talker was not
+  recognised, so BeiDou always read as zero even while tracking normally.
+- **The navigation dynamic model is now set explicitly.** It is stored *in the module* and survives
+  reflashing the host, so a second-hand module can arrive stuck in an airborne or automotive model.
+  Repeaters and room servers get stationary; everything else automotive.
+
+### Fixed: GPS sleep put u-blox modules to sleep permanently
+
+`UBX-RXM-PMREQ` was sent with the wrong wake-source bit — `extint0` instead of `uartrx` — combined with
+an infinite duration. On boards with no hardware GPS power control the module was told to enter backup
+mode forever, wakeable only by a pin that is not routed on the RAK12500. **The wake byte we sent on the
+UART could never wake it, and backup also powers down the I2C interface, so the module went completely
+silent on every interface.** A reboot did not help either, because the supply rail is `regulator-boot-on`
+and never toggles — only physically removing power recovered it.
+
+In practice: any affected node got one fix after boot, then lost its GPS until someone power-cycled the
+hardware. Fixed, and confirmed on hardware — the module now enters backup and wakes on the next duty
+cycle with a ~3 second hot start.
+
+### New: `set gps diag` / `get gps diag`
+
+GNSS configuration is written blind — nothing in the protocol path confirms the module accepted it, and
+a module with no sky view, one that is silent, and one stranded at the wrong baud rate all look
+identical to the firmware. `set gps diag 1` re-runs configuration on the next `gps off` / `gps on`, and
+`get gps diag` reports what happened:
+
+```
+> diag=on cfg=uart age=216s rx=559 mod=u-blox sent=17/464B sys=G9/R8/E6/B0/?0
+```
+
+`rx=` is parsed NMEA sentences (non-zero means the module is genuinely talking), `mod=` is the module
+identity if it answered a version query, and `sys=` is tracked satellites per constellation, which is
+the only real proof the constellation config took. Not persisted — it clears on reboot.
+
+`CONFIG_ZEPHCORE_GPS_NMEA_DUMP` (see `boards/common/gps_debug.conf`) additionally logs every NMEA
+sentence to the console for field diagnosis.
 
 ### Fixed: SX126x RSSI/AGC calibration used the wrong band on sub-GHz builds
 

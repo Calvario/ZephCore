@@ -43,7 +43,7 @@ index c5d09261da5..94ff2848b88 100644
 +
  endif
 diff --git a/drivers/gnss/gnss_luatos_air530z.c b/drivers/gnss/gnss_luatos_air530z.c
-index 74708edbd62..7fc5e4768f1 100644
+index 74708edbd62..82320abc125 100644
 --- a/drivers/gnss/gnss_luatos_air530z.c
 +++ b/drivers/gnss/gnss_luatos_air530z.c
 @@ -9,7 +9,6 @@
@@ -132,7 +132,7 @@ index 74708edbd62..7fc5e4768f1 100644
  MODEM_CHAT_SCRIPT_NO_ABORT_DEFINE(init_script, init_script_cmds, NULL, 5);
  
  struct gnss_luatos_air530z_config {
-@@ -73,12 +131,57 @@ struct gnss_luatos_air530z_data {
+@@ -73,12 +131,81 @@ struct gnss_luatos_air530z_data {
  	struct k_sem lock;
  };
  
@@ -178,9 +178,35 @@ index 74708edbd62..7fc5e4768f1 100644
 +}
 +#endif /* CONFIG_GNSS_LUATOS_AIR530Z_VERSION_QUERY */
 +
++/* Raw sentence counter — see the equivalent note in gnss_nmea_generic.c.
++ * Non-zero means the module is alive, at the right baud, and emitting
++ * parseable NMEA; zero means nothing is arriving at all. */
++static uint32_t air530z_rx_sentences;
++
++static void air530z_gga_cb(struct modem_chat *chat, char **argv, uint16_t argc,
++			   void *user_data)
++{
++	air530z_rx_sentences++;
++	gnss_nmea0183_match_gga_callback(chat, argv, argc, user_data);
++}
++
++static void air530z_rmc_cb(struct modem_chat *chat, char **argv, uint16_t argc,
++			   void *user_data)
++{
++	air530z_rx_sentences++;
++	gnss_nmea0183_match_rmc_callback(chat, argv, argc, user_data);
++}
++
++__weak uint32_t zephcore_gnss_rx_count(void)
++{
++	return air530z_rx_sentences;
++}
++
  MODEM_CHAT_MATCHES_DEFINE(unsol_matches,
- 	MODEM_CHAT_MATCH_WILDCARD("$??GGA,", ",*", gnss_nmea0183_match_gga_callback),
- 	MODEM_CHAT_MATCH_WILDCARD("$??RMC,", ",*", gnss_nmea0183_match_rmc_callback),
+-	MODEM_CHAT_MATCH_WILDCARD("$??GGA,", ",*", gnss_nmea0183_match_gga_callback),
+-	MODEM_CHAT_MATCH_WILDCARD("$??RMC,", ",*", gnss_nmea0183_match_rmc_callback),
++	MODEM_CHAT_MATCH_WILDCARD("$??GGA,", ",*", air530z_gga_cb),
++	MODEM_CHAT_MATCH_WILDCARD("$??RMC,", ",*", air530z_rmc_cb),
  #if CONFIG_GNSS_SATELLITES
  	MODEM_CHAT_MATCH_WILDCARD("$??GSV,", ",*", gnss_nmea0183_match_gsv_callback),
  #endif
@@ -190,7 +216,7 @@ index 74708edbd62..7fc5e4768f1 100644
  );
  
  static void luatos_air530z_lock(const struct device *dev)
-@@ -217,54 +320,11 @@ static int gnss_luatos_air530z_init(const struct device *dev)
+@@ -217,54 +344,11 @@ static int gnss_luatos_air530z_init(const struct device *dev)
  	return 0;
  }
  
@@ -250,7 +276,7 @@ index 74708edbd62..7fc5e4768f1 100644
  
  static int luatos_air530z_set_fix_rate(const struct device *dev, uint32_t fix_interval_ms)
  {
-@@ -356,10 +416,8 @@ static DEVICE_API(gnss, gnss_api) = {
+@@ -356,10 +440,8 @@ static DEVICE_API(gnss, gnss_api) = {
  		.dynamic_separators_buf = {',', '*'},						\
  	};											\
  												\
@@ -282,10 +308,10 @@ index d4e7b502e39..c8e8f2da2d2 100644
  		*sv_system = GNSS_SYSTEM_GPS;
  		break;
 diff --git a/drivers/gnss/gnss_nmea_generic.c b/drivers/gnss/gnss_nmea_generic.c
-index bef7989828d..5e5a90716fb 100644
+index bef7989828d..2042c85a2ee 100644
 --- a/drivers/gnss/gnss_nmea_generic.c
 +++ b/drivers/gnss/gnss_nmea_generic.c
-@@ -50,12 +50,83 @@ struct gnss_nmea_generic_data {
+@@ -50,11 +50,163 @@ struct gnss_nmea_generic_data {
  	uint8_t *chat_argv[CHAT_ARGV_SZ];
  };
  
@@ -307,8 +333,7 @@ index bef7989828d..5e5a90716fb 100644
 +	ARG_UNUSED(chat);
 +	ARG_UNUSED(user_data);
 +
-+	/* Prefer an explicit software-version token; otherwise keep the last
-+	 * text field, which is where u-blox put their boot banner. */
++	/* Only an explicit software-version token counts as an identity. */
 +	for (uint16_t i = 1; i < argc; i++) {
 +		if (strncmp(argv[i], "SW=", 3) == 0) {
 +			strncpy(nmea_generic_version, argv[i] + 3,
@@ -319,10 +344,12 @@ index bef7989828d..5e5a90716fb 100644
 +		}
 +	}
 +
-+	if (argc > 4 && nmea_generic_version[0] == '\0') {
-+		strncpy(nmea_generic_version, argv[4], sizeof(nmea_generic_version) - 1);
-+		nmea_generic_version[sizeof(nmea_generic_version) - 1] = '\0';
-+	}
++	/* Deliberately NO generic fallback to "keep the last text field".
++	 * TXT sentences also carry warnings and errors — a module complaining
++	 * about a sentence it did not understand was being captured and then
++	 * reported as though it were the module's identity. A diagnostic that
++	 * invents an answer is worse than one admitting it has none, so an
++	 * unrecognised TXT is ignored and the field reads as no-reply. */
 +}
 +
 +/* u-blox reply to a $PUBX poll. u-blox ignore the CASIC $PCAS06 query, so
@@ -358,14 +385,95 @@ index bef7989828d..5e5a90716fb 100644
 +	return (int)strlen(buf);
 +}
 +
++/* Raw sentence dump for field diagnosis (CONFIG_ZEPHCORE_GPS_NMEA_DUMP).
++ *
++ * Reconstructs the sentence from the parsed argv and logs it. Enabled only
++ * for deliberate debugging: at 1 Hz with multi-GNSS this is a lot of console
++ * traffic, and on a repeater the console is shared with the CLI.
++ *
++ * Matching is first-match-wins, so the ordinary GGA/RMC/GSV matches never
++ * reach a catch-all placed after them — hence the logging lives in the
++ * wrappers as well as in the catch-all, which then covers everything else the
++ * module emits (TXT banners, PUBX replies, sentences we do not parse).
++ */
++#ifdef CONFIG_ZEPHCORE_GPS_NMEA_DUMP
++static void nmea_generic_dump(char **argv, uint16_t argc)
++{
++	char line[128];
++	size_t n = 0;
++
++	for (uint16_t i = 0; i < argc && n < sizeof(line) - 2; i++) {
++		n += (size_t)snprintk(&line[n], sizeof(line) - n, "%s%s",
++				      (i == 0) ? "" : ",", argv[i]);
++	}
++	LOG_INF("NMEA: %s", line);
++}
++
++static void nmea_generic_catchall_cb(struct modem_chat *chat, char **argv, uint16_t argc,
++				     void *user_data)
++{
++	ARG_UNUSED(chat);
++	ARG_UNUSED(user_data);
++	nmea_generic_dump(argv, argc);
++}
++#else
++#define nmea_generic_dump(argv, argc) do { } while (0)
++#endif
++
++/* Raw sentence counter — the only unambiguous "is the module talking to us"
++ * signal available.
++ *
++ * Everything else can be misread. No satellites, a module mute because its
++ * output protocol was disabled, and a module stranded at the wrong baud all
++ * present identically to the application: zero satellites and no fix. Even
++ * the position callback cannot tell them apart, because the NMEA matcher only
++ * publishes once GGA and RMC agree on a valid UTC — so a receiver that is
++ * healthily emitting NMEA while it searches the sky publishes nothing at all.
++ *
++ * Counting parsed sentences separates the cases outright: non-zero means the
++ * module is alive, at the right baud, and emitting NMEA we can parse, so any
++ * remaining problem is signal. Zero means nothing is arriving and no amount
++ * of antenna work will help.
++ */
++static uint32_t nmea_rx_sentences;
++
++static void nmea_generic_gga_cb(struct modem_chat *chat, char **argv, uint16_t argc,
++				void *user_data)
++{
++	nmea_rx_sentences++;
++	nmea_generic_dump(argv, argc);
++	gnss_nmea0183_match_gga_callback(chat, argv, argc, user_data);
++}
++
++static void nmea_generic_rmc_cb(struct modem_chat *chat, char **argv, uint16_t argc,
++				void *user_data)
++{
++	nmea_rx_sentences++;
++	nmea_generic_dump(argv, argc);
++	gnss_nmea0183_match_rmc_callback(chat, argv, argc, user_data);
++}
++
++/* Exported for application-level diagnostics. Weak so boards building another
++ * GNSS driver that also exports it still link. */
++__weak uint32_t zephcore_gnss_rx_count(void)
++{
++	return nmea_rx_sentences;
++}
++
  MODEM_CHAT_MATCHES_DEFINE(unsol_matches,
- 	MODEM_CHAT_MATCH_WILDCARD("$??GGA,", ",*", gnss_nmea0183_match_gga_callback),
- 	MODEM_CHAT_MATCH_WILDCARD("$??RMC,", ",*", gnss_nmea0183_match_rmc_callback),
+-	MODEM_CHAT_MATCH_WILDCARD("$??GGA,", ",*", gnss_nmea0183_match_gga_callback),
+-	MODEM_CHAT_MATCH_WILDCARD("$??RMC,", ",*", gnss_nmea0183_match_rmc_callback),
++	MODEM_CHAT_MATCH_WILDCARD("$??GGA,", ",*", nmea_generic_gga_cb),
++	MODEM_CHAT_MATCH_WILDCARD("$??RMC,", ",*", nmea_generic_rmc_cb),
  #if CONFIG_GNSS_SATELLITES
  	MODEM_CHAT_MATCH_WILDCARD("$??GSV,", ",*", gnss_nmea0183_match_gsv_callback),
- #endif
++#endif
 +	MODEM_CHAT_MATCH_WILDCARD("$??TXT,", ",*", nmea_generic_txt_callback),
 +	MODEM_CHAT_MATCH("$PUBX", ",*", nmea_generic_pubx_callback),
++#ifdef CONFIG_ZEPHCORE_GPS_NMEA_DUMP
++	/* Must stay LAST: a zero-length match matches every line, so anything
++	 * after it would be unreachable. */
++	MODEM_CHAT_MATCH("", ",*", nmea_generic_catchall_cb),
+ #endif
  );
  
- static int gnss_nmea_generic_resume(const struct device *dev)

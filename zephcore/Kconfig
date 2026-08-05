@@ -764,6 +764,19 @@ config ZEPHCORE_REPEATER_GPS_INTERVAL_SEC
 	  overrides it with "set gps duty <sec>" (persisted to flash).
 	  Companions default to ZEPHCORE_GPS_POLL_INTERVAL_SEC (300s) instead.
 
+config ZEPHCORE_GPS_NMEA_DUMP
+	bool "Log every NMEA sentence received from the GNSS module"
+	help
+	  Print each sentence the GNSS driver parses, plus everything else the
+	  module emits, to the console. For diagnosing a receiver that reports
+	  no satellites: it distinguishes a module that is talking normally
+	  while it searches the sky from one that is silent, at the wrong baud,
+	  or has had its NMEA output disabled — cases that are otherwise
+	  indistinguishable from the application.
+
+	  Verbose: at 1 Hz with multi-GNSS this is a continuous stream, and on
+	  a repeater it shares the console with the CLI. Diagnostic builds only.
+
 config ZEPHCORE_GPS_NAV_MODE
 	int "GNSS navigation dynamic model (CASIC $PCAS11)"
 	range -1 7

@@ -1052,7 +1052,7 @@ index 30243ba5dc7..f0794661515 100644
  	if (ret < 0) {
  		sx126x_set_sleep(dev);
  		k_mutex_unlock(&data->lock);
-@@ -1083,14 +1718,671 @@ static int sx126x_lora_test_cw(const struct device *dev, uint32_t frequency,
+@@ -1083,14 +1718,733 @@ static int sx126x_lora_test_cw(const struct device *dev, uint32_t frequency,
  	return 0;
  }
  
@@ -1576,6 +1576,91 @@ index 30243ba5dc7..f0794661515 100644
 +		return -EINVAL;
 +	}
 +
++	/* Explicit timing only.  The window sizing (detection budget,
++	 * datasheet Tpreamble+Theader <= 2*rxPeriod+sleepPeriod rule, TCXO
++	 * transition accounting) is owned by the caller -- the adapter layer
++	 * knows the mesh preamble policy, the driver just programs periods.
++	 * Validated before we claim the state so a malformed request cannot
++	 * leave the chip half-configured. */
++	if (K_TIMEOUT_EQ(rx_period, K_FOREVER) ||
++	    K_TIMEOUT_EQ(sleep_period, K_FOREVER)) {
++		LOG_ERR("recv_duty_cycle: explicit rx/sleep periods required");
++		k_mutex_unlock(&data->lock);
++		return -EINVAL;
++	}
++
++	/* Convert us to 15.625us steps */
++	uint32_t rx_time = (k_ticks_to_us_ceil32(rx_period.ticks) * 64) / 1000;
++	uint32_t sleep_time = (k_ticks_to_us_ceil32(sleep_period.ticks) * 64) / 1000;
++
++	if (rx_time < 64) rx_time = 64;
++	if (sleep_time < 64) sleep_time = 64;
++
++	/* Idempotent fast-path: the chip is already in RX.
++	 *
++	 * The usual way here is the LBT branch of sx126x_lora_send_async: on
++	 * CAD-busy it calls sx126x_restart_rx() and returns -EBUSY, leaving
++	 * state == RX.  Failing the CAS below would then report -EBUSY to a
++	 * caller whose only honest reading of it is "a concurrent TX owns the
++	 * chip".  Worse, it is a one-way door: an entry that fell back to
++	 * continuous RX (any error path below that returns before
++	 * rx_duty_cycle_enabled is set) could never re-arm, because every
++	 * later attempt hits the same failed CAS -- the node quietly listens
++	 * at full RX current until it is rebooted.
++	 *
++	 * sx126x_restart_rx() runs the identical entry sequence to the one
++	 * below (Calibrate(ALL) AGC reset, CalibrateImage, DIO2 RF switch,
++	 * StopTimerOnPreamble, RX-gain retention, SetRxDutyCycle), so re-arming
++	 * through it gives up nothing.  When the chip is already duty cycling
++	 * on these exact periods there is nothing to re-arm and only the
++	 * callback is refreshed: no SPI traffic, no ~5 ms calibration, no
++	 * dropped RX window. */
++	if (atomic_get(&data->state) == SX126X_STATE_RX) {
++		const bool rearm = !data->rx_duty_cycle_enabled ||
++				   data->dc_rx_time != rx_time ||
++				   data->dc_sleep_time != sleep_time;
++
++		data->rx_cb = cb;
++		data->rx_cb_user_data = user_data;
++		atomic_inc(&data->rx_cb_gen);
++
++		if (!rearm) {
++			k_mutex_unlock(&data->lock);
++			return 0;
++		}
++
++		data->dc_rx_time = rx_time;
++		data->dc_sleep_time = sleep_time;
++		data->rx_duty_cycle_enabled = true;
++
++		/* Mid-cycle the chip may be in its duty-cycle sleep phase with
++		 * BUSY asserted; talking to it then stalls the HAL in
++		 * wait_busy().  Poke CS first, same as the cancel path above. */
++		if (sx126x_hal_is_busy(dev)) {
++			sx126x_hal_wakeup(dev);
++		}
++
++		ret = sx126x_restart_rx(dev, data);
++		if (ret < 0) {
++			/* Hand the chip back un-owned so the caller's
++			 * continuous-RX fallback performs a full clean entry
++			 * rather than fast-pathing onto a radio we have just
++			 * failed to program. */
++			data->rx_duty_cycle_enabled = false;
++			data->rx_cb = NULL;
++			data->rx_cb_user_data = NULL;
++			atomic_inc(&data->rx_cb_gen);
++			atomic_set(&data->state, SX126X_REST_STATE);
++			k_mutex_unlock(&data->lock);
++			return ret;
++		}
++
++		k_mutex_unlock(&data->lock);
++		LOG_DBG("recv_duty_cycle: re-armed in place rx=%uus sleep=%uus",
++			(rx_time * 1000) / 64, (sleep_time * 1000) / 64);
++		return 0;
++	}
++
 +	if (!atomic_cas(&data->state, SX126X_REST_STATE, SX126X_STATE_RX)) {
 +		k_mutex_unlock(&data->lock);
 +		return -EBUSY;
@@ -1649,31 +1734,8 @@ index 30243ba5dc7..f0794661515 100644
 +
 +	sx126x_set_rf_path(dev, true, false);
 +
-+	uint32_t rx_time, sleep_time;
-+
-+	/* Explicit timing only.  The window sizing (detection budget,
-+	 * datasheet Tpreamble+Theader <= 2*rxPeriod+sleepPeriod rule, TCXO
-+	 * transition accounting) is owned by the caller -- the adapter layer
-+	 * knows the mesh preamble policy, the driver just programs periods. */
-+	if (K_TIMEOUT_EQ(rx_period, K_FOREVER) ||
-+	    K_TIMEOUT_EQ(sleep_period, K_FOREVER)) {
-+		LOG_ERR("recv_duty_cycle: explicit rx/sleep periods required");
-+		data->rx_cb = NULL;
-+		atomic_inc(&data->rx_cb_gen);
-+		sx126x_set_sleep(dev);
-+		k_mutex_unlock(&data->lock);
-+		atomic_set(&data->state, SX126X_REST_STATE);
-+		return -EINVAL;
-+	}
-+
-+	/* Convert us to 15.625us steps */
-+	rx_time = (k_ticks_to_us_ceil32(rx_period.ticks) * 64) / 1000;
-+	sleep_time = (k_ticks_to_us_ceil32(sleep_period.ticks) * 64) / 1000;
-+
-+	if (rx_time < 64) rx_time = 64;
-+	if (sleep_time < 64) sleep_time = 64;
-+
-+	/* Store for restart_rx to re-use */
++	/* Store for restart_rx to re-use (periods validated and converted at
++	 * function entry, before the state was claimed). */
 +	data->dc_rx_time = rx_time;
 +	data->dc_sleep_time = sleep_time;
 +	data->rx_duty_cycle_enabled = true;
