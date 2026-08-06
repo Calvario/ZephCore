@@ -81,6 +81,30 @@
 };
 
 /*
+ * The user button must wake the SoC too.
+ *
+ * DIO1 is not the only thing that needs to interrupt a sleeping node — a person
+ * pressing the button expects the display to come on.  Marking the PORT
+ * wakeup-source above only enables esp_sleep_enable_gpio_wakeup(); the PIN is
+ * armed separately, and until now only DIO1 got that (via patches/zephyr/0012).
+ * The result was a node that woke for packets and ignored its own button: press
+ * it, nothing happens, the display never lights.  Reported from the field.
+ *
+ * GPIO_INT_WAKEUP is (1 << 6) in dt-bindings/gpio/gpio.h, so it fits the 16-bit
+ * gpio_dt_flags_t and can be set here in DT rather than needing a driver patch —
+ * gpio_pin_configure_dt() ORs spec->dt_flags into the flags it passes, so it
+ * reaches gpio_esp32_config() and arms the wake.
+ *
+ * All five allowlisted boards put the USER key on the same pad (&gpio0 0 =
+ * GPIO0, inside the S3's RTC-capable 0-21 range) under the same node label,
+ * which is what lets this be one shared override.  Re-check when allowlisting
+ * a new board.
+ */
+&button0 {
+	gpios = <&gpio0 0 (GPIO_PULL_UP | GPIO_ACTIVE_LOW | GPIO_INT_WAKEUP)>;
+};
+
+/*
  * RESET is open-drain active-low against the SX1262's internal pull-up, so an
  * unheld pad going high-Z already reads as "not reset" and this is belt and
  * braces rather than a known fault.  It costs nothing and removes the question
