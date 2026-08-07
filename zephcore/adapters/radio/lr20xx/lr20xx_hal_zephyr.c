@@ -213,6 +213,50 @@ lr20xx_hal_status_t lr20xx_hal_write(const void *context, const uint8_t *command
 	return wait_on_busy(ctx);
 }
 
+/* LR2021 prepends a 2-byte stat header before response data (datasheet §5.4.1.2) */
+#define LR20XX_STAT_LEN 2
+
+/**
+ * @brief Clock one command-and-response frame inside a single NSS assertion.
+ *
+ * The LR2021 streams the whole answer within the NSS window that carried the
+ * command:
+ *
+ *     MOSI  [ command_length ][      LR20XX_STAT_LEN + data_length      ]
+ *     MISO  [  undefined     ][ stat header ][        payload           ]
+ *
+ * Releasing NSS between the command and the payload ends the frame, so the
+ * following read starts a fresh one and the chip answers it with the status /
+ * IRQ word rather than the payload the caller asked for. That misread is not
+ * obviously wrong at the call site — it is a plausible-looking short integer —
+ * so it surfaces as nonsense lengths and all-zero status reads rather than as
+ * an SPI error. Keep every read in one transaction.
+ *
+ * NULL buffers clock 0x00 (the LR2021 NOP opcode) on MOSI and discard on MISO,
+ * so no scratch buffer is needed regardless of length.
+ */
+static int lr20xx_spi_read_frame(struct lr20xx_hal_context *ctx, const uint8_t *command,
+				  uint16_t command_length, uint8_t *data, uint16_t data_length)
+{
+	const struct spi_buf tx_bufs[] = {
+		{ .buf = (uint8_t *)command, .len = command_length },
+		{ .buf = NULL, .len = LR20XX_STAT_LEN + data_length },
+	};
+	const struct spi_buf rx_bufs[] = {
+		{ .buf = NULL, .len = command_length + LR20XX_STAT_LEN },
+		{ .buf = data, .len = data_length },
+	};
+	const struct spi_buf_set tx = { .buffers = tx_bufs, .count = 2 };
+	const struct spi_buf_set rx = { .buffers = rx_bufs, .count = 2 };
+	int ret;
+
+	gpio_pin_set_dt(&ctx->nss, 1);
+	ret = spi_transceive(ctx->spi_dev, &ctx->spi_cfg, &tx, &rx);
+	gpio_pin_set_dt(&ctx->nss, 0);
+
+	return ret;
+}
+
 lr20xx_hal_status_t lr20xx_hal_read(const void *context, const uint8_t *command,
 				     const uint16_t command_length,
 				     uint8_t *data, const uint16_t data_length)
@@ -231,38 +275,27 @@ lr20xx_hal_status_t lr20xx_hal_read(const void *context, const uint8_t *command,
 		return LR20XX_HAL_STATUS_ERROR;
 	}
 
-	const struct spi_buf tx_buf = { .buf = (uint8_t *)command, .len = command_length };
-	const struct spi_buf_set tx = { .buffers = &tx_buf, .count = 1 };
-
-	gpio_pin_set_dt(&ctx->nss, 1);
-	ret = spi_write(ctx->spi_dev, &ctx->spi_cfg, &tx);
-	gpio_pin_set_dt(&ctx->nss, 0);
-
-	if (ret < 0) {
-		LOG_ERR("SPI write (cmd) failed: %d", ret);
-		return LR20XX_HAL_STATUS_ERROR;
-	}
-
+	/* No response requested — this is a plain command write. */
 	if (data_length == 0) {
+		const struct spi_buf tx_buf = {
+			.buf = (uint8_t *)command,
+			.len = command_length,
+		};
+		const struct spi_buf_set tx = { .buffers = &tx_buf, .count = 1 };
+
+		gpio_pin_set_dt(&ctx->nss, 1);
+		ret = spi_write(ctx->spi_dev, &ctx->spi_cfg, &tx);
+		gpio_pin_set_dt(&ctx->nss, 0);
+
+		if (ret < 0) {
+			LOG_ERR("SPI write (cmd) failed: %d", ret);
+			return LR20XX_HAL_STATUS_ERROR;
+		}
+
 		return wait_on_busy(ctx);
 	}
 
-	if (check_device_ready(ctx) != LR20XX_HAL_STATUS_OK) {
-		return LR20XX_HAL_STATUS_ERROR;
-	}
-
-	/* LR2021 prepends 2-byte stat header before response data (datasheet §5.4.1.2) */
-	uint8_t dummy[2];
-	const struct spi_buf rx_bufs[] = {
-		{ .buf = dummy, .len = sizeof(dummy) },
-		{ .buf = data, .len = data_length },
-	};
-	const struct spi_buf_set rx = { .buffers = rx_bufs, .count = 2 };
-
-	gpio_pin_set_dt(&ctx->nss, 1);
-	ret = spi_read(ctx->spi_dev, &ctx->spi_cfg, &rx);
-	gpio_pin_set_dt(&ctx->nss, 0);
-
+	ret = lr20xx_spi_read_frame(ctx, command, command_length, data, data_length);
 	if (ret < 0) {
 		LOG_ERR("SPI read failed: %d", ret);
 		return LR20XX_HAL_STATUS_ERROR;
@@ -309,23 +342,11 @@ lr20xx_hal_status_t lr20xx_hal_direct_read_fifo(const void *context,
 		return LR20XX_HAL_STATUS_ERROR;
 	}
 
-	/* Single NSS assertion: command on MOSI, data on MISO, overlapped.
-	 * NULL tx buf causes nRF SPIM to send 0x00 during data phase. */
-	const struct spi_buf tx_bufs[] = {
-		{ .buf = (uint8_t *)command, .len = command_length },
-		{ .buf = NULL, .len = data_length },
-	};
-	const struct spi_buf rx_bufs[] = {
-		{ .buf = NULL, .len = command_length },
-		{ .buf = data, .len = data_length },
-	};
-	const struct spi_buf_set tx_set = { .buffers = tx_bufs, .count = 2 };
-	const struct spi_buf_set rx_set = { .buffers = rx_bufs, .count = 2 };
-
-	gpio_pin_set_dt(&ctx->nss, 1);
-	ret = spi_transceive(ctx->spi_dev, &ctx->spi_cfg, &tx_set, &rx_set);
-	gpio_pin_set_dt(&ctx->nss, 0);
-
+	/* The RX FIFO answers with the same [stat header][payload] framing as
+	 * every other read — it is not a raw byte stream. Skipping the header
+	 * here is what keeps the returned packet aligned; consuming it as
+	 * payload shifts the whole frame two bytes and corrupts every receive. */
+	ret = lr20xx_spi_read_frame(ctx, command, command_length, data, data_length);
 	if (ret < 0) {
 		LOG_ERR("SPI FIFO read failed: %d", ret);
 		return LR20XX_HAL_STATUS_ERROR;
