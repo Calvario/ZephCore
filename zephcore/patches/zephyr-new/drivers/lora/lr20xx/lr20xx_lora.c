@@ -335,6 +335,8 @@ static void lr20xx_get_pa_cfg_for_power(int8_t power_dbm,
 	*pa_val_out = e->pa_val;
 }
 
+static lr20xx_status_t lr20xx_calibrate_front_end(void *ctx, uint32_t freq_hz);
+
 /* ── Hardware reset (BUSY stuck recovery) ───────────────────────────── */
 
 static void lr20xx_hardware_reset(struct lr20xx_data *data,
@@ -375,19 +377,65 @@ static void lr20xx_hardware_reset(struct lr20xx_data *data,
 	k_msleep(5);
 
 	/* Front-end calibration — single LF frequency (RadioLib approach) */
-	{
-		lr20xx_radio_common_front_end_calibration_value_t fe_cal = {
-			.rx_path = LR20XX_RADIO_COMMON_RX_PATH_LF,
-			.frequency_in_hertz = 868000000,
-		};
-		lr20xx_radio_common_calibrate_front_end_helper(ctx, &fe_cal, 1);
-	}
+	lr20xx_calibrate_front_end(ctx, 868000000);
 
 	data->rx_boost_applied = false;
 
 	lr20xx_hal_enable_dio1_irq(&data->hal_ctx);
 
 	LOG_WRN("LR2021 recovered from hardware reset");
+}
+
+/* ── Front-end calibration ──────────────────────────────────────────── */
+
+/* Front-end calibration can legitimately fail on RSSI saturation from a nearby
+ * interferer, and repeating it is the documented cure — RadioLib retries up to
+ * 10 times for exactly this, and gives up immediately on any other error since
+ * repeating those cannot help. Getting this wrong is expensive: an uncalibrated
+ * front end makes the chip reject every set_rx with RXFREQ_NO_FRONT_END_CALIB,
+ * which then looks like a broken RX path rather than a failed calibration.
+ */
+#define LR20XX_MAX_CAL_ATTEMPTS 10
+
+static lr20xx_status_t lr20xx_calibrate_front_end(void *ctx, uint32_t freq_hz)
+{
+	lr20xx_radio_common_front_end_calibration_value_t fe_cal = {
+		.rx_path = LR20XX_RADIO_COMMON_RX_PATH_LF,
+		.frequency_in_hertz = freq_hz,
+	};
+
+	for (int i = 0; i < LR20XX_MAX_CAL_ATTEMPTS; i++) {
+		lr20xx_system_errors_t errs = 0;
+		lr20xx_status_t rc;
+
+		lr20xx_system_clear_errors(ctx);
+
+		rc = lr20xx_radio_common_calibrate_front_end_helper(ctx, &fe_cal, 1);
+		lr20xx_system_get_errors(ctx, &errs);
+
+		if (rc == LR20XX_STATUS_OK &&
+		    !(errs & LR20XX_SYSTEM_ERRORS_SRC_SATURATION_CALIB_MASK)) {
+			LOG_DBG("FE cal(%u Hz) ok on attempt %d (errors=0x%04x)",
+				freq_hz, i + 1, errs);
+			return LR20XX_STATUS_OK;
+		}
+
+		if (!(errs & LR20XX_SYSTEM_ERRORS_SRC_SATURATION_CALIB_MASK)) {
+			LOG_ERR("FE cal(%u Hz) failed: rc=%d errors=0x%04x "
+				"(not saturation — retrying will not help)",
+				freq_hz, rc, errs);
+			return (rc != LR20XX_STATUS_OK) ? rc : LR20XX_STATUS_ERROR;
+		}
+
+		LOG_WRN("FE cal(%u Hz) RSSI saturation (errors=0x%04x), "
+			"attempt %d/%d", freq_hz, errs, i + 1,
+			LR20XX_MAX_CAL_ATTEMPTS);
+		k_msleep(5);
+	}
+
+	LOG_ERR("FE cal(%u Hz) gave up after %d attempts — RX will be refused",
+		freq_hz, LR20XX_MAX_CAL_ATTEMPTS);
+	return LR20XX_STATUS_ERROR;
 }
 
 /* ── Apply modem configuration ──────────────────────────────────────── */
@@ -409,18 +457,7 @@ static void lr20xx_apply_modem_config(struct lr20xx_data *data,
 	 * before the frequency is set and RX/TX starts.  Doing it only once at
 	 * config time left the chip reporting RXFREQ_NO_FE_CAL (0x0200) at RX and
 	 * refusing TX (PERR). */
-	{
-		lr20xx_radio_common_front_end_calibration_value_t fe_cal = {
-			.rx_path = LR20XX_RADIO_COMMON_RX_PATH_LF,
-			.frequency_in_hertz = mc->frequency,
-		};
-		rc = lr20xx_radio_common_calibrate_front_end_helper(ctx, &fe_cal, 1);
-		lr20xx_system_errors_t fe_err = 0;
-		lr20xx_system_get_errors(ctx, &fe_err);
-		LOG_DBG("modem_cfg: FE cal(%uHz) rc=%d post-cal-err=0x%04x",
-			mc->frequency, rc, fe_err);
-		lr20xx_system_clear_errors(ctx);
-	}
+	lr20xx_calibrate_front_end(ctx, mc->frequency);
 
 	rc = lr20xx_radio_common_set_rf_freq(ctx, mc->frequency);
 	LOG_DBG("modem_cfg: set_rf_freq(%u)=%d", mc->frequency, rc);
@@ -592,6 +629,53 @@ static void lr20xx_restart_rx(struct lr20xx_data *data)
 
 /* ── DIO1 IRQ handler (work queue, thread context) ──────────────────── */
 
+/* IRQ bit 16 means "call get_errors" per the datasheet; bit 17 is a rejected
+ * host command. Both are useless on their own — the error word names the
+ * actual fault. Throttled: these can fire every RX restart. */
+static void lr20xx_log_chip_errors(void *ctx, const char *what)
+{
+	static const struct {
+		uint16_t mask;
+		const char *name;
+	} err_names[] = {
+		{ BIT(0),  "HF_XOSC_START" },
+		{ BIT(1),  "LF_XOSC_START" },
+		{ BIT(2),  "PLL_LOCK" },
+		{ BIT(3),  "LF_RC_CALIB" },
+		{ BIT(4),  "HF_RC_CALIB" },
+		{ BIT(5),  "PLL_CALIB" },
+		{ BIT(6),  "AAF_CALIB" },
+		{ BIT(7),  "IMG_CALIB" },
+		{ BIT(8),  "CHIP_BUSY" },
+		{ BIT(9),  "RXFREQ_NO_FRONT_END_CALIB" },
+		{ BIT(10), "MEAS_UNIT_ADC_CALIB" },
+		{ BIT(11), "PA_OFFSET_CALIB" },
+		{ BIT(12), "PPF_CALIB" },
+		{ BIT(13), "SRC_CALIB" },
+		{ BIT(14), "SRC_SATURATION_CALIB" },
+		{ BIT(15), "SRC_TOLERANCE_CALIB" },
+	};
+	static uint32_t seen;
+	lr20xx_system_errors_t errs = 0;
+
+	if (lr20xx_system_get_errors(ctx, &errs) != LR20XX_STATUS_OK) {
+		LOG_ERR("chip %s error; get_errors() failed too", what);
+		return;
+	}
+
+	/* First few in full, then one in 64 — the console cannot keep up */
+	if (seen++ >= 4 && (seen & 0x3F) != 0) {
+		return;
+	}
+
+	LOG_ERR("chip %s error: errors=0x%04x", what, errs);
+	for (int i = 0; i < (int)ARRAY_SIZE(err_names); i++) {
+		if (errs & err_names[i].mask) {
+			LOG_ERR("    %s", err_names[i].name);
+		}
+	}
+}
+
 static void lr20xx_dio1_callback(void *user_data);
 
 static void lr20xx_dio1_work_handler(struct k_work *work)
@@ -613,11 +697,17 @@ static void lr20xx_dio1_work_handler(struct k_work *work)
 		goto safety_check;
 	}
 
-	if (irq & LR20XX_SYSTEM_IRQ_ERROR) {
-		LOG_WRN("IRQ hardware ERROR: 0x%08x", irq);
+	if (irq & (LR20XX_SYSTEM_IRQ_ERROR | LR20XX_SYSTEM_IRQ_CMD_ERROR)) {
+		lr20xx_log_chip_errors(ctx, (irq & LR20XX_SYSTEM_IRQ_CMD_ERROR)
+					    ? "cmd rejected" : "hardware");
+		/* Latched until cleared, or every later poll re-reports it */
+		lr20xx_system_clear_errors(ctx);
 	}
 
-	if (irq != 0) {
+	/* Error-only IRQs are not progress. Resetting the counter on them let
+	 * an error that re-fires on every RX restart spin forever, never
+	 * reaching the stuck-DIO1 escape hatch below. */
+	if (irq & ~(LR20XX_SYSTEM_IRQ_ERROR | LR20XX_SYSTEM_IRQ_CMD_ERROR)) {
 		data->dio1_stuck_count = 0;
 	}
 
@@ -812,13 +902,7 @@ static int lr20xx_lora_config(const struct device *dev,
 	uint16_t fe_raw = (uint16_t)((config->frequency + 3999999U) / 4000000U);
 	LOG_DBG("config: FE cal freq=%uHz raw=0x%04x", config->frequency, fe_raw);
 
-	lr20xx_radio_common_front_end_calibration_value_t cal = {
-		.rx_path          = LR20XX_RADIO_COMMON_RX_PATH_LF,
-		.frequency_in_hertz = config->frequency,
-	};
-	lr20xx_status_t cal_rc = lr20xx_radio_common_calibrate_front_end_helper(
-		&data->hal_ctx, &cal, 1);
-	LOG_DBG("config: FE cal=%d", cal_rc);
+	lr20xx_calibrate_front_end(&data->hal_ctx, config->frequency);
 
 	DUMP_CHIP_STATE(&data->hal_ctx, &data->hal_ctx, "config-FEcal");
 	k_mutex_unlock(&data->spi_mutex);
@@ -1144,11 +1228,7 @@ void lr20xx_reset_agc(const struct device *dev)
 	lr20xx_system_calibrate(ctx, 0x6F);
 
 	if (data->configured) {
-		lr20xx_radio_common_front_end_calibration_value_t cal = {
-			.rx_path          = LR20XX_RADIO_COMMON_RX_PATH_LF,
-			.frequency_in_hertz = data->modem_cfg.frequency,
-		};
-		lr20xx_radio_common_calibrate_front_end_helper(ctx, &cal, 1);
+		lr20xx_calibrate_front_end(ctx, data->modem_cfg.frequency);
 	}
 
 	if (data->rx_boost_enabled) {
@@ -1512,13 +1592,7 @@ static int lr20xx_hw_init(struct lr20xx_data *data,
 
 	/* Front-end calibration at 868 MHz LF.
 	 * raw_value = ceil(868000000/4000000) = 217 = 0x00D9 */
-	lr20xx_radio_common_front_end_calibration_value_t fe_cal[3] = {
-		{ .rx_path = LR20XX_RADIO_COMMON_RX_PATH_LF,
-		  .frequency_in_hertz = 868000000 },
-		{ .rx_path = 0, .frequency_in_hertz = 0 },
-		{ .rx_path = 0, .frequency_in_hertz = 0 },
-	};
-	st = lr20xx_radio_common_calibrate_front_end_helper(ctx, fe_cal, 1);
+	st = lr20xx_calibrate_front_end(ctx, 868000000);
 
 	DUMP_CHIP_STATE(ctx, &data->hal_ctx, "post-FEcal");
 
