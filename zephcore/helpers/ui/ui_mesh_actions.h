@@ -55,7 +55,7 @@ void mesh_send_flood_advert(void);
 void mesh_send_zerohop_advert(void);
 void mesh_gps_set_enabled(bool enable);
 void mesh_ble_set_enabled(bool enable);
-void mesh_set_buzzer_quiet(bool quiet);
+void mesh_set_buzzer_mode(uint8_t mode);
 void mesh_set_offgrid_mode(bool enable);
 void mesh_set_leds_disabled(bool disabled);
 void mesh_disable_power_regulators(void);

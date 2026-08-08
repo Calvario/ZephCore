@@ -770,13 +770,24 @@ Shutdown.
 Single button; tap-count → key-code mapping comes from the board's devicetree `tap-codes` (up to 5). Typical mapping:
 - 1 tap → Page next
 - 2 taps → LED heartbeat toggle
-- 3 taps → Buzzer toggle
+- 3 taps → Notification mode (sound+vibrate → vibrate → silent → sound → …; boards with no motor fall back to a plain on/off toggle)
 - 4 taps → GPS toggle
 - 5 taps → Flood advert (immediate, no delay)
 
-### 8.4 Buzzer
+### 8.4 Buzzer and vibration
 
 Non-blocking RTTTL parser on dedicated work queue. Predefined melodies for startup, shutdown, messages, ACKs. 2-second safety watchdog auto-silences on work queue stall.
+
+Boards with a DRV2605 haptic driver (`ti,drv2605` in DT) also vibrate on every notification — `buzzer_play()` pulses the motor. The two outputs share one setting, the notification mode, which lives in `helpers/buzzer_gate.c` (always linked, same pattern as `led_gate.c`, so the CLI resolves its symbols on boards that compile no buzzer). `set buzzer 0|1|2|3` and the 3-tap button action both drive it:
+
+| Mode | Name | Buzzer | Motor |
+|------|------|--------|-------|
+| 0 | silent | - | - |
+| 1 | sound+vib | yes | yes |
+| 2 | vibrate | - | yes |
+| 3 | sound | yes | - |
+
+Modes 2 and 3 are rejected on boards with no motor, where they would be indistinguishable from 0 and 1. The setting persists in the existing `buzzer_quiet` prefs byte — 0 and 1 keep their original meaning, 2 and 3 are new and read as "quiet" by older firmware, so a downgrade silences a node left on sound-only.
 
 ### 8.5 Doom Easter Egg
 
@@ -852,6 +863,7 @@ Build strings and flash methods: `boards/supported_boards.md` and `boards/exampl
 | RAK3401 1W | nRF52840 | SX1262+SKY66122 (30dBm) | u-blox MAX-7Q (opt) | - | I2C sensors |
 | RAK WisMesh Tag | nRF52840 | SX1262 | AT6558R | - | Accelerometer, buzzer, multitap |
 | T1000-E | nRF52840 | **LR1110** | AG3335 | - | Buzzer, button, multitap |
+| SenseCAP MeshTracker X1 | nRF52840 | **LR2021** | AG3335M (L1+L5) | - | SPA06 barometer, DRV2605L vibration, YSN8900 RTC, QSPI 8MB, RGB LEDs, buzzer |
 | ThinkNode M1 | nRF52840 | SX1262 | Air530Z | EPD 200x200 (SSD1681) | Buzzer, 2 buttons, QSPI 2MB, RGB LEDs |
 | ThinkNode M3 | nRF52840 | **LR1110** | Yes | - | Buzzer, 2 buttons, RGB LEDs |
 | ThinkNode M6 | nRF52840 | SX1262 | L76K | - | QSPI, RGB LEDs |

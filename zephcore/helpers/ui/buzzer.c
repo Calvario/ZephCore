@@ -16,6 +16,8 @@
  */
 
 #include "buzzer.h"
+#include "haptic.h"
+#include "buzzer_gate.h"
 
 #include <zephyr/device.h>
 #include <zephyr/drivers/pwm.h>
@@ -364,6 +366,8 @@ static void note_work_handler(struct k_work *work)
 
 int buzzer_init(void)
 {
+	haptic_init();
+
 	/* Check for buzzer alias in devicetree */
 	const struct device *pwm_dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(pwm0));
 
@@ -420,6 +424,10 @@ int buzzer_init(void)
 
 void buzzer_play(const char *rtttl)
 {
+	if (rtttl && *rtttl) {
+		haptic_pulse();
+	}
+
 	if (!ctx.initialized) {
 		return;
 	}
@@ -490,6 +498,27 @@ void buzzer_set_quiet_deferred(bool quiet)
 	 * and become no-ops. */
 	ctx.quiet = quiet;
 	LOG_INF("buzzer %s (deferred)", quiet ? "muted" : "enabled");
+}
+
+/* Strong overrides of the weak stubs in helpers/buzzer_gate.c */
+
+void zephcore_buzzer_apply(uint8_t mode, bool deferred)
+{
+	bool quiet = !zephcore_buzzer_mode_audible(mode);
+
+	if (quiet && deferred) {
+		buzzer_set_quiet_deferred(true);
+	} else {
+		buzzer_set_quiet(quiet);
+	}
+
+	haptic_set_enabled(mode == ZEPHCORE_BUZZER_ON ||
+			   mode == ZEPHCORE_BUZZER_VIBRATE);
+}
+
+bool zephcore_buzzer_has_vibrate(void)
+{
+	return haptic_available();
 }
 
 bool buzzer_is_quiet(void)

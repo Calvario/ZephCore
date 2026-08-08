@@ -115,7 +115,7 @@ WEAK void ui_set_ble_enabled(bool enabled)
 	ARG_UNUSED(enabled);
 }
 
-WEAK void ui_set_buzzer_quiet(bool quiet)
+WEAK void ui_set_buzzer_mode(uint8_t mode)
 {
 	ARG_UNUSED(quiet);
 }

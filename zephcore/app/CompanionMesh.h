@@ -57,7 +57,7 @@
 #ifdef CONFIG_ZEPHCORE_ACK_TABLE_SIZE
 #define ACK_TABLE_SIZE CONFIG_ZEPHCORE_ACK_TABLE_SIZE
 #else
-#define ACK_TABLE_SIZE 8
+#define ACK_TABLE_SIZE 16
 #endif
 
 /* Recently-heard advert path slots */
@@ -387,7 +387,6 @@ private:
 		bool active;
 	};
 	AckEntry _ack_table[ACK_TABLE_SIZE];
-	int _ack_next_overwrite;
 
 	/* Advert path table for tracking recently heard nodes */
 	AdvertPath _advert_paths[ADVERT_PATH_TABLE_SIZE];

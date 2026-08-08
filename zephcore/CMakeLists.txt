@@ -265,7 +265,7 @@ set(ZEPHCORE_COMMON_CONF "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/zephcore_com
 # Detect platform from board name and add platform-specific common config
 # For boards with qualifiers like "wio_tracker_l1/nrf52840", check both the full BOARD
 # string and the BOARD_QUALIFIERS which contains just the qualifier (e.g., "nrf52840")
-if(BOARD MATCHES ".*nrf52.*" OR BOARD MATCHES "rak4631" OR BOARD MATCHES "rak_wismesh_tag" OR BOARD MATCHES "rak3401_1watt" OR BOARD MATCHES "wio_tracker" OR BOARD MATCHES "ikoka_nano" OR BOARD MATCHES "t1000_e" OR BOARD MATCHES "thinknode_m1" OR BOARD MATCHES "thinknode_m3" OR BOARD MATCHES "thinknode_m6" OR BOARD MATCHES "promicro_lr2021" OR BOARD MATCHES "promicro_sx1262" OR BOARD MATCHES "sensecap_solar" OR BOARD MATCHES "xiao_nrf52840" OR BOARD MATCHES "lilygo_techo" OR BOARD MATCHES "lilygo_timpulse_plus" OR BOARD MATCHES "heltec_t114" OR BOARD MATCHES "heltec_t096" OR BOARD MATCHES "gat562" OR BOARD MATCHES "muziworks_r1neo")
+if(BOARD MATCHES ".*nrf52.*" OR BOARD MATCHES "rak4631" OR BOARD MATCHES "rak_wismesh_tag" OR BOARD MATCHES "rak3401_1watt" OR BOARD MATCHES "wio_tracker" OR BOARD MATCHES "ikoka_nano" OR BOARD MATCHES "t1000_e" OR BOARD MATCHES "meshtracker_x1" OR BOARD MATCHES "thinknode_m1" OR BOARD MATCHES "thinknode_m3" OR BOARD MATCHES "thinknode_m6" OR BOARD MATCHES "promicro_lr2021" OR BOARD MATCHES "promicro_sx1262" OR BOARD MATCHES "sensecap_solar" OR BOARD MATCHES "xiao_nrf52840" OR BOARD MATCHES "lilygo_techo" OR BOARD MATCHES "lilygo_timpulse_plus" OR BOARD MATCHES "heltec_t114" OR BOARD MATCHES "heltec_t096" OR BOARD MATCHES "gat562" OR BOARD MATCHES "muziworks_r1neo")
     set(ZEPHCORE_PLATFORM_CONF "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/nrf52_common.conf")
 elseif(DEFINED BOARD_QUALIFIERS AND BOARD_QUALIFIERS MATCHES ".*nrf52.*")
     set(ZEPHCORE_PLATFORM_CONF "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/nrf52_common.conf")
@@ -571,6 +571,9 @@ target_sources(app PRIVATE
   # LED master gate ("set leds on|off"). Always compiled: helpers/ui/ui_common.c
   # only exists in UI builds, but a headless repeater still drives lora-tx-led.
   helpers/led_gate.c
+  # Notification-mode gate. Same reason as led_gate: the CLI needs these
+  # symbols on boards that compile no buzzer at all.
+  helpers/buzzer_gate.c
 )
 
 # Boot-time hardware-RTC auto-discovery (compact raw-I2C). Always compiled so
@@ -578,6 +581,10 @@ target_sources(app PRIVATE
 # when CONFIG_ZEPHCORE_RTC_AUTODISCOVER is off or no zephcore,rtc-i2c node is
 # present in DT.
 target_sources(app PRIVATE adapters/clock/ZephyrRTCDiscover.c)
+
+# SPA06-003 barometer. No upstream Zephyr driver; compiles to nothing when no
+# goertek,spa06 node is present.
+target_sources_ifdef(CONFIG_SENSOR app PRIVATE adapters/sensors/spa06.c)
 
 # ========== Battery Curve Selection ==========
 # helpers/battery_curve.c is always compiled — it provides battery_curve_lookup()
@@ -876,6 +883,7 @@ endif()
 if(CONFIG_ZEPHCORE_UI_BUZZER)
   target_sources(app PRIVATE
     helpers/ui/buzzer.c
+    helpers/ui/haptic.c
   )
 endif()
 

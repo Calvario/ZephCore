@@ -42,6 +42,13 @@ properties:
     type: boolean
     description: Enable RX boosted mode for better sensitivity (+~3dB, +~2mA).
 
+  irq-dio:
+    type: int
+    default: 9
+    description: |
+      Chip-side DIO wired to the MCU interrupt line, 5..11. This is the DIO
+      number on the LR2021 itself, not the SoC pin — the SoC side is dio1-gpios.
+
   rfswitch-enable:
     type: int
     default: 0

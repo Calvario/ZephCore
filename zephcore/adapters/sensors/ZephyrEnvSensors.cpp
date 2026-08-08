@@ -5,7 +5,7 @@
  * Auto-detects available sensors via Zephyr devicetree nodelabels.
  *
  * Environment sensors (temp/humidity/pressure):
- *   SHTC3, AHT20/DHT20/AM2301B, SHT4x, SHT3xD, BME280, BME680, BMP280, BMP388, LPS22HB
+ *   SHTC3, AHT20/DHT20/AM2301B, SHT4x, SHT3xD, BME280, BME680, BMP280, BMP388, LPS22HB, SPA06
  *   MCU die temperature as fallback (nordic,nrf-temp)
  *
  * Power monitors (voltage/current/power):
@@ -144,6 +144,18 @@ check_pressure:
 			LOG_INF("Found pressure sensor: %s (BMP388)", dev->name);
 			goto done;
 		}
+
+		/* SPA06 — the two nodes are the same part at its two possible
+		 * addresses; the one that isn't there fails its ID check. */
+		dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(spa06));
+		if (!dev || !device_is_ready(dev)) {
+			dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(spa06_alt));
+		}
+		if (dev && device_is_ready(dev)) {
+			pressure_dev = dev;
+			LOG_INF("Found pressure sensor: %s (SPA06)", dev->name);
+			goto done;
+		}
 	}
 
 done:
@@ -203,6 +215,13 @@ int env_sensors_read(struct env_data *data)
 		if (sensor_channel_get(pressure_dev, SENSOR_CHAN_PRESS, &val) == 0) {
 			data->pressure_hpa = sensor_value_to_float(&val) * 10.0f;
 			data->has_pressure = true;
+		}
+		/* Barometers carry a die temperature. It beats the MCU's own
+		 * sensor as a fallback on boards with no dedicated temp part. */
+		if (!data->has_temperature &&
+		    sensor_channel_get(pressure_dev, SENSOR_CHAN_AMBIENT_TEMP, &val) == 0) {
+			data->temperature_c = sensor_value_to_float(&val);
+			data->has_temperature = true;
 		}
 	}
 

@@ -1,1 +1,2 @@
+goertek	Goertek Inc.
 zephcore	ZephCore

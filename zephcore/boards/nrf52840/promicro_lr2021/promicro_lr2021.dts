@@ -138,6 +138,7 @@
 		reset-gpios = <&gpio0  9 GPIO_ACTIVE_LOW>;
 		busy-gpios  = <&gpio0 29 GPIO_ACTIVE_HIGH>;
 		dio1-gpios  = <&gpio0 10 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+		irq-dio = <9>;   /* chip DIO9 → module pin 15 → MCU P0.10 */
 
 		/* TCXO: tried 1800mV on DIO3 (per Meshtastic diy_tcxo) — it WEDGED
 		 * the chip (HF-XOSC startup hangs, BUSY stuck, BLE never starts),

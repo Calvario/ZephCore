@@ -91,7 +91,7 @@ struct ui_state {
 	uint32_t gps_next_search_s;   /* seconds until next search (0=now/off) */
 
 	/* Buzzer page */
-	bool     buzzer_quiet;     /* true = muted */
+	uint8_t  buzzer_mode;      /* ZEPHCORE_BUZZER_{OFF,ON,VIBRATE} */
 
 	/* LEDs page */
 	bool     leds_disabled;    /* true = LEDs off */

@@ -31,6 +31,7 @@ LOG_MODULE_REGISTER(zephcore_main, CONFIG_ZEPHCORE_MAIN_LOG_LEVEL);
 #include "ui_mesh_actions.h"
 #include "oled_power.h"
 #include "led_gate.h"
+#include "buzzer_gate.h"
 #if IS_ENABLED(CONFIG_ZEPHCORE_UI_BUZZER)
 #include "buzzer.h"
 #endif
@@ -1506,15 +1507,16 @@ int main(void)
 	LOG_INF("offgrid mode: %s (from prefs)",
 		companion_mesh.prefs.client_repeat ? "on" : "off");
 
-	/* Restore buzzer mute state from persisted prefs, then play
-	 * startup chime only if buzzer is not muted.
-	 * buzzer_init() defaults to quiet=true, so we must always
-	 * call buzzer_set_quiet() to apply the saved preference. */
+	/* Restore the notification mode from persisted prefs, then play the
+	 * startup chime only if sound is on. buzzer_init() defaults to
+	 * quiet=true, so the saved preference must always be applied. */
 #if IS_ENABLED(CONFIG_ZEPHCORE_UI_BUZZER)
-	buzzer_set_quiet(companion_mesh.prefs.buzzer_quiet);
-	ui_set_buzzer_quiet(companion_mesh.prefs.buzzer_quiet);
-	LOG_INF("buzzer: quiet=%s (from prefs)",
-		companion_mesh.prefs.buzzer_quiet ? "true" : "false");
+	{
+		uint8_t bmode = zephcore_buzzer_mode_from_prefs(companion_mesh.prefs.buzzer_quiet);
+		zephcore_buzzer_set_mode(bmode, false);
+		ui_set_buzzer_mode(bmode);
+		LOG_INF("buzzer: mode=%u (from prefs)", bmode);
+	}
 	ui_play_startup_chime();
 #endif
 

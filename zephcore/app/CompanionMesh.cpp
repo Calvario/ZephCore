@@ -187,7 +187,6 @@ CompanionMesh::CompanionMesh(mesh::Radio &radio, mesh::MillisecondClock &ms, mes
 	_offline_queue_count = 0;
 	_sync_pending = false;
 	memset(_ack_table, 0, sizeof(_ack_table));
-	_ack_next_overwrite = 0;
 	memset(_advert_paths, 0, sizeof(_advert_paths));
 	_next_advert_path_idx = 0;
 	_sign_data = nullptr;
@@ -652,13 +651,22 @@ void CompanionMesh::addPendingAck(uint32_t expected, int contact_idx)
 			return;
 		}
 	}
-	// Table full — circular overwrite
-	int idx = _ack_next_overwrite;
+	// Table full — evict the entry that has been waiting longest. A rotating
+	// write cursor is not equivalent: it advances independently of when each
+	// slot was filled, so under a burst it can discard an ACK registered
+	// moments ago while a much older one survives. Whichever entry we drop
+	// can never be confirmed, so drop the one least likely to still be
+	// answered.
+	int idx = 0;
+	for (int i = 1; i < ACK_TABLE_SIZE; i++) {
+		if ((int32_t)(_ack_table[i].sent_time - _ack_table[idx].sent_time) < 0) {
+			idx = i;
+		}
+	}
 	_ack_table[idx].expected_ack = expected;
 	_ack_table[idx].contact_idx = contact_idx;
 	_ack_table[idx].sent_time = now_ms;
 	_ack_table[idx].active = true;
-	_ack_next_overwrite = (idx + 1) % ACK_TABLE_SIZE;
 }
 
 int CompanionMesh::findAndRemoveAck(uint32_t ack, uint32_t *out_sent_time)

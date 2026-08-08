@@ -46,6 +46,8 @@ struct lr20xx_config {
 	uint16_t tcxo_voltage_mv;
 	uint32_t tcxo_startup_delay_ms;
 	bool rx_boosted;
+	/* Chip-side DIO wired to the MCU IRQ line (5..11) */
+	uint8_t irq_dio;
 	/* RF switch DIO bitmasks (bit 0 = DIO5, bit 1 = DIO6, ...) */
 	uint8_t rfswitch_enable;
 	uint8_t rfswitch_standby;
@@ -192,6 +194,22 @@ static float bw_enum_to_khz(enum lora_signal_bandwidth bw)
 	case BW_500_KHZ: return 500.0f;
 	default:         return 125.0f;
 	}
+}
+
+/* ── IRQ DIO ────────────────────────────────────────────────────────── */
+
+static inline lr20xx_system_dio_t lr20xx_irq_dio(const struct lr20xx_config *cfg)
+{
+	return (lr20xx_system_dio_t)cfg->irq_dio;
+}
+
+/* DIO5 can only be pulled up; every other DIO gets a pull-down. */
+static inline lr20xx_system_dio_drive_t
+lr20xx_irq_dio_pull(const struct lr20xx_config *cfg)
+{
+	return cfg->irq_dio == LR20XX_SYSTEM_DIO_5
+		       ? LR20XX_SYSTEM_DIO_DRIVE_PULL_UP
+		       : LR20XX_SYSTEM_DIO_DRIVE_PULL_DOWN;
 }
 
 /* ── Configure RF switch DIOs ───────────────────────────────────────── */
@@ -341,10 +359,9 @@ static void lr20xx_hardware_reset(struct lr20xx_data *data,
 
 	lr20xx_configure_rfswitch(ctx, cfg);
 
-	/* DIO9 is the physical IRQ line (pin 15 on NiceRF module → MCU P0.10) */
-	lr20xx_system_set_dio_function(ctx, LR20XX_SYSTEM_DIO_9,
+	lr20xx_system_set_dio_function(ctx, lr20xx_irq_dio(cfg),
 				       LR20XX_SYSTEM_DIO_FUNC_IRQ,
-				       LR20XX_SYSTEM_DIO_DRIVE_NONE);
+				       lr20xx_irq_dio_pull(cfg));
 
 	lr20xx_radio_common_set_rx_tx_fallback_mode(ctx,
 						    LR20XX_RADIO_FALLBACK_STDBY_RC);
@@ -417,16 +434,19 @@ static void lr20xx_apply_modem_config(struct lr20xx_data *data,
 			: LR20XX_RADIO_COMMON_RX_PATH_BOOST_MODE_NONE);
 	data->rx_boost_applied = data->rx_boost_enabled;
 
-	/* LR20xx uses PPM offset instead of explicit LDRO.
-	 * PPM_1_4 (1 bin every 4) is equivalent to LDRO for high-SF
-	 * wide-time-on-air configurations. Use recommended value. */
+	/* PPM offset is this chip's name for LDRO and occupies the same wire
+	 * field. The Semtech "recommended offset" helper only ever enables it
+	 * for SF11/SF12, which disagrees with the rest of the mesh below
+	 * 125 kHz — every other stack switches on symbol time > 16.38 ms. */
+	uint32_t bw_hz = (uint32_t)(bw_enum_to_khz(mc->bandwidth) * 1000.0f);
+	uint32_t symbol_time_us = ((1U << (uint8_t)mc->datarate) * 1000000U) / bw_hz;
+
 	lr20xx_radio_lora_mod_params_t mod = {
 		.sf  = (lr20xx_radio_lora_sf_t)mc->datarate,
 		.bw  = bw_enum_to_lr20xx(mc->bandwidth),
 		.cr  = cr_enum_to_lr20xx(mc->coding_rate),
-		.ppm = lr20xx_radio_lora_get_recommended_ppm_offset(
-			(lr20xx_radio_lora_sf_t)mc->datarate,
-			bw_enum_to_lr20xx(mc->bandwidth)),
+		.ppm = (symbol_time_us > 16380) ? LR20XX_RADIO_LORA_PPM_1_4
+					        : LR20XX_RADIO_LORA_NO_PPM,
 	};
 	rc = lr20xx_radio_lora_set_modulation_params(ctx, &mod);
 	LOG_DBG("modem_cfg: set_mod(SF%d BW%d CR%d PPM%d)=%d",
@@ -459,11 +479,7 @@ static void lr20xx_apply_modem_config(struct lr20xx_data *data,
 		lr20xx_radio_common_pa_cfg_t pa;
 		int8_t pa_val;
 
-		/* DEBUG/TEST: force MINIMUM power (-9dBm, 1 PA slice) to probe the
-		 * supply-sag hypothesis.  If TX keys here (mode=5 + carrier) but
-		 * not at +22dBm (7 slices), the rail can't source PA current →
-		 * hardware power limit.  REVERT to mc->tx_power after testing. */
-		lr20xx_get_pa_cfg_for_power(-9, &pa, &pa_val);
+		lr20xx_get_pa_cfg_for_power(mc->tx_power, &pa, &pa_val);
 		rc = lr20xx_radio_common_set_pa_cfg(ctx, &pa);
 		LOG_DBG("modem_cfg: set_pa_cfg(sel=%d mode=%d duty=%d slices=%d hf_duty=%d)=%d",
 			pa.pa_sel, pa.pa_lf_mode, pa.pa_lf_duty_cycle,
@@ -475,7 +491,7 @@ static void lr20xx_apply_modem_config(struct lr20xx_data *data,
 			pa_val, rc);
 	}
 
-	rc = lr20xx_system_set_dio_irq_cfg(ctx, LR20XX_SYSTEM_DIO_9,
+	rc = lr20xx_system_set_dio_irq_cfg(ctx, lr20xx_irq_dio(cfg),
 		LR20XX_SYSTEM_IRQ_ALL_MASK &
 		~(LR20XX_SYSTEM_IRQ_FIFO_RX | LR20XX_SYSTEM_IRQ_FIFO_TX));
 	LOG_DBG("modem_cfg: set_dio_irq=%d", rc);
@@ -952,28 +968,9 @@ static int lr20xx_lora_send_async(const struct device *dev,
 
 	lr20xx_radio_common_set_tx(ctx, 5000);
 
-#if IS_ENABLED(CONFIG_LOG)
-	/* DEBUG: poll chip state right after SET_TX.  Non-destructive
-	 * (get_status does NOT clear IRQs).  We want to see:
-	 *   - cmd= on the FIRST poll == SET_TX's own command status
-	 *     (2=OK accepted, 1=PERR rejected, 0=FAIL not executed)
-	 *   - mode transitions 1(STBY)->5(TX)->1(fallback) if it really TXes
-	 *   - irq gaining TX_DONE (bit19, 0x00080000) at the chip level
-	 *   - whether DIO9 physically asserts (the MCU IRQ line)
-	 * Diagnostic only — the spi_mutex is held, so the DIO9 work handler
-	 * blocks until we unlock, then processes TX_DONE normally. */
-	for (int i = 0; i < 20; i++) {
-		lr20xx_system_stat1_t s1 = {0};
-		lr20xx_system_stat2_t s2 = {0};
-		lr20xx_system_irq_mask_t dbgirq = 0;
-		lr20xx_system_get_status(ctx, &s1, &s2, &dbgirq);
-		LOG_INF("TXpoll[%2d] cmd=%d mode=%d irq=0x%08x BUSY=%d DIO9=%d",
-			i, s1.command_status, s2.chip_mode, dbgirq,
-			gpio_pin_get_dt(&data->hal_ctx.busy),
-			gpio_pin_get_dt(&data->hal_ctx.dio1));
-		k_msleep(20);
-	}
-#endif
+	/* Command status here is SET_TX's own (2=accepted, 1=rejected,
+	 * 0=not executed) and the mode should have left standby. */
+	DUMP_CHIP_STATE(ctx, &data->hal_ctx, "post-SET_TX");
 
 	k_mutex_unlock(&data->spi_mutex);
 
@@ -1447,26 +1444,12 @@ static int lr20xx_hw_init(struct lr20xx_data *data,
 
 	LOG_INF("LR20xx SDK get_version: major=%u minor=%u", ver.major, ver.minor);
 
-	/* CRITICAL: Read raw 4 bytes from GET_VERSION (opcode 0x0101) to
-	 * determine if this is LR11x0 or LR20xx silicon.
-	 * LR11x0 returns: [hw_type, device_use, fw_major, fw_minor] (4 bytes)
-	 * LR20xx returns: [major, minor] (2 bytes, extra bytes would be 0x00)
-	 * If byte[0]=0x01/0x02/0x03, it's LR1110/LR1120/LR1121 (LR11x0!) */
-	{
-		const uint8_t cmd[2] = { 0x01, 0x01 };
-		uint8_t raw[4] = { 0 };
-		lr20xx_hal_read(ctx, cmd, 2, raw, 4);
-		LOG_DBG("GET_VERSION raw bytes: 0x%02x 0x%02x 0x%02x 0x%02x",
-			raw[0], raw[1], raw[2], raw[3]);
-		if (raw[0] == 0x01) {
-			LOG_WRN("*** CHIP IDENTIFIES AS LR1110 (LR11x0 family!) ***");
-		} else if (raw[0] == 0x02) {
-			LOG_WRN("*** CHIP IDENTIFIES AS LR1120 (LR11x0 family!) ***");
-		} else if (raw[0] == 0x03) {
-			LOG_WRN("*** CHIP IDENTIFIES AS LR1121 (LR11x0 family!) ***");
-		} else {
-			LOG_DBG("Chip type byte=0x%02x (LR20xx if not 0x01-0x03)", raw[0]);
-		}
+	/* The only base FW version the datasheet documents is 1.24 (0x01/0x18).
+	 * Anything else still runs — the mismatch is worth a line in the log
+	 * when a bring-up goes sideways, not a hard failure. */
+	if (ver.major != 0x01 || ver.minor != 0x18) {
+		LOG_WRN("Unexpected LR2021 FW %u.%u (datasheet documents 1.24)",
+			ver.major, ver.minor);
 	}
 
 	DUMP_CHIP_STATE(ctx, &data->hal_ctx, "post-reset");
@@ -1497,21 +1480,12 @@ static int lr20xx_hw_init(struct lr20xx_data *data,
 		cfg->rfswitch_enable, cfg->rfswitch_standby, cfg->rfswitch_rx,
 		cfg->rfswitch_tx, cfg->rfswitch_tx_hp);
 
-	st = lr20xx_system_set_dio_function(ctx, LR20XX_SYSTEM_DIO_9,
+	st = lr20xx_system_set_dio_function(ctx, lr20xx_irq_dio(cfg),
 				       LR20XX_SYSTEM_DIO_FUNC_IRQ,
-				       LR20XX_SYSTEM_DIO_DRIVE_NONE);
+				       lr20xx_irq_dio_pull(cfg));
 
 	st = lr20xx_radio_common_set_rx_tx_fallback_mode(ctx,
 						    LR20XX_RADIO_FALLBACK_STDBY_RC);
-
-	/* DEBUG/TEST: disable the low-battery / EoL detector.  The chip was
-	 * raising LOW_BATTERY (IRQ bit10, 0x400) during FE cal and TX and
-	 * refusing to enter TX.  Disabling it disambiguates:
-	 *   - TX now keys  → it was a FALSE VBAT reading (sense pin), done.
-	 *   - TX still dead → genuine supply brownout under RF (hardware).
-	 * Default trim is 1.88V; we both disable AND set the lowest (1.60V). */
-	st = lr20xx_system_set_lbd_cfg(ctx, false, LR20XX_SYSTEM_LBD_TRIM_1_60_V);
-	LOG_DBG("init: disable LBD (low-battery detect)=%d", st);
 
 	DUMP_CHIP_STATE(ctx, &data->hal_ctx, "pre-cal");
 
@@ -1661,6 +1635,7 @@ static DEVICE_API(lora, lr20xx_lora_api) = {
 		.tcxo_startup_delay_ms =                                     \
 			DT_INST_PROP_OR(n, tcxo_startup_delay_ms, 5),       \
 		.rx_boosted       = DT_INST_PROP(n, rx_boosted),            \
+		.irq_dio          = DT_INST_PROP_OR(n, irq_dio, 9),         \
 		.rfswitch_enable  = DT_INST_PROP_OR(n, rfswitch_enable, 0), \
 		.rfswitch_standby = DT_INST_PROP_OR(n, rfswitch_standby, 0),\
 		.rfswitch_rx      = DT_INST_PROP_OR(n, rfswitch_rx, 0),     \

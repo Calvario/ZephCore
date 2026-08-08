@@ -1,0 +1,13 @@
+# Copyright (c) 2026 ZephCore
+# SPDX-License-Identifier: MIT
+
+description: |
+  Goertek SPA06-003 barometric pressure and temperature sensor.
+
+  The driver runs the part in continuous background mode at 8x oversampling
+  and 1 Hz for both channels, so sample_fetch never blocks. Channels are
+  SENSOR_CHAN_PRESS (kPa) and SENSOR_CHAN_AMBIENT_TEMP (degrees C).
+
+compatible: "goertek,spa06"
+
+include: [sensor-device.yaml, i2c-device.yaml]

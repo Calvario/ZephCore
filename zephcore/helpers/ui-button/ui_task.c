@@ -25,6 +25,7 @@
 
 #include "ui_task.h"
 #include "ui_pages.h"
+#include <helpers/buzzer_gate.h>
 #include <time_sync.h>
 
 #ifdef CONFIG_ZEPHCORE_UI_BUZZER
@@ -408,26 +409,28 @@ static void action_flood_advert(void)
 	schedule_render();
 }
 
+/* Cycles sound -> vibrate -> silent -> sound. Boards with no motor skip the
+ * middle step, so they keep the plain on/off toggle they always had. */
 static void action_buzzer_toggle(void)
 {
 #ifdef CONFIG_ZEPHCORE_UI_BUZZER
-	bool was_quiet = buzzer_is_quiet();
+	uint8_t mode = zephcore_buzzer_next_mode(get_state()->buzzer_mode);
 
-	if (was_quiet) {
-		/* Unmuting: enable first, then play ascending confirmation */
-		buzzer_set_quiet(false);
+	if (zephcore_buzzer_mode_audible(mode)) {
+		/* Enable first, then play the ascending confirmation */
+		zephcore_buzzer_set_mode(mode, false);
 		buzzer_play(MELODY_BUZZER_ON);
 	} else {
-		/* Muting: play descending confirmation while still enabled.
-		 * Use deferred mute so the "off" melody plays out fully
-		 * before the quiet flag suppresses future sounds. */
+		/* Play the descending confirmation while still audible — the
+		 * deferred mute lets it finish before sounds are suppressed. */
 		buzzer_play(MELODY_BUZZER_OFF);
-		buzzer_set_quiet_deferred(true);
+		zephcore_buzzer_set_mode(mode, true);
 	}
-	/* Persist mute state across reboots */
-	mesh_set_buzzer_quiet(!was_quiet);
-	get_state()->buzzer_quiet = !was_quiet;
-	LOG_INF("buzzer %s", buzzer_is_quiet() ? "muted" : "unmuted");
+
+	/* Persist across reboots */
+	mesh_set_buzzer_mode(mode);
+	get_state()->buzzer_mode = mode;
+	LOG_INF("buzzer mode=%u", mode);
 #endif
 	schedule_render();
 }
@@ -1088,11 +1091,11 @@ void ui_set_ble_enabled(bool enabled)
 	s->ble_enabled = enabled;
 }
 
-void ui_set_buzzer_quiet(bool quiet)
+void ui_set_buzzer_mode(uint8_t mode)
 {
 	struct ui_state *s = get_state();
 
-	s->buzzer_quiet = quiet;
+	s->buzzer_mode = mode;
 }
 
 void ui_set_offgrid_mode(bool enabled)

@@ -16,6 +16,7 @@ Supported Boards
 | XIAO nRF52840        | `west build -b xiao_nrf52840 zephcore`     | UF2 drag-drop or `west flash` |
 | ProMicro SX1262      | `west build -b promicro_sx1262 zephcore`   | UF2 drag-drop or `west flash` |
 | T1000-E              | `west build -b t1000_e zephcore`          | UF2 drag-drop or `west flash` |
+| SenseCAP MeshTracker X1 | `west build -b meshtracker_x1 zephcore` | UF2 drag-drop or `west flash` |
 | ThinkNode M1         | `west build -b thinknode_m1 zephcore`     | UF2 drag-drop or `west flash` |
 | ThinkNode M3         | `west build -b thinknode_m3 zephcore`     | UF2 drag-drop or `west flash` |
 | ThinkNode M6         | `west build -b thinknode_m6 zephcore`     | UF2 drag-drop or `west flash` |

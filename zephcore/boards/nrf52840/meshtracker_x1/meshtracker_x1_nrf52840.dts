@@ -1,0 +1,380 @@
+/*
+ * Seeed SenseCAP MeshTracker X1 - nRF52840 + LR2021
+ * Copyright (c) 2026 ZephCore
+ *
+ * SPDX-License-Identifier: MIT
+ *
+ * Hardware:
+ * - nRF52840 SoC with BLE
+ * - LR2021 LoRa radio (TCXO 1.6V on DIO3, no external RF switch)
+ * - Airoha dual-band L1+L5 GNSS on UART0
+ * - SPA06 barometer + DRV2605L haptic driver (I2C0)
+ * - RGB LED, buzzer, single user button
+ * - 1100 mAh high-voltage LiPo, ADC on AIN0
+ */
+
+/dts-v1/;
+#include <nordic/nrf52840_qiaa.dtsi>
+#include <nordic/nrf52840_partition.dtsi>
+#include <zephyr/dt-bindings/adc/nrf-saadc.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <zephyr/dt-bindings/pwm/pwm.h>
+#include "meshtracker_x1_nrf52840-pinctrl.dtsi"
+
+/* Delete default partitions from nrf52840_partition.dtsi */
+/delete-node/ &boot_partition;
+/delete-node/ &slot0_partition;
+/delete-node/ &slot1_partition;
+/delete-node/ &storage_partition;
+
+/ {
+	model = "Seeed SenseCAP MeshTracker X1";
+	compatible = "seeed,meshtracker-x1";
+
+	chosen {
+		zephyr,code-partition = &code_partition;
+		zephyr,console = &cdc_acm_uart;
+		zephyr,shell-uart = &cdc_acm_uart;
+	};
+
+	leds {
+		compatible = "gpio-leds";
+
+		led_green: led_0 {
+			gpios = <&gpio0 24 GPIO_ACTIVE_HIGH>;
+			label = "Green LED";
+		};
+
+		led_red: led_1 {
+			gpios = <&gpio0 3 GPIO_ACTIVE_HIGH>;
+			label = "Red LED";
+		};
+
+		led_blue: led_2 {
+			gpios = <&gpio0 28 GPIO_ACTIVE_HIGH>;
+			label = "Blue LED";
+		};
+	};
+
+	buttons: buttons {
+		compatible = "gpio-keys";
+
+		user_button: button_0 {
+			/* Active HIGH (pressed = VCC), external pull-down on board */
+			gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
+			zephyr,code = <INPUT_KEY_0>;
+			label = "User Button";
+		};
+	};
+
+	/* Short-press → KEY_A, long-press → KEY_F */
+	user_btn_longpress {
+		compatible = "zephyr,input-longpress";
+		input = <&buttons>;
+		input-codes = <INPUT_KEY_0>;
+		short-codes = <INPUT_KEY_A>;
+		long-codes = <INPUT_KEY_F>;
+		long-delay-ms = <1000>;
+	};
+
+	/* 1 tap → page next, 2 → LED heartbeat, 3 → buzzer mute,
+	 * 4 → GPS on/off, 5 → flood advert */
+	user_btn_multitap {
+		compatible = "zephcore,input-multi-tap";
+		input-codes = <INPUT_KEY_A>;
+		tap-codes = <INPUT_KEY_1 INPUT_KEY_B INPUT_KEY_D INPUT_KEY_C INPUT_KEY_E>;
+		tap-delay-ms = <400>;
+	};
+
+	/* P1.07 — 3V3 rail feeding the I2C sensors (barometer, haptic driver) */
+	sensor_power: sensor-power {
+		compatible = "regulator-fixed";
+		regulator-name = "sensor-power";
+		enable-gpios = <&gpio1 7 GPIO_ACTIVE_HIGH>;
+		regulator-boot-on;
+		startup-delay-us = <5000>;
+	};
+
+	/* P1.06 — gates the battery ADC divider, enabled on demand */
+	vbat_enable: vbat-enable {
+		compatible = "regulator-fixed";
+		regulator-name = "vbat-enable";
+		enable-gpios = <&gpio1 6 GPIO_ACTIVE_HIGH>;
+	};
+
+	/* Battery ADC channel reference for ZephyrBoard */
+	zephyr,user {
+		io-channels = <&adc 0>;
+		vbat-mv-multiplier = <7236>;  /* 2:1 divider, 3.6V ref; +0.5% for nRF SAADC gain error */
+	};
+
+	/* Buzzer on PWM0 channel 0 (P0.25) */
+	pwmbuzzer {
+		compatible = "pwm-leds";
+		buzzer: buzzer {
+			pwms = <&pwm0 0 PWM_MSEC(20) PWM_POLARITY_NORMAL>;
+		};
+	};
+
+	/* GNSS control pins */
+	gps_en: gps-enable {
+		compatible = "gpio-leds";
+		gps_enable_pin: gps_enable {
+			gpios = <&gpio1 11 GPIO_ACTIVE_HIGH>;
+			label = "GPS Enable";
+		};
+	};
+
+	gps_vrtc: gps-vrtc-enable {
+		compatible = "gpio-leds";
+		gps_vrtc_pin: gps_vrtc {
+			gpios = <&gpio1 13 GPIO_ACTIVE_HIGH>;
+			label = "GPS VRTC Enable";
+		};
+	};
+
+	gps_rst: gps-reset {
+		compatible = "gpio-leds";
+		gps_reset_pin: gps_reset {
+			gpios = <&gpio0 8 GPIO_ACTIVE_HIGH>;
+			label = "GPS Reset";
+		};
+	};
+
+	gps_sleep: gps-sleep-int {
+		compatible = "gpio-leds";
+		gps_sleep_pin: gps_sleep {
+			gpios = <&gpio0 30 GPIO_ACTIVE_HIGH>;
+			label = "GPS Sleep Int";
+		};
+	};
+
+	/* Held LOW during normal operation, HIGH wakes the GNSS RTC domain */
+	gps_rtcint: gps-rtc-int {
+		compatible = "gpio-leds";
+		gps_rtcint_pin: gps_rtc_int {
+			gpios = <&gpio0 29 GPIO_ACTIVE_HIGH>;
+			label = "GPS RTC Int";
+		};
+	};
+
+	aliases {
+		led0 = &led_green;
+		led1 = &led_red;
+		sw0 = &user_button;
+		watchdog0 = &wdt0;
+		buzzer = &buzzer;
+		lora0 = &lora;
+		gps-enable = &gps_enable_pin;
+		gps-vrtc-enable = &gps_vrtc_pin;
+		gps-reset = &gps_reset_pin;
+		gps-sleep-int = &gps_sleep_pin;
+		gps-rtc-int = &gps_rtcint_pin;
+	};
+};
+
+&reg0 {
+	status = "okay";
+};
+
+&reg1 {
+	regulator-initial-mode = <NRF5X_REG_MODE_DCDC>;
+};
+
+&adc {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	/* Battery voltage on P0.02 (AIN0) - 2x voltage divider */
+	channel@0 {
+		reg = <0>;
+		zephyr,gain = "ADC_GAIN_1_6";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 10)>;
+		zephyr,input-positive = <NRF_SAADC_AIN0>;
+		zephyr,resolution = <12>;
+	};
+};
+
+/* P0.09/P0.10 are the NFC antenna pins — the board wires P0.09 to the RTC
+ * rail's power switch */
+&uicr {
+	nfct-pins-as-gpios;
+};
+
+&gpiote {
+	status = "okay";
+};
+
+/* Both rails are hogged rather than modelled as regulators: a hog is applied
+ * at PRE_KERNEL_1, ahead of the QSPI NOR driver and the RTC probe, and neither
+ * rail is ever switched off — cutting the RTC would lose wall-clock time. */
+&gpio0 {
+	status = "okay";
+
+	/* RTC power switch (P0.09) */
+	rtc-power-on {
+		gpio-hog;
+		gpios = <9 GPIO_ACTIVE_HIGH>;
+		output-high;
+	};
+
+	/* QSPI flash power switch (P0.15) */
+	flash-power-on {
+		gpio-hog;
+		gpios = <15 GPIO_ACTIVE_HIGH>;
+		output-high;
+	};
+};
+
+&gpio1 {
+	status = "okay";
+};
+
+&pwm0 {
+	status = "okay";
+	pinctrl-0 = <&pwm0_default>;
+	pinctrl-1 = <&pwm0_sleep>;
+	pinctrl-names = "default", "sleep";
+};
+
+/* Airoha dual-band GNSS on UART0 - 115200 baud.
+ * Passive NMEA listener: the module streams NMEA at factory defaults, so no
+ * PAIR command exchange is needed and driver init cannot block on a timeout. */
+&uart0 {
+	compatible = "nordic,nrf-uarte";
+	status = "okay";
+	current-speed = <115200>;
+	pinctrl-0 = <&uart0_default>;
+	pinctrl-1 = <&uart0_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	gnss: gnss {
+		compatible = "gnss-nmea-generic";
+		/* ZephyrGPSManager powers the module up, then calls device_init() */
+		zephyr,deferred-init;
+	};
+};
+
+&i2c0 {
+	compatible = "nordic,nrf-twim";
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_FAST>;
+	pinctrl-0 = <&i2c0_default>;
+	pinctrl-1 = <&i2c0_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	/* Sealed enclosure — only these two parts are ever on this bus */
+	spa06: spa06@77 {
+		compatible = "goertek,spa06";
+		reg = <0x77>;
+	};
+
+	haptic: drv2605@5a {
+		compatible = "ti,drv2605";
+		reg = <0x5a>;
+		actuator-mode = "LRA";
+		en-gpios = <&gpio1 5 GPIO_ACTIVE_HIGH>;
+	};
+};
+
+/* I2C1 — YSN8900 RTC, on its own bus and its own switched rail.
+ *
+ * The part is an RX8900 second-source (same 3.2x2.5x1.0 package, same
+ * 32.768 kHz TCXO grades), so it uses the RX8900 register layout rather than
+ * the RX8130CE one that rtc-i2c.dtsi assumes for address 0x32: time at 0x00,
+ * FLAG at 0x0E, VLF in bit 1. Boot-time discovery BCD-validates what it reads,
+ * so a wrong guess here is detected and skipped, not silently trusted. */
+&i2c1 {
+	compatible = "nordic,nrf-twim";
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_FAST>;
+	pinctrl-0 = <&i2c1_default>;
+	pinctrl-1 = <&i2c1_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	rtc_ysn8900: rtc-ysn8900@32 {
+		compatible = "zephcore,rtc-i2c";
+		reg = <0x32>;
+		time-reg = <0x00>;
+		date-index = <4>;
+		status-reg = <0x0e>;
+		status-mask = <0x02>;
+	};
+};
+
+/* GD25Q64E — 8MB, all of it LittleFS for contacts, channels and blobs */
+&qspi {
+	status = "okay";
+	pinctrl-0 = <&qspi_default>;
+	pinctrl-1 = <&qspi_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	qspi_flash: qspi_flash@0 {
+		compatible = "nordic,qspi-nor";
+		reg = <0>;
+		writeoc = "pp4io";
+		readoc = "read4io";
+		sck-frequency = <16000000>;
+		jedec-id = [c8 40 17];
+		size = <67108864>;            /* 64Mbit = 8MB, in bits */
+		has-dpd;
+		t-enter-dpd = <3000>;
+		t-exit-dpd = <30000>;
+	};
+};
+
+/* SPI2 for LR2021 (SPI1 shares its peripheral slot with I2C1) */
+&spi2 {
+	compatible = "nordic,nrf-spim";
+	status = "okay";
+	cs-gpios = <&gpio0 12 GPIO_ACTIVE_LOW>;
+	pinctrl-0 = <&spi2_default>;
+	pinctrl-1 = <&spi2_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	lora: lora@0 {
+		compatible = "semtech,lr2021";
+		reg = <0>;
+		spi-max-frequency = <8000000>;
+
+		reset-gpios = <&gpio1 10 GPIO_ACTIVE_LOW>;
+		busy-gpios = <&gpio0 7 GPIO_ACTIVE_HIGH>;
+		dio1-gpios = <&gpio1 1 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+		irq-dio = <8>;
+
+		tcxo-voltage-mv = <1600>;
+		tcxo-startup-delay-ms = <5>;
+		rx-boosted;
+
+		/* Single antenna path, no DIO-driven RF switch on this board */
+	};
+};
+
+zephyr_udc0: &usbd {
+	compatible = "nordic,nrf-usbd";
+	status = "okay";
+
+	cdc_acm_uart: cdc_acm_uart {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+};
+
+#include "../../common/nrf52_partitions_sdv7.dtsi"
+
+&qspi_flash {
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		qspi_storage_partition: partition@0 {
+			label = "qspi_storage";
+			reg = <0x00000000 0x00800000>;
+		};
+	};
+};
+
+#include "../../common/qspi-ext.dtsi"
+#include "../../common/nrf52_wakeup.dtsi"

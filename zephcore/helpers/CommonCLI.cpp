@@ -6,6 +6,8 @@
 #include "CommonCLI.h"
 #include "battery_curve.h"
 #include "led_gate.h"
+#include "buzzer_gate.h"
+#include <helpers/ui/ui_task.h>
 #include <helpers/MeshTimeSync.h>
 #include <helpers/time_sync.h>
 #include <adapters/clock/ZephyrRTCDiscover.h>
@@ -471,6 +473,12 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
             snprintf(reply, CLI_REPLY_SIZE, "> %u", (uint32_t)_prefs->interference_threshold);
         } else if (memcmp(config, "leds", 4) == 0) {
             snprintf(reply, CLI_REPLY_SIZE, "> %s", _prefs->leds_disabled ? "off" : "on");
+#ifndef ZEPHCORE_REPEATER
+        } else if (memcmp(config, "buzzer", 6) == 0) {
+            uint8_t mode = zephcore_buzzer_mode_from_prefs(_prefs->buzzer_quiet);
+            snprintf(reply, CLI_REPLY_SIZE, "> %u (%s)", mode,
+                     zephcore_buzzer_mode_name(mode));
+#endif
         } else if (memcmp(config, "agc.reset.interval", 18) == 0) {
             strcpy(reply, "Removed - use rxduty instead");
         } else if (memcmp(config, "multi.acks", 10) == 0) {
@@ -668,6 +676,37 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                 savePrefs();
                 strcpy(reply, "OK");
             }
+#ifndef ZEPHCORE_REPEATER
+        } else if (memcmp(config, "buzzer ", 7) == 0) {
+            /* 0 = silent, 1 = sound + vibration, 2 = vibration only,
+             * 3 = sound only. Modes 2 and 3 only mean something on a board
+             * with a vibration motor, which most boards don't have. */
+            const char* val = &config[7];
+            int mode;
+            if (memcmp(val, "vibrate", 7) == 0 || val[0] == '2') {
+                mode = ZEPHCORE_BUZZER_VIBRATE;
+            } else if (memcmp(val, "sound", 5) == 0 || val[0] == '3') {
+                mode = ZEPHCORE_BUZZER_SOUND;
+            } else if (memcmp(val, "on", 2) == 0 || val[0] == '1') {
+                mode = ZEPHCORE_BUZZER_ON;
+            } else if (memcmp(val, "off", 3) == 0 || val[0] == '0') {
+                mode = ZEPHCORE_BUZZER_OFF;
+            } else {
+                mode = -1;
+            }
+            if (mode < 0) {
+                strcpy(reply, "Error: 0 (silent), 1 (sound+vib), 2 (vibrate) or 3 (sound)");
+            } else if ((mode == ZEPHCORE_BUZZER_VIBRATE || mode == ZEPHCORE_BUZZER_SOUND) &&
+                       !zephcore_buzzer_has_vibrate()) {
+                strcpy(reply, "Error: no vibration motor on this board - use 0 or 1");
+            } else {
+                _prefs->buzzer_quiet = zephcore_buzzer_prefs_from_mode((uint8_t)mode);
+                zephcore_buzzer_set_mode((uint8_t)mode, false);
+                ui_set_buzzer_mode((uint8_t)mode);
+                savePrefs();
+                strcpy(reply, "OK");
+            }
+#endif
         } else if (memcmp(config, "agc.reset.interval ", 19) == 0) {
             /* Periodic AGC recalibration was removed: it reset the noise floor
              * to its unseeded sentinel on every fire, forcing a fresh seed and

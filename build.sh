@@ -10,6 +10,7 @@ nRF_boards=(
     rak3401_1watt
     wio_tracker_l1
     t1000_e
+    meshtracker_x1
     thinknode_m1
     thinknode_m3
     thinknode_m6

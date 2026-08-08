@@ -163,9 +163,9 @@ void ui_set_gps_state(uint8_t state, uint32_t last_fix_age_s, uint32_t next_sear
 void ui_set_ble_enabled(bool enabled);
 
 /**
- * Set buzzer quiet state (for display page).
+ * Set notification mode (for display page).
  */
-void ui_set_buzzer_quiet(bool quiet);
+void ui_set_buzzer_mode(uint8_t mode);
 
 /**
  * Set LEDs disabled state (for display page).

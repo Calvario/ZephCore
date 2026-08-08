@@ -251,9 +251,15 @@ config ZEPHCORE_OFFLINE_QUEUE_SIZE
 
 config ZEPHCORE_ACK_TABLE_SIZE
 	int "ACK tracking table size"
-	default 8
+	default 16
 	help
 	  Number of pending ACKs that can be tracked.
+
+	  Sizing this below the number of messages that can be in flight at
+	  once costs delivery confirmations: a peer working through a backlog
+	  can answer seconds later, and an entry evicted before its ACK
+	  arrives leaves the message unconfirmed, prompting a retry that adds
+	  further load. Each entry costs 16 bytes.
 
 config ZEPHCORE_MAX_CONNECTIONS
 	int "Maximum server connections"

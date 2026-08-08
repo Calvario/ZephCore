@@ -17,6 +17,7 @@
 #include "ui_pages.h"
 #include "ui_task.h"
 #include "display.h"
+#include <helpers/buzzer_gate.h>
 
 #include <time_sync.h>
 #include <ZephyrSensorManager.h>
@@ -1266,13 +1267,15 @@ static void render_buzzer(void)
 	char buf[24];
 	int y = CONTENT_Y;
 
-	snprintf(buf, sizeof(buf), "Buzzer: %s",
-		 state.buzzer_quiet ? "off" : "on");
+	uint8_t next = zephcore_buzzer_next_mode(state.buzzer_mode);
+
+	snprintf(buf, sizeof(buf), "Alert: %s",
+		 zephcore_buzzer_mode_name(state.buzzer_mode));
 	mc_display_text(0, y, buf, false);
 	y += LINE_H;
 
-	draw_centered(y + 8,
-			  state.buzzer_quiet ? "Press to Enable" : "Press to Disable");
+	snprintf(buf, sizeof(buf), "Press for %s", zephcore_buzzer_mode_name(next));
+	draw_centered(y + 8, buf);
 }
 
 static void render_leds_mono(void)

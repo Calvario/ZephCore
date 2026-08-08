@@ -192,12 +192,34 @@ uint8_t RepeaterMesh::handleLoginReq(const mesh::Identity& sender, const uint8_t
         LOG_INF("Login success");
         client->last_timestamp = sender_timestamp;
         client->last_activity = getRTCClock()->getCurrentTime();
-        client->permissions &= ~0x03;
-        client->permissions |= perms;
+        /* Role assignment only ever escalates. putClient() hands back the
+         * existing entry for a known pubkey, so writing the role bits
+         * unconditionally lets a later guest login on a key that already holds
+         * admin silently strip those rights — the operator is then locked out
+         * of their own repeater with no way back in over the air. Revoking
+         * admin is a deliberate act and belongs to the CLI. */
+        if (!client->isAdmin()) {
+            client->permissions &= ~0x03;
+            client->permissions |= perms;
+        }
         memcpy(client->shared_secret, secret, PUB_KEY_SIZE);
 
-        if (perms != PERM_ACL_GUEST) {
-            if (!dirty_contacts_expiry) dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
+        if (client->isAdmin()) {
+            /* Flush admin sessions now instead of leaving them on the lazy
+             * timer. The entry carries the shared secret this session's
+             * traffic is encrypted with; if power is lost before the timer
+             * fires, the client keeps a secret the repeater no longer knows
+             * and every later request decrypts to nothing, which presents as
+             * a wrong password or an unreachable node. A repeater is the
+             * device most likely to lose power unattended, so the few
+             * milliseconds are worth it. save() writes the whole ACL, so any
+             * other pending changes go out with it. */
+            if (_store) {
+                acl.save(_store->getAclPath());
+                dirty_contacts_expiry = 0;
+            } else if (!dirty_contacts_expiry) {
+                dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
+            }
         }
     }
 

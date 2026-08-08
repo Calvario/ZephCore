@@ -11,6 +11,7 @@
 #include "joystick_defs.h"
 #include "joystick_ui_hooks.h"
 #include <helpers/input/zephcore_input_ascii.h>
+#include <helpers/buzzer_gate.h>
 #include <helpers/ui/ui_mesh_actions.h>
 #include <helpers/ui/ui_task.h>
 #include <helpers/AdvertDataHelpers.h>
@@ -958,15 +959,16 @@ bool JoystickUITask::isBuzzerQuiet() const
 void JoystickUITask::toggleBuzzer()
 {
 #ifdef CONFIG_ZEPHCORE_UI_BUZZER
-	bool was_quiet = buzzer_is_quiet();
-	if (was_quiet) {
-		buzzer_set_quiet(false);
+	uint8_t mode = zephcore_buzzer_next_mode(zephcore_buzzer_mode());
+
+	if (zephcore_buzzer_mode_audible(mode)) {
+		zephcore_buzzer_set_mode(mode, false);
 		buzzer_play("bon:d=16,o=7,b=200:c,p,c,p,c,p,p,8e");
 	} else {
 		buzzer_play("bof:d=16,o=7,b=200:c,p,c,p,c,p,p,8g5");
-		buzzer_set_quiet_deferred(true);
+		zephcore_buzzer_set_mode(mode, true);
 	}
-	mesh_set_buzzer_quiet(!was_quiet);
+	mesh_set_buzzer_mode(mode);
 #endif
 }
 

@@ -11,6 +11,8 @@
  */
 
 #include <zephyr/kernel.h>
+
+#include <helpers/buzzer_gate.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/regulator.h>
@@ -61,7 +63,7 @@ static atomic_t pending_ui_actions;
  * Written before atomic_or on pending_ui_actions, read after atomic_clear,
  * so the atomic provides ordering. Using atomic_t for portability. */
 static atomic_t pending_gps_enabled;
-static atomic_t pending_buzzer_quiet;
+static atomic_t pending_buzzer_mode;
 static atomic_t pending_offgrid_enabled;
 static atomic_t pending_leds_disabled;
 static atomic_t pending_ble_disabled;
@@ -164,10 +166,10 @@ extern "C" void mesh_save_gps_duty_sec(uint32_t sec)
 	k_event_post(s_mesh_events, s_mesh_event_ui_action);
 }
 
-extern "C" void mesh_set_buzzer_quiet(bool quiet)
+extern "C" void mesh_set_buzzer_mode(uint8_t mode)
 {
 	/* Defer the flash write (savePrefs) to mesh thread */
-	atomic_set(&pending_buzzer_quiet, quiet ? 1 : 0);
+	atomic_set(&pending_buzzer_mode, (atomic_val_t)mode);
 	atomic_or(&pending_ui_actions, UI_ACTION_BUZZER_TOGGLE);
 	k_event_post(s_mesh_events, s_mesh_event_ui_action);
 }
@@ -248,9 +250,9 @@ extern "C" void mesh_handle_ui_actions(void)
 	}
 
 	if (actions & UI_ACTION_BUZZER_TOGGLE) {
-		bool bq = atomic_get(&pending_buzzer_quiet) != 0;
-		s_mesh->prefs.buzzer_quiet = bq ? 1 : 0;
-		LOG_INF("buzzer_quiet=%d (button)", bq);
+		uint8_t mode = (uint8_t)atomic_get(&pending_buzzer_mode);
+		s_mesh->prefs.buzzer_quiet = zephcore_buzzer_prefs_from_mode(mode);
+		LOG_INF("buzzer mode=%u (button)", mode);
 		need_save = true;
 	}
 
