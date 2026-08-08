@@ -64,6 +64,7 @@ MAKER_BY_DEVICE = {
     "Seeed Studio Wio Tracker L1 Pro": "seeed",
     "Seeed Studio SenseCAP T1000-E": "seeed",
     "Seeed Studio SenseCAP Solar": "seeed",
+    "Seeed Studio SenseCAP MeshTracker X1": "seeed",
     "Seeed Studio Xiao nRF52 WIO": "seeed",
     "Seeed Studio Xiao C3": "seeed",
     "Seeed Studio Xiao S3 WIO": "seeed",
@@ -105,7 +106,17 @@ DESCRIPTION = (
 # merge). Reused from the configurator's own image set via jsDelivr -- a stable,
 # CORS-clean absolute URL. `<img>` display isn't CORS-restricted, but the spec
 # asks for absolute URLs. Boards without dedicated art use the neutral lora icon.
+# An `img` starting with http is taken as a full URL and used as-is (vendor
+# product shots), instead of being resolved against IMG_BASE.
 IMG_BASE = "https://cdn.jsdelivr.net/gh/meshcore-dev/flasher.meshcore.io@main/img"
+
+# Art we ship ourselves, for devices the configurator has no picture of. Source
+# of truth is this repo's img/ dir; build.sh copies it into firmware/ so it is
+# published alongside the firmware, and the URL is resolved against --url-base
+# like every other asset -- so nothing here hardcodes a host. Vendor product
+# shots are copied in rather than hot-linked: a vendor CDN path is theirs to
+# reshuffle, and a tile whose picture 404s is worse than one that never had it.
+# Set `own_img` (a bare filename) instead of `img` to use one.
 
 # A single custom role for the native-Linux companion, which speaks TCP rather
 # than BLE/USB. Custom roles render with a plain label and never map to the
@@ -126,6 +137,9 @@ CUSTOM_ROLES = {
 # `kind`   : nrf | esp32 | linux -- drives device type, file types, extensions.
 # `device` : the MeshCore-canonical device name to FOLD into, or a new tile name.
 # `new`    : True if this device is not in the official catalog (its own tile).
+# `img`    : filename in MeshCore's own image set (resolved against IMG_BASE).
+# `own_img`: filename we ship from this repo's img/ dir (resolved against
+#            --url-base). Takes precedence over `img`.
 # `variant`: optional filename infix (e.g. "noscreen") + shown as subTitle.
 # `subtitle`: optional role-row subTitle to disambiguate hardware variants.
 # ---------------------------------------------------------------------------
@@ -154,6 +168,8 @@ BOARDS = [
     # --- nRF52: new ZephCore-only hardware (own tile) ---------------------
     dict(stem="lilygo_timpulse_plus", kind="nrf", device="LilyGo T-Impulse Plus", new=True, img="lora.svg"),
     dict(stem="heltec_t096",          kind="nrf", device="Heltec Mesh Node T096",  new=True, img="lora.svg"),
+    dict(stem="meshtracker_x1",       kind="nrf", device="Seeed Studio SenseCAP MeshTracker X1",
+         new=True, own_img="meshtracker_x1.jpg"),
 
     # --- ESP32 (sysbuild/MCUboot, -merged.bin): fold ---------------------
     dict(stem="xiao_esp32c3",                      kind="esp32", device="Seeed Studio Xiao C3"),
@@ -194,7 +210,7 @@ SOFTDEVICE = {
     "lilygo_timpulse_plus": 6, "promicro_sx1262": 6, "heltec_t114": 6,
     "heltec_t096": 6, "gat562_30s": 6, "muziworks_r1neo": 6,
     "wio_tracker_l1": 7, "t1000_e": 7, "ikoka_nano_30dbm": 7,
-    "sensecap_solar": 7, "xiao_nrf52840": 7,
+    "sensecap_solar": 7, "xiao_nrf52840": 7, "meshtracker_x1": 7,
 }
 FORMATTER_FILE = {6: "SoftDevice_v6_formatter.zip", 7: "SoftDevice_v7_formatter.zip"}
 
@@ -293,7 +309,9 @@ def build(assets, url_base, version):
                 "type": DEVICE_TYPE[board["kind"]],
                 "firmware": [],
             }
-            if board.get("img"):
+            if board.get("own_img"):
+                dev["tooltip"] = f"<img class='device' src='{base}/{board['own_img']}'>"
+            elif board.get("img"):
                 dev["tooltip"] = f"<img class='device' src='{IMG_BASE}/{board['img']}'>"
             devices[name] = dev
             order.append(name)

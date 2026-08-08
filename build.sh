@@ -104,6 +104,14 @@ if [[ $1 == "nrf" ]]; then
             fi
         done
     done
+
+    # Device art we ship ourselves (see `own_img` in gen_provider_catalog.py).
+    # Published alongside the firmware so the catalog resolves it against the
+    # same --url-base as everything else, rather than hardcoding a host.
+    if compgen -G "img/*" > /dev/null; then
+        cp img/* firmware/
+        echo "Published device art: $(ls img/ | tr '\n' ' ')"
+    fi
 fi
 
 if [[ $1 == "linux" ]]; then

@@ -62,8 +62,14 @@ Notes on the mapping:
 - **Thumbnails:** folded devices inherit MeshCore's image automatically (device-level
   fields come from the official entry on merge), so only the new tiles set a `tooltip`.
   Those reuse the configurator's own image set via jsDelivr (`IMG_BASE` in the script);
-  boards without dedicated art fall back to a neutral LoRa icon. Swap in ZephCore-branded
-  art by pointing `img` at your own absolute HTTPS URLs.
+  boards without dedicated art fall back to a neutral LoRa icon.
+  - To ship art of our own, drop the file in the repo's `img/` dir and set `own_img` to
+    its filename. `build.sh` copies `img/*` into `firmware/` alongside the firmware, and
+    the generator resolves `own_img` against `--url-base` — so it lands on the same
+    `firmware-dist` branch and CDN as everything else, with no host hardcoded anywhere.
+  - **Copy vendor product shots in, don't hot-link them.** A vendor CDN path is theirs to
+    reshuffle, and a tile whose picture 404s is worse than one that never had a picture.
+    `img/meshtracker_x1.jpg` (Seeed's SenseCAP MeshTracker X1 photo) is the first of these.
 
 - **Erase / "wipe settings" (nRF52) uses ZephCore's own formatter.** MeshCore's official erase
   targets a different flash layout and only *partially* wipes a ZephCore node (observed on a Wio
