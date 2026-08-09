@@ -111,6 +111,7 @@ struct lr20xx_data {
 
 	/* DIO1 stuck-HIGH detection */
 	int dio1_stuck_count;
+	bool tcxo_disabled;   /* set when the TCXO fallback has already fired */
 
 	/* RX data buffer */
 	uint8_t rx_buf[256];
@@ -165,6 +166,16 @@ static lr20xx_radio_lora_cr_t cr_enum_to_lr20xx(enum lora_coding_rate cr)
 	case CR_4_8: return LR20XX_RADIO_LORA_CR_4_8;
 	default:     return LR20XX_RADIO_LORA_CR_4_8;
 	}
+}
+
+/* SetTcxoMode's start_time is the deadline by which the 32 MHz oscillator must
+ * be detected, counted in 32 MHz clock periods (datasheet S6.11.3) — NOT in
+ * 32.768 kHz RTC ticks, which is what every other timeout on this chip uses.
+ * Getting that wrong turns a 5 ms allowance into 5 us, no TCXO starts that
+ * fast, and the chip raises HF_XOSC_START_ERR exactly as documented. */
+static inline uint32_t tcxo_start_time_periods(uint32_t delay_ms)
+{
+	return delay_ms * 32000U;   /* 32000 periods per ms at 32 MHz */
 }
 
 static lr20xx_system_tcxo_supply_voltage_t get_tcxo_voltage(uint16_t mv)
@@ -354,7 +365,7 @@ static void lr20xx_hardware_reset(struct lr20xx_data *data,
 		/* Timeout in RTC ticks (30.52 µs/tick) */
 		lr20xx_system_set_tcxo_mode(ctx,
 					    get_tcxo_voltage(cfg->tcxo_voltage_mv),
-					    (cfg->tcxo_startup_delay_ms * 1000U) / 31U);
+					    tcxo_start_time_periods(cfg->tcxo_startup_delay_ms));
 	}
 
 	/* LDO mode — no cfg_lfclk, no set_reg_mode, no DCDC workarounds */
@@ -399,9 +410,20 @@ static void lr20xx_hardware_reset(struct lr20xx_data *data,
 
 static lr20xx_status_t lr20xx_calibrate_front_end(void *ctx, uint32_t freq_hz)
 {
-	lr20xx_radio_common_front_end_calibration_value_t fe_cal = {
-		.rx_path = LR20XX_RADIO_COMMON_RX_PATH_LF,
-		.frequency_in_hertz = freq_hz,
+	/* All three frequency slots are sent, the unused two as 0, so CalibFE
+	 * gets its full 8-byte form. The datasheet allows both "not providing"
+	 * the extra slots and "setting other calibration frequencies to 0", but
+	 * a short 4-byte command is the one thing that lines up with the
+	 * CMD_PERR observed across exactly this call, with a clean error word
+	 * and the chip in STBY_RC (so not a mode violation). Zeroed slots are
+	 * documented as no-ops. */
+	lr20xx_radio_common_front_end_calibration_value_t fe_cal[3] = {
+		{ .rx_path = LR20XX_RADIO_COMMON_RX_PATH_LF,
+		  .frequency_in_hertz = freq_hz },
+		{ .rx_path = LR20XX_RADIO_COMMON_RX_PATH_LF,
+		  .frequency_in_hertz = 0 },
+		{ .rx_path = LR20XX_RADIO_COMMON_RX_PATH_LF,
+		  .frequency_in_hertz = 0 },
 	};
 
 	for (int i = 0; i < LR20XX_MAX_CAL_ATTEMPTS; i++) {
@@ -410,7 +432,7 @@ static lr20xx_status_t lr20xx_calibrate_front_end(void *ctx, uint32_t freq_hz)
 
 		lr20xx_system_clear_errors(ctx);
 
-		rc = lr20xx_radio_common_calibrate_front_end_helper(ctx, &fe_cal, 1);
+		rc = lr20xx_radio_common_calibrate_front_end_helper(ctx, fe_cal, 3);
 		lr20xx_system_get_errors(ctx, &errs);
 
 		if (rc == LR20XX_STATUS_OK &&
@@ -440,6 +462,29 @@ static lr20xx_status_t lr20xx_calibrate_front_end(void *ctx, uint32_t freq_hz)
 
 /* ── Apply modem configuration ──────────────────────────────────────── */
 
+/* Bring-up only: read the chip's own command status and name the command that
+ * failed. Return codes from the SDK reflect the SPI write, not whether the chip
+ * accepted the command, so a rejection is otherwise invisible until it shows up
+ * as a CmdError IRQ several commands later. */
+#if IS_ENABLED(CONFIG_LOG)
+static void lr20xx_check_cmd(void *ctx, const char *what)
+{
+	lr20xx_system_stat1_t s1 = {0};
+
+	if (lr20xx_system_get_status(ctx, &s1, NULL, NULL) != LR20XX_STATUS_OK) {
+		return;
+	}
+	/* 2 = CMD_OK, 3 = CMD_DAT (successful read) */
+	if (s1.command_status != 2 && s1.command_status != 3) {
+		LOG_ERR("command REJECTED after %s: cmd=%d", what,
+			s1.command_status);
+	}
+}
+#define CHECK_CMD(ctx, what) lr20xx_check_cmd((ctx), (what))
+#else
+#define CHECK_CMD(ctx, what) do { } while (0)
+#endif
+
 static void lr20xx_apply_modem_config(struct lr20xx_data *data,
 				      const struct lr20xx_config *cfg,
 				      bool tx_mode)
@@ -448,8 +493,21 @@ static void lr20xx_apply_modem_config(struct lr20xx_data *data,
 	struct lora_modem_config *mc = &data->modem_cfg;
 	lr20xx_status_t rc;
 
+	/* Half of what follows is mode-restricted, and this runs on the TX path
+	 * while the chip may still be in RX:
+	 *   SetPacketType — "only works when the chip is in Standby RC, Standby
+	 *                    Xosc, or Fs mode", and must come first in a setup
+	 *   CalibFE       — "does not work if device is in Rx or Tx mode"
+	 * Both answer CMD_FAIL from the wrong mode, which surfaces only as a
+	 * CmdError IRQ several commands later. Force standby so the sequence is
+	 * always issued from a legal mode, as RadioLib does before its own
+	 * mode-restricted calls. */
+	lr20xx_system_set_standby_mode(ctx, LR20XX_SYSTEM_STANDBY_MODE_RC);
+	CHECK_CMD(ctx, "set_standby");
+
 	rc = lr20xx_radio_common_set_pkt_type(ctx, LR20XX_RADIO_COMMON_PKT_TYPE_LORA);
 	LOG_DBG("modem_cfg: set_pkt_type=%d", rc);
+	CHECK_CMD(ctx, "set_pkt_type");
 
 	/* Front-end calibration paired with set_rf_freq, exactly like RadioLib's
 	 * setFrequency() (cal THEN set, together).  One cal covers ±50MHz so the
@@ -461,15 +519,17 @@ static void lr20xx_apply_modem_config(struct lr20xx_data *data,
 
 	rc = lr20xx_radio_common_set_rf_freq(ctx, mc->frequency);
 	LOG_DBG("modem_cfg: set_rf_freq(%u)=%d", mc->frequency, rc);
+	CHECK_CMD(ctx, "set_rf_freq");
 
 	/* Always configure the RX path after setting frequency
 	 * (reference does this on every set_rf_freq call). */
 	rc = lr20xx_radio_common_set_rx_path(
 		ctx, LR20XX_RADIO_COMMON_RX_PATH_LF,
 		data->rx_boost_enabled
-			? LR20XX_RADIO_COMMON_RX_PATH_BOOST_MODE_4
+			? LR20XX_RADIO_COMMON_RX_PATH_BOOST_MODE_7
 			: LR20XX_RADIO_COMMON_RX_PATH_BOOST_MODE_NONE);
 	data->rx_boost_applied = data->rx_boost_enabled;
+	CHECK_CMD(ctx, "set_rx_path");
 
 	/* PPM offset is this chip's name for LDRO and occupies the same wire
 	 * field. The Semtech "recommended offset" helper only ever enables it
@@ -488,6 +548,7 @@ static void lr20xx_apply_modem_config(struct lr20xx_data *data,
 	rc = lr20xx_radio_lora_set_modulation_params(ctx, &mod);
 	LOG_DBG("modem_cfg: set_mod(SF%d BW%d CR%d PPM%d)=%d",
 		mod.sf, mod.bw, mod.cr, mod.ppm, rc);
+	CHECK_CMD(ctx, "set_mod_params");
 
 	/* DCDC workaround removed — LDO mode, RadioLib doesn't do it */
 
@@ -504,11 +565,13 @@ static void lr20xx_apply_modem_config(struct lr20xx_data *data,
 	LOG_DBG("modem_cfg: set_pkt(pre=%d len=%d crc=%d iq=%d)=%d",
 		pkt.preamble_len_in_symb, pkt.pld_len_in_bytes,
 		pkt.crc, pkt.iq, rc);
+	CHECK_CMD(ctx, "set_pkt_params");
 
 	rc = lr20xx_radio_lora_set_syncword(ctx,
 				       mc->public_network ? 0x34 : 0x12);
 	LOG_DBG("modem_cfg: set_syncword(0x%02x)=%d",
 		mc->public_network ? 0x34 : 0x12, rc);
+	CHECK_CMD(ctx, "set_syncword");
 
 	if (tx_mode) {
 		/* PA config + TX params from RadioLib's known-good LF table.
@@ -528,10 +591,24 @@ static void lr20xx_apply_modem_config(struct lr20xx_data *data,
 			pa_val, rc);
 	}
 
+	/* Only the events the DIO1 handler actually acts on. PREAMBLE_DETECTED
+	 * and SYNC_WORD_HEADER_VALID are deliberately NOT here: they fire on
+	 * noise, and an unhandled DIO1 assertion drives the safety path, which
+	 * restarts RX and destroys the very packet that was arriving. They stay
+	 * readable in the IRQ register for lr20xx_is_receiving(), which is the
+	 * same split the SX126x driver uses for its RX-busy gate. */
 	rc = lr20xx_system_set_dio_irq_cfg(ctx, lr20xx_irq_dio(cfg),
-		LR20XX_SYSTEM_IRQ_ALL_MASK &
-		~(LR20XX_SYSTEM_IRQ_FIFO_RX | LR20XX_SYSTEM_IRQ_FIFO_TX));
+		LR20XX_SYSTEM_IRQ_RX_DONE |
+		LR20XX_SYSTEM_IRQ_TX_DONE |
+		LR20XX_SYSTEM_IRQ_CAD_DONE |
+		LR20XX_SYSTEM_IRQ_CAD_DETECTED |
+		LR20XX_SYSTEM_IRQ_TIMEOUT |
+		LR20XX_SYSTEM_IRQ_CRC_ERROR |
+		LR20XX_SYSTEM_IRQ_LORA_HEADER_ERROR |
+		LR20XX_SYSTEM_IRQ_ERROR |
+		LR20XX_SYSTEM_IRQ_CMD_ERROR);
 	LOG_DBG("modem_cfg: set_dio_irq=%d", rc);
+	CHECK_CMD(ctx, "set_dio_irq");
 
 	DUMP_CHIP_STATE(ctx, &data->hal_ctx, tx_mode ? "modem-TX" : "modem-RX");
 }
@@ -550,6 +627,7 @@ static bool lr20xx_apply_rx_duty_cycle(struct lr20xx_data *data)
 	if (data->dc_rx_ms == 0 || data->dc_sleep_ms == 0) {
 		LOG_WRN("No duty-cycle timing stored — continuous RX");
 		data->rx_duty_cycle_enabled = false;
+		data->hal_ctx.auto_sleeps = false;
 		lr20xx_radio_common_set_rx_with_timeout_in_rtc_step(
 			ctx, 0xFFFFFF);
 		return false;
@@ -617,6 +695,46 @@ static void lr20xx_restart_rx(struct lr20xx_data *data)
 
 	lr20xx_system_clear_irq_status(ctx, LR20XX_SYSTEM_IRQ_ALL_MASK);
 
+	/* TX rewrites payload_len to the length it sent, and in explicit-header
+	 * RX that field is a filter: "accept 1..payload_len, reject anything
+	 * longer with a header error". Left alone, a node silently stops hearing
+	 * every packet bigger than its own last transmission. RadioLib restores
+	 * this on each RX entry for the same reason. */
+	{
+		lr20xx_radio_lora_pkt_params_t pkt = {
+			.preamble_len_in_symb = data->modem_cfg.preamble_len,
+			.pkt_mode = LR20XX_RADIO_LORA_PKT_EXPLICIT,
+			.pld_len_in_bytes = 255,
+			.crc = data->modem_cfg.packet_crc_disable
+				? LR20XX_RADIO_LORA_CRC_DISABLED
+				: LR20XX_RADIO_LORA_CRC_ENABLED,
+			.iq = data->modem_cfg.iq_inverted
+				? LR20XX_RADIO_LORA_IQ_INVERTED
+				: LR20XX_RADIO_LORA_IQ_STANDARD,
+		};
+		lr20xx_radio_lora_set_packet_params(ctx, &pkt);
+		CHECK_CMD(ctx, "restart_rx set_pkt_params");
+	}
+
+	/* "If the device is already in Rx mode, the command fails as timeout
+	 * cannot be updated" (datasheet, SetRx) — and in continuous mode the
+	 * chip never leaves Rx, it just keeps searching. So after a packet there
+	 * is nothing to re-arm: issuing SetRx only earns a CMD_FAIL, whose
+	 * CmdError comes back through DIO1 as another unhandled IRQ.
+	 *
+	 * Skipping it also keeps the receiver on air. Forcing a mode change
+	 * would cost the HF oscillator restart (702 us) plus PLL lock (32 us)
+	 * on the path taken after every single packet. */
+	if (!data->rx_duty_cycle_enabled) {
+		lr20xx_system_stat2_t s2 = {0};
+
+		if (lr20xx_system_get_status(ctx, NULL, &s2, NULL) == LR20XX_STATUS_OK &&
+		    s2.chip_mode == LR20XX_SYSTEM_CHIP_MODE_RX) {
+			data->in_rx_mode = true;
+			return;
+		}
+	}
+
 	if (data->rx_duty_cycle_enabled) {
 		lr20xx_apply_rx_duty_cycle(data);
 	} else {
@@ -624,6 +742,7 @@ static void lr20xx_restart_rx(struct lr20xx_data *data)
 			ctx, 0xFFFFFF);
 	}
 
+	CHECK_CMD(ctx, "restart_rx set_rx");
 	data->in_rx_mode = true;
 }
 
@@ -840,12 +959,20 @@ static void lr20xx_dio1_work_handler(struct k_work *work)
 	}
 
 safety_check:
+	/* A zero IRQ word means the edge was already consumed — a duplicate
+	 * re-submit, or the restart path cleared it. Nothing failed, so do not
+	 * tear RX down and do not count it toward the stuck-DIO1 reset. */
+	if (irq == 0) {
+		goto edge_recheck;
+	}
+
 	if (!rx_restarted && data->in_rx_mode && !data->tx_active) {
 		LOG_WRN("DIO1 safety: no IRQ handled (0x%08x rc=%d), "
 			"restarting RX", irq, rc);
 		lr20xx_restart_rx(data);
 	}
 
+edge_recheck:
 	/* Edge-triggered DIO1: if still HIGH, re-submit for pending flags.
 	 * Guard against stuck DIO1: after 5 empty cycles, hardware reset. */
 	if (gpio_pin_get_dt(&data->hal_ctx.dio1)) {
@@ -1182,7 +1309,7 @@ void lr20xx_set_rx_boost(const struct device *dev, bool enable)
 		k_mutex_lock(&data->spi_mutex, K_FOREVER);
 		lr20xx_radio_common_set_rx_path(
 			&data->hal_ctx, LR20XX_RADIO_COMMON_RX_PATH_LF,
-			enable ? LR20XX_RADIO_COMMON_RX_PATH_BOOST_MODE_4
+			enable ? LR20XX_RADIO_COMMON_RX_PATH_BOOST_MODE_7
 			       : LR20XX_RADIO_COMMON_RX_PATH_BOOST_MODE_NONE);
 		data->rx_boost_applied = enable;
 		k_mutex_unlock(&data->spi_mutex);
@@ -1234,7 +1361,7 @@ void lr20xx_reset_agc(const struct device *dev)
 	if (data->rx_boost_enabled) {
 		lr20xx_radio_common_set_rx_path(
 			ctx, LR20XX_RADIO_COMMON_RX_PATH_LF,
-			LR20XX_RADIO_COMMON_RX_PATH_BOOST_MODE_4);
+			LR20XX_RADIO_COMMON_RX_PATH_BOOST_MODE_7);
 		data->rx_boost_applied = true;
 	}
 
@@ -1243,20 +1370,25 @@ void lr20xx_reset_agc(const struct device *dev)
 
 /* ── Driver API: CAD ────────────────────────────────────────────────── */
 
-/* Recommended cad_detect_peak values per SF for 2-symbol CAD.
- * From Semtech LR20xx datasheet table.  Using 2 symbols as a
- * good balance between speed (~2 symbol durations) and reliability. */
+/* Datasheet Table 6-19, the 4-symbol row — LoRaRadioBase asks for
+ * LORA_CAD_SYMB_4, so these are the values that go with the window we
+ * actually use. The old table here was RadioLib's 2-symbol set, which is
+ * systematically higher: a higher det_peak is a *less* sensitive CAD, so
+ * pairing it with a 4-symbol window made LBT more willing to talk over
+ * faint traffic. Adaptive CAD offsets from this base, so getting the base
+ * right shifts the whole operating range. */
 static uint8_t lr20xx_cad_detect_peak(uint8_t sf)
 {
 	switch (sf) {
-	case 5:  case 6:  return 56;
-	case 7:           return 56;
-	case 8:           return 58;
-	case 9:           return 58;
-	case 10:          return 60;
-	case 11:          return 64;
-	case 12:          return 68;
-	default:          return 60;
+	case 5:  return 51;
+	case 6:  return 51;
+	case 7:  return 51;
+	case 8:  return 54;
+	case 9:  return 56;
+	case 10: return 60;
+	case 11: return 60;
+	case 12: return 64;
+	default: return 56;
 	}
 }
 
@@ -1267,7 +1399,7 @@ static int lr20xx_do_cad(struct lr20xx_data *data)
 
 	uint8_t sf = (uint8_t)mc->datarate;
 	lr20xx_radio_lora_cad_params_t cad = {
-		.cad_symb_nb = 2,
+		.cad_symb_nb = 4,   /* overridden below from mc->cad.symbol_num */
 		.pnr_delta = 0,	/* exact symbol count, no best-effort */
 		.cad_exit_mode = LR20XX_RADIO_LORA_CAD_EXIT_MODE_STANDBYRC,
 		.cad_timeout_in_pll_step = 0,
@@ -1298,11 +1430,13 @@ static int lr20xx_do_cad(struct lr20xx_data *data)
 	}
 
 	lr20xx_radio_lora_configure_cad_params(ctx, &cad);
+	CHECK_CMD(ctx, "configure_cad_params");
 
 	/* Clear any pending IRQ flags, then start CAD */
 	lr20xx_system_clear_irq_status(ctx, LR20XX_SYSTEM_IRQ_ALL_MASK);
 	data->cad_active = true;
 	lr20xx_radio_lora_set_cad(ctx);
+	CHECK_CMD(ctx, "set_cad");
 
 	return 0;
 }
@@ -1475,6 +1609,7 @@ static int lr20xx_lora_recv_duty_cycle(const struct device *dev,
 	data->dc_rx_ms = rx_ms;
 	data->dc_sleep_ms = slp_ms;
 	data->rx_duty_cycle_enabled = true;
+	data->hal_ctx.auto_sleeps = true;
 	lr20xx_radio_common_set_rx_duty_cycle(ctx, rx_ms, slp_ms,
 		LR20XX_RADIO_COMMON_RX_DUTY_CYCLE_MODE_RX);
 	LOG_INF("recv_duty_cycle: rx=%ums sleep=%ums", rx_ms, slp_ms);
@@ -1524,6 +1659,33 @@ static int lr20xx_hw_init(struct lr20xx_data *data,
 
 	LOG_INF("LR20xx SDK get_version: major=%u minor=%u", ver.major, ver.minor);
 
+#if IS_ENABLED(CONFIG_LOG)
+	/* GET_VERSION (0x0101) must answer 0x01 0x18 for the documented FW 1.24.
+	 * Two dumps, because the two references disagree on the protocol and
+	 * our layout matches RadioLib on paper yet reads shifted on silicon:
+	 *
+	 *   frame A = command and response in ONE NSS window (RadioLib's model)
+	 *   frame B = a bare read in a SECOND window (the Semtech HAL's model)
+	 *
+	 * Whichever one contains 01 18 is the protocol this chip actually
+	 * speaks, and its offset is the skip the HAL should use.
+	 */
+	{
+		const uint8_t ver_cmd[2] = { 0x01, 0x01 };
+		uint8_t follow[8] = { 0 };
+
+		lr20xx_hal_debug_raw_frame(ctx, ver_cmd, sizeof(ver_cmd), 10);
+
+		if (lr20xx_hal_direct_read(ctx, follow, sizeof(follow)) ==
+		    LR20XX_HAL_STATUS_OK) {
+			LOG_HEXDUMP_INF(follow, sizeof(follow),
+					"frame B: bare read after GET_VERSION");
+		} else {
+			LOG_WRN("frame B: bare read failed");
+		}
+	}
+#endif
+
 	/* The only base FW version the datasheet documents is 1.24 (0x01/0x18).
 	 * Anything else still runs — the mismatch is worth a line in the log
 	 * when a bring-up goes sideways, not a hard failure. */
@@ -1538,8 +1700,15 @@ static int lr20xx_hw_init(struct lr20xx_data *data,
 	 * needed when SetRegMode simo_usage=0x02 (SIMO_NORMAL).
 	 * We run in LDO mode (default, simo_usage=0x00). */
 
-	if (cfg->tcxo_voltage_mv > 0) {
-		uint32_t tcxo_ticks = (cfg->tcxo_startup_delay_ms * 1000U) / 31U;
+	/* A board that declares a TCXO but is actually fitted with a plain
+	 * crystal fails to start its 32 MHz reference once TCXO mode is on, and
+	 * every later command is rejected. The datasheet (S1.9.3) puts the TCXO
+	 * on XTA with the VTCXO regulator, so the two builds are indistinguishable
+	 * from software — the chip's own HF_XOSC_START error is the only signal.
+	 * Fall back to XTAL rather than come up dead, as MeshCore's CustomLR2021
+	 * does when begin() reports a rejected command. */
+	if (cfg->tcxo_voltage_mv > 0 && !data->tcxo_disabled) {
+		uint32_t tcxo_ticks = tcxo_start_time_periods(cfg->tcxo_startup_delay_ms);
 		lr20xx_status_t tcxo_rc = lr20xx_system_set_tcxo_mode(ctx,
 					    get_tcxo_voltage(cfg->tcxo_voltage_mv),
 					    tcxo_ticks);
@@ -1590,6 +1759,23 @@ static int lr20xx_hw_init(struct lr20xx_data *data,
 
 	DUMP_CHIP_STATE(ctx, &data->hal_ctx, "post-cal");
 
+	/* The 32 MHz reference is what calibration needs, so this is where a
+	 * wrong clock source shows up. One retry only — if XTAL fails too, the
+	 * fault is not the clock config and looping would just hide it. */
+	{
+		lr20xx_system_errors_t clk_err = 0;
+
+		lr20xx_system_get_errors(ctx, &clk_err);
+		if ((clk_err & LR20XX_SYSTEM_ERRORS_HF_XOSC_START_MASK) &&
+		    cfg->tcxo_voltage_mv > 0 && !data->tcxo_disabled) {
+			LOG_WRN("HF XOSC did not start with TCXO at %d mV "
+				"(errors=0x%04x) — retrying in XTAL mode",
+				cfg->tcxo_voltage_mv, clk_err);
+			data->tcxo_disabled = true;
+			return lr20xx_hw_init(data, cfg);
+		}
+	}
+
 	/* Front-end calibration at 868 MHz LF.
 	 * raw_value = ceil(868000000/4000000) = 217 = 0x00D9 */
 	st = lr20xx_calibrate_front_end(ctx, 868000000);
@@ -1605,6 +1791,32 @@ static int lr20xx_hw_init(struct lr20xx_data *data,
 	lr20xx_radio_common_get_pkt_type(ctx, &pkt_readback);
 
 	DUMP_CHIP_STATE(ctx, &data->hal_ctx, "init-done");
+
+#if IS_ENABLED(CONFIG_LOG)
+	/* Does merely polling status raise CmdError? get_status is a bare
+	 * direct_read (no opcode) in this SDK, where RadioLib sends GET_STATUS
+	 * as a real command — so if the chip parses those clocked-out zeros as
+	 * a malformed command, our own polling is manufacturing the CMD_ERROR
+	 * storm rather than reporting one. Chip is idle here, so nothing else
+	 * can set the bit. */
+	{
+		lr20xx_system_irq_mask_t before = 0, after = 0;
+		lr20xx_system_stat1_t s1 = {0};
+
+		lr20xx_system_clear_irq_status(ctx, LR20XX_SYSTEM_IRQ_ALL_MASK);
+		lr20xx_system_get_status(ctx, NULL, NULL, &before);
+
+		for (int i = 0; i < 5; i++) {
+			lr20xx_system_get_status(ctx, &s1, NULL, NULL);
+		}
+
+		lr20xx_system_get_status(ctx, NULL, NULL, &after);
+		LOG_INF("status-poll probe: irq before=0x%08x after=0x%08x "
+			"(CMD_ERROR %s self-inflicted)", before, after,
+			(after & LR20XX_SYSTEM_IRQ_CMD_ERROR) ? "IS" : "is NOT");
+		lr20xx_system_clear_irq_status(ctx, LR20XX_SYSTEM_IRQ_ALL_MASK);
+	}
+#endif
 
 	/* DEBUG: what voltage does the chip see on its OWN supply pin? (mV,
 	 * after MU calibration).  If this reads low (≪3000mV) while the board

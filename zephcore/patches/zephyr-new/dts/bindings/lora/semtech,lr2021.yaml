@@ -30,13 +30,20 @@ properties:
     type: int
     default: 0
     description: |
-      TCXO supply voltage in millivolts (provided by LR2021 DIO3).
-      0 = no TCXO (use XTAL). Common: 1800 (1.8V), 3300 (3.3V).
+      TCXO supply voltage in millivolts. On LR2021 the TCXO sits on XTA and is
+      fed by the internal regulator via the VTCXO pin (datasheet S1.9.3) — not
+      DIO3, despite what the SX126x-derived names elsewhere suggest.
+      0 = no TCXO (use XTAL). Allowed: 1600, 1700, 1800, 2200, 2400, 2700,
+      3000, 3300.
 
   tcxo-startup-delay-ms:
     type: int
-    default: 5
-    description: TCXO startup stabilization time in milliseconds.
+    default: 10
+    description: |
+      Deadline for the 32 MHz TCXO to start and stabilise, in milliseconds.
+      This is a timeout, not a fixed wait, so erring high only delays how
+      quickly a dead oscillator is reported. Too low and the chip raises
+      HF_XOSC_START_ERR and rejects every later command.
 
   rx-boosted:
     type: boolean

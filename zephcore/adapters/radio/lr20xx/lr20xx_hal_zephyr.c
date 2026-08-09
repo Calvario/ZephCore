@@ -76,12 +76,21 @@ static lr20xx_hal_status_t wait_on_busy(struct lr20xx_hal_context *ctx)
 static lr20xx_hal_status_t check_device_ready(struct lr20xx_hal_context *ctx)
 {
 	if (!ctx->radio_is_sleeping) {
-		return wait_on_busy(ctx);
+		/* In RX duty cycle the chip sleeps between windows on its own, so
+		 * the flag above is false while BUSY is high and the radio is not
+		 * listening. Waiting would just burn the BUSY timeout; wake it the
+		 * same way an explicit sleep is woken. */
+		if (!ctx->auto_sleeps || !gpio_pin_get_dt(&ctx->busy)) {
+			return wait_on_busy(ctx);
+		}
 	}
 
-	/* Wake from sleep: NSS pulse ≥10us per LR2021 datasheet §5.4.2 */
+	/* Wake from sleep: the chip leaves Sleep when NSS is held low for 100us
+	 * (datasheet, Sleep mode). Semtech's reference HAL allows 1 ms; keep that
+	 * margin — a short pulse leaves the radio asleep and every following
+	 * command is answered by a chip that is not listening. */
 	gpio_pin_set_dt(&ctx->nss, 1);
-	k_busy_wait(10);  /* ≥10us NSS hold; k_busy_wait unit is microseconds */
+	k_busy_wait(1000);
 	gpio_pin_set_dt(&ctx->nss, 0);
 
 	ctx->radio_is_sleeping = false;
@@ -232,30 +241,109 @@ lr20xx_hal_status_t lr20xx_hal_write(const void *context, const uint8_t *command
  * so it surfaces as nonsense lengths and all-zero status reads rather than as
  * an SPI error. Keep every read in one transaction.
  *
- * NULL buffers clock 0x00 (the LR2021 NOP opcode) on MOSI and discard on MISO,
- * so no scratch buffer is needed regardless of length.
+ * NULL TX buffers clock the SPI controller's over-read character, NOT zero --
+ * Nordic defaults it to 0xff, which the LR2021 reads as a bogus opcode and
+ * rejects. Boards using this driver must set overrun-character = <0x00> (the
+ * LR2021 NOP) on the SPI node.
  */
 static int lr20xx_spi_read_frame(struct lr20xx_hal_context *ctx, const uint8_t *command,
 				  uint16_t command_length, uint8_t *data, uint16_t data_length)
 {
-	const struct spi_buf tx_bufs[] = {
-		{ .buf = (uint8_t *)command, .len = command_length },
-		{ .buf = NULL, .len = LR20XX_STAT_LEN + data_length },
-	};
-	const struct spi_buf rx_bufs[] = {
-		{ .buf = NULL, .len = command_length + LR20XX_STAT_LEN },
-		{ .buf = data, .len = data_length },
-	};
-	const struct spi_buf_set tx = { .buffers = tx_bufs, .count = 2 };
-	const struct spi_buf_set rx = { .buffers = rx_bufs, .count = 2 };
 	int ret;
 
-	gpio_pin_set_dt(&ctx->nss, 1);
-	ret = spi_transceive(ctx->spi_dev, &ctx->spi_cfg, &tx, &rx);
-	gpio_pin_set_dt(&ctx->nss, 0);
+	/* Phase 1: the command, in its own NSS window. */
+	{
+		const struct spi_buf tx_buf = {
+			.buf = (uint8_t *)command,
+			.len = command_length,
+		};
+		const struct spi_buf_set tx = { .buffers = &tx_buf, .count = 1 };
+
+		gpio_pin_set_dt(&ctx->nss, 1);
+		ret = spi_write(ctx->spi_dev, &ctx->spi_cfg, &tx);
+		gpio_pin_set_dt(&ctx->nss, 0);
+
+		if (ret < 0) {
+			return ret;
+		}
+	}
+
+	/* The answer is not ready until BUSY drops — without this the second
+	 * window clocks out whatever the chip had, two bytes early. */
+	if (wait_on_busy(ctx) != LR20XX_HAL_STATUS_OK) {
+		return -ETIMEDOUT;
+	}
+
+	/* Phase 2: two dummy bytes absorb the stat header, then the payload.
+	 * The stat header lands in a real buffer rather than being discarded
+	 * with a NULL one: spi_nrfx_spim rejects a transfer whose first TX and
+	 * RX buffers are both NULL (-EINVAL), and TX is legitimately NULL here. */
+	{
+		uint8_t stat[LR20XX_STAT_LEN];
+		const struct spi_buf tx_buf = {
+			.buf = NULL,
+			.len = LR20XX_STAT_LEN + data_length,
+		};
+		const struct spi_buf rx_bufs[] = {
+			{ .buf = stat, .len = LR20XX_STAT_LEN },
+			{ .buf = data, .len = data_length },
+		};
+		const struct spi_buf_set tx = { .buffers = &tx_buf, .count = 1 };
+		const struct spi_buf_set rx = { .buffers = rx_bufs, .count = 2 };
+
+		gpio_pin_set_dt(&ctx->nss, 1);
+		ret = spi_transceive(ctx->spi_dev, &ctx->spi_cfg, &tx, &rx);
+		gpio_pin_set_dt(&ctx->nss, 0);
+	}
 
 	return ret;
 }
+
+#if IS_ENABLED(CONFIG_LOG)
+/*
+ * Dump one command frame from byte 0 — command echo, stat header and payload
+ * all in one line, nothing discarded. The single-NSS read layout above has
+ * never been checked against real silicon; this shows where the payload
+ * actually starts instead of assuming it.
+ */
+void lr20xx_hal_debug_raw_frame(const void *context, const uint8_t *command,
+				uint16_t command_length, uint16_t extra)
+{
+	struct lr20xx_hal_context *ctx = (struct lr20xx_hal_context *)context;
+	uint8_t rx[24] = { 0 };
+	uint16_t total = command_length + extra;
+
+	if (total > sizeof(rx)) {
+		total = sizeof(rx);
+	}
+
+	const struct spi_buf tx_bufs[] = {
+		{ .buf = (uint8_t *)command, .len = command_length },
+		{ .buf = NULL, .len = (size_t)(total - command_length) },
+	};
+	const struct spi_buf rx_bufs[] = {
+		{ .buf = rx, .len = total },
+	};
+	const struct spi_buf_set tx = { .buffers = tx_bufs, .count = 2 };
+	const struct spi_buf_set rxs = { .buffers = rx_bufs, .count = 1 };
+
+	if (check_device_ready(ctx) != LR20XX_HAL_STATUS_OK) {
+		LOG_WRN("raw frame: device not ready");
+		return;
+	}
+
+	gpio_pin_set_dt(&ctx->nss, 1);
+	int ret = spi_transceive(ctx->spi_dev, &ctx->spi_cfg, &tx, &rxs);
+	gpio_pin_set_dt(&ctx->nss, 0);
+
+	if (ret < 0) {
+		LOG_ERR("raw frame: spi err %d", ret);
+		return;
+	}
+
+	LOG_HEXDUMP_INF(rx, total, "frame A: one NSS window, from byte 0");
+}
+#endif /* CONFIG_LOG */
 
 lr20xx_hal_status_t lr20xx_hal_read(const void *context, const uint8_t *command,
 				     const uint16_t command_length,
@@ -342,11 +430,28 @@ lr20xx_hal_status_t lr20xx_hal_direct_read_fifo(const void *context,
 		return LR20XX_HAL_STATUS_ERROR;
 	}
 
-	/* The RX FIFO answers with the same [stat header][payload] framing as
-	 * every other read — it is not a raw byte stream. Skipping the header
-	 * here is what keeps the returned packet aligned; consuming it as
-	 * payload shifts the whole frame two bytes and corrupts every receive. */
-	ret = lr20xx_spi_read_frame(ctx, command, command_length, data, data_length);
+	/* Unlike every other read, the FIFO answers inside the command's own NSS
+	 * window with no stat header and no BUSY wait — command bytes out, payload
+	 * straight back. Semtech's reference HAL is explicit about this
+	 * (lr20xx_hal_direct_read_fifo); treating it like a normal read releases
+	 * NSS mid-frame and eats two payload bytes as a header. */
+	{
+		const struct spi_buf tx_bufs[] = {
+			{ .buf = (uint8_t *)command, .len = command_length },
+			{ .buf = NULL, .len = data_length },
+		};
+		const struct spi_buf rx_bufs[] = {
+			{ .buf = NULL, .len = command_length },
+			{ .buf = data, .len = data_length },
+		};
+		const struct spi_buf_set tx = { .buffers = tx_bufs, .count = 2 };
+		const struct spi_buf_set rx = { .buffers = rx_bufs, .count = 2 };
+
+		gpio_pin_set_dt(&ctx->nss, 1);
+		ret = spi_transceive(ctx->spi_dev, &ctx->spi_cfg, &tx, &rx);
+		gpio_pin_set_dt(&ctx->nss, 0);
+	}
+
 	if (ret < 0) {
 		LOG_ERR("SPI FIFO read failed: %d", ret);
 		return LR20XX_HAL_STATUS_ERROR;

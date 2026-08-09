@@ -36,6 +36,10 @@ struct lr20xx_hal_context {
 	struct gpio_dt_spec dio1;   /* DIO1 interrupt */
 
 	volatile bool radio_is_sleeping;
+	/* Set while RX duty cycling: the chip parks itself in sleep between
+	 * windows without the host ever sending SetSleep, so radio_is_sleeping
+	 * cannot be trusted to spot it. */
+	volatile bool auto_sleeps;
 };
 
 /**
@@ -62,6 +66,12 @@ void lr20xx_hal_enable_dio1_irq(struct lr20xx_hal_context *ctx);
 
 /** @brief Disable DIO1 interrupt */
 void lr20xx_hal_disable_dio1_irq(struct lr20xx_hal_context *ctx);
+
+#if IS_ENABLED(CONFIG_LOG)
+/** @brief Log a whole command frame from byte 0, nothing discarded. */
+void lr20xx_hal_debug_raw_frame(const void *context, const uint8_t *command,
+				uint16_t command_length, uint16_t extra);
+#endif
 
 #ifdef __cplusplus
 }

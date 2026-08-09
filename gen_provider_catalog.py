@@ -168,6 +168,12 @@ BOARDS = [
     # --- nRF52: new ZephCore-only hardware (own tile) ---------------------
     dict(stem="lilygo_timpulse_plus", kind="nrf", device="LilyGo T-Impulse Plus", new=True, img="lora.svg"),
     dict(stem="heltec_t096",          kind="nrf", device="Heltec Mesh Node T096",  new=True, img="lora.svg"),
+    # Name is pre-matched to MeshCore's flasher convention ("Seeed Studio" +
+    # full product name, as with "Seeed Studio SenseCAP T1000-E"), so this
+    # folds into their tile automatically the moment they add one -- the merge
+    # is by exact name. Their flasher config has no X1 entry yet even though
+    # MeshCore firmware supports it, hence new=True and our own photo for now.
+    # WHEN IT APPEARS: drop new=True and own_img so their art and tile win.
     dict(stem="meshtracker_x1",       kind="nrf", device="Seeed Studio SenseCAP MeshTracker X1",
          new=True, own_img="meshtracker_x1.jpg"),
 

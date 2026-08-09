@@ -37,7 +37,14 @@ int haptic_init(void)
 
 	haptic_dev = DEVICE_DT_GET(HAPTIC_NODE);
 	if (!device_is_ready(haptic_dev)) {
-		LOG_INF("no haptic driver found");
+		/* The DRV2605 driver logs its own reason at debug level, so say
+		 * enough here to tell "chip absent" from "bus down". */
+		const struct device *bus = DEVICE_DT_GET(DT_BUS(HAPTIC_NODE));
+
+		LOG_WRN("haptic %s not ready (addr 0x%02x, bus %s %s) — "
+			"build with CONFIG_HAPTICS_LOG_LEVEL_DBG for the cause",
+			haptic_dev->name, (unsigned int)DT_REG_ADDR(HAPTIC_NODE),
+			bus->name, device_is_ready(bus) ? "up" : "DOWN");
 		haptic_dev = NULL;
 		return -ENODEV;
 	}

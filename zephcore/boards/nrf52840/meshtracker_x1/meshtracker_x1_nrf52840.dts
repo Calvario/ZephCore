@@ -60,8 +60,13 @@
 		compatible = "gpio-keys";
 
 		user_button: button_0 {
-			/* Active HIGH (pressed = VCC), external pull-down on board */
-			gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
+			/* Active HIGH (pressed = VCC), external pull-down on board.
+			 * The internal pull-down is declared as well so System OFF
+			 * arms SENSE with PULLDOWN rather than NOPULL: the teardown
+			 * cuts the sensor rail before configuring SENSE, and a
+			 * floating pin with SENSE_HIGH asserts DETECT immediately,
+			 * which exits System OFF as fast as it is entered. */
+			gpios = <&gpio0 6 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>;
 			zephyr,code = <INPUT_KEY_0>;
 			label = "User Button";
 		};
@@ -330,6 +335,12 @@
 	compatible = "nordic,nrf-spim";
 	status = "okay";
 	cs-gpios = <&gpio0 12 GPIO_ACTIVE_LOW>;
+	/* Clock 0x00 on MOSI when there is nothing to send. Nordic defaults the
+	 * over-read character to 0xff, and the LR2021 parses those bytes: a bare
+	 * status read then looks like opcode 0xffff, which the chip rejects and
+	 * flags as a command error. 0x00 is the LR2021 NOP, which is what both
+	 * Semtech's reference HAL and RadioLib send. */
+	overrun-character = <0x00>;
 	pinctrl-0 = <&spi2_default>;
 	pinctrl-1 = <&spi2_sleep>;
 	pinctrl-names = "default", "sleep";

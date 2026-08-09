@@ -129,6 +129,8 @@
 	pinctrl-1 = <&spi2_sleep>;
 	pinctrl-names = "default", "sleep";
 	cs-gpios = <&gpio1 13 GPIO_ACTIVE_LOW>;   /* P1.13 LR2021_CS */
+	/* 0x00 = LR2021 NOP; Nordic's 0xff default reads as a bogus opcode */
+	overrun-character = <0x00>;
 
 	lora: lora@0 {
 		compatible = "semtech,lr2021";

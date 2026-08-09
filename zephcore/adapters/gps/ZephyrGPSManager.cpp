@@ -1710,36 +1710,30 @@ static void gps_uart_dump_hw_state(void)
  */
 static void gps_dump_gpio_states(void)
 {
+	/* Port/pin come from the gpio_dt_spec so the board's real wiring is
+	 * printed. These used to be hardcoded T1000-E pin numbers, which read
+	 * as plausible nonsense on every other board. */
+#define GPS_LOG_PIN(_label, _spec)                                            	if (gpio_is_ready_dt(&(_spec))) {                                     		LOG_INF("  %-14s %s.%02u: %d", _label, (_spec).port->name,    			(_spec).pin, gpio_pin_get_dt(&(_spec)));              	}
+
 	LOG_INF("GPS GPIO states after power-up:");
-	if (gpio_is_ready_dt(&gps_enable_gpio)) {
-		LOG_INF("  GPS_EN (P1.11): %d", gpio_pin_get_dt(&gps_enable_gpio));
-	}
+	GPS_LOG_PIN("GPS_EN", gps_enable_gpio);
 #if HAS_GPS_VRTC
-	if (gpio_is_ready_dt(&gps_vrtc_gpio)) {
-		LOG_INF("  GPS_VRTC_EN (P0.08): %d", gpio_pin_get_dt(&gps_vrtc_gpio));
-	}
+	GPS_LOG_PIN("GPS_VRTC_EN", gps_vrtc_gpio);
 #endif
 #if HAS_GPS_RESET
-	if (gpio_is_ready_dt(&gps_reset_gpio)) {
-		LOG_INF("  GPS_RESET (P1.15): %d", gpio_pin_get_dt(&gps_reset_gpio));
-	}
+	GPS_LOG_PIN("GPS_RESET", gps_reset_gpio);
 #endif
 #if HAS_GPS_SLEEP
-	if (gpio_is_ready_dt(&gps_sleep_gpio)) {
-		LOG_INF("  GPS_SLEEP_INT (P1.12): %d", gpio_pin_get_dt(&gps_sleep_gpio));
-	}
+	GPS_LOG_PIN("GPS_SLEEP_INT", gps_sleep_gpio);
 #endif
 #if HAS_GPS_RTCINT
-	if (gpio_is_ready_dt(&gps_rtcint_gpio)) {
-		LOG_INF("  GPS_RTC_INT (P0.15): %d", gpio_pin_get_dt(&gps_rtcint_gpio));
-	}
+	GPS_LOG_PIN("GPS_RTC_INT", gps_rtcint_gpio);
 #endif
 #if HAS_GPS_RESETB
-	if (gpio_is_ready_dt(&gps_resetb_gpio)) {
-		LOG_INF("  GPS_RESETB (P1.14): %d (INPUT_PULLUP, expect 1)",
-			gpio_pin_get_dt(&gps_resetb_gpio));
-	}
+	GPS_LOG_PIN("GPS_RESETB", gps_resetb_gpio);   /* INPUT_PULLUP, expect 1 */
 #endif
+
+#undef GPS_LOG_PIN
 }
 #endif /* HAS_GPS_POWER_CONTROL */
 
