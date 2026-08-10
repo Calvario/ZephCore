@@ -81,6 +81,16 @@ public:
 	virtual bool setRxBoost(bool enable);
 	bool isRxBoostEnabled() const { return _rx_boost_enabled; }
 
+	/* Multi-SF receive via LoRa side detectors.  Only the LR2021 has them;
+	 * every other radio reports the feature as unsupported.  `num` = 0
+	 * disables.  Returns false if the radio has no side detectors or the
+	 * requested set violates a chip constraint (see
+	 * lr20xx_configure_side_detectors). */
+	virtual bool configSideDetectors(const uint8_t *sfs, uint8_t num) {
+		(void)sfs; (void)num;
+		return false;
+	}
+
 	/* Read-only view of the modem config currently used by buildModemConfig().
 	 * These honor temporary radio overrides for freq/bw/sf/cr and the same TX
 	 * clamps as the actual lora_config() path. */

@@ -732,6 +732,10 @@ public:
 		return lora_radio.setRxBoost(enable);
 	}
 
+	bool configSideDetectors(const uint8_t* sfs, uint8_t num) override {
+		return lora_radio.configSideDetectors(sfs, num);
+	}
+
 	/* Adaptive CAD */
 	int formatCadStatus(char* buf, int cap) override {
 		return lora_radio.formatCadStatus(buf, cap);
@@ -1554,6 +1558,18 @@ int main(void)
 				companion_mesh.prefs.cad_offset,
 				companion_mesh.prefs.probe_interval,
 				companion_mesh.prefs.cad_busycap);
+
+	/* LR2021 side detectors (multi-SF RX) from prefs.  extra_sf is a
+	 * zero-terminated list; a rejected set (SF/BW changed since it was
+	 * saved) just leaves the feature off, and non-LR2021 radios report it
+	 * unsupported. */
+	{
+		uint8_t n = 0;
+		while (n < EXTRA_SF_MAX && companion_mesh.prefs.extra_sf[n] != 0) n++;
+		if (n > 0 && !lora_radio.configSideDetectors(companion_mesh.prefs.extra_sf, n)) {
+			LOG_WRN("extra.sf %u SFs rejected for current SF/BW — side detectors off", n);
+		}
+	}
 	ui_set_radio_runtime(
 		lora_radio.getActiveSyncWord(),
 		lora_radio.getActivePreambleLength(),

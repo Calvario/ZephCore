@@ -130,6 +130,18 @@ struct lr11xx_data {
 	 * bit is cleared and TX released.  All accesses under spi_mutex. */
 	uint32_t preamble_seen_at_ms;
 
+	/* Timestamp (k_uptime_get_32(), ms) at which lr11xx_is_receiving()
+	 * first saw SYNC_WORD_HEADER_VALID latched in the current RX cycle;
+	 * 0 = no payload phase being timed.  Bounds the payload phase the same
+	 * way preamble_seen_at_ms bounds the preamble phase: the header bit is
+	 * cleared only by the terminal DIO1 event's bulk clear, and continuous
+	 * RX (SetRx 0xFFFFFF) has no symbol timer, so a header whose packet
+	 * never completes produces no terminal IRQ and would pin the TX gate
+	 * true forever — the node keeps receiving but never transmits again,
+	 * silently.  Released after lr11xx_max_payload_ms().  All accesses
+	 * under spi_mutex. */
+	uint32_t header_seen_at_ms;
+
 	/* Wedge-recovery watchdog: the LR1110 can rarely be left BUSY-high with
 	 * DIO1 low (a command racing the autonomous SetRxDutyCycle sleep phase) —
 	 * no IRQ ever fires, so the event-driven driver never re-arms and the node
@@ -145,6 +157,17 @@ struct lr11xx_data {
 };
 
 /* ── Helpers ────────────────────────────────────────────────────────── */
+
+/* Reset all software state that says "we are currently receiving": the
+ * preamble-grace timestamp and the payload-phase deadline.  Paired write so
+ * the two never drift out of sync — same shape as the SX126x driver's
+ * sx126x_reset_rx_busy_signals().  Called from every RX (re)start site and
+ * before TX / CAD entry. */
+static inline void lr11xx_reset_rx_busy_signals(struct lr11xx_data *data)
+{
+	data->preamble_seen_at_ms = 0;
+	data->header_seen_at_ms = 0;
+}
 
 static lr11xx_radio_lora_bw_t bw_enum_to_lr11xx(enum lora_signal_bandwidth bw)
 {
@@ -362,7 +385,7 @@ static void lr11xx_start_rx(struct lr11xx_data *data,
 	}
 
 	lr11xx_system_clear_irq_status(ctx, LR11XX_SYSTEM_IRQ_ALL_MASK);
-	data->preamble_seen_at_ms = 0;
+	lr11xx_reset_rx_busy_signals(data);
 
 	/* Apply modem config for RX */
 	lr11xx_apply_modem_config(data, cfg, false);
@@ -423,7 +446,7 @@ static void lr11xx_restart_rx(struct lr11xx_data *data)
 	void *ctx = &data->hal_ctx;
 
 	lr11xx_system_clear_irq_status(ctx, LR11XX_SYSTEM_IRQ_ALL_MASK);
-	data->preamble_seen_at_ms = 0;
+	lr11xx_reset_rx_busy_signals(data);
 
 	if (data->rx_duty_cycle_enabled &&
 	    data->dc_rx_ms != 0 && data->dc_sleep_ms != 0) {
@@ -874,7 +897,7 @@ static int lr11xx_lora_send_async(const struct device *dev,
 
 	/* Clear IRQ, enable DIO1 */
 	lr11xx_system_clear_irq_status(ctx, LR11XX_SYSTEM_IRQ_ALL_MASK);
-	data->preamble_seen_at_ms = 0;
+	lr11xx_reset_rx_busy_signals(data);
 	lr11xx_hal_enable_dio1_irq(&data->hal_ctx);
 
 	/* Store signal and start TX.  10 s timeout: worst legal preset
@@ -1063,6 +1086,51 @@ static uint32_t lr11xx_preamble_grace_ms(struct lr11xx_data *data)
 	return (uint32_t)((us + 999U) / 1000U);
 }
 
+/* Upper bound on the payload phase: airtime of a maximum-length (255 byte)
+ * explicit-header packet at the current SF/BW, worst-case coding rate 4/8,
+ * plus margin.  Bounds the lifetime of the SYNC_WORD_HEADER_VALID busy state
+ * in lr11xx_is_receiving().
+ *
+ * Why the header bit needs a deadline at all: it is cleared only by the
+ * terminal DIO1 event's bulk clear or an RX (re)start, and continuous RX
+ * (SetRx 0xFFFFFF) has no symbol timer, so neither is guaranteed to arrive.
+ * A header whose packet never completes would pin the TX gate true forever
+ * and silently mute the node until reboot.  Same reasoning and same formula
+ * as sx126x_max_payload_ms() (patch 0013); Arduino MeshCore added the
+ * equivalent bound for the LR11x0 in 0bd871cd.
+ *
+ * Deliberately generous — this is a stuck-state safety net, and releasing
+ * early would let TX start on top of a packet that is still arriving.  LDRO
+ * (DE) is pinned at 1 because that yields the larger symbol count, i.e. the
+ * safer bound. */
+static uint32_t lr11xx_max_payload_ms(struct lr11xx_data *data)
+{
+	uint8_t sf = (uint8_t)data->modem_cfg.datarate;
+	uint32_t bw_hz = (uint32_t)(bw_enum_to_khz(data->modem_cfg.bandwidth) * 1000.0f);
+
+	if (bw_hz == 0 || sf < 5 || sf > 12) {
+		return 30000;  /* safe default if config is uninitialised */
+	}
+
+	/* Semtech payload-symbol count with PL=255, CRC on, explicit header,
+	 * CR = 4/8 (coded_bits = 8), DE = 1:
+	 *   n = 8 + ceil((8*PL - 4*SF + 28 + 16) / (4*(SF - DE))) * 8
+	 * SF5/SF6 use SF-1 >= 4 so the divisor is always non-zero. */
+	uint32_t numer = 8U * 255U + 28U + 16U;
+	uint32_t denom = 4U * (uint32_t)(sf - 1U);
+
+	if (numer > 4U * (uint32_t)sf) {
+		numer -= 4U * (uint32_t)sf;
+	}
+	uint32_t n_sym = 8U + ((numer + denom - 1U) / denom) * 8U;
+
+	/* n_sym * 2^sf * 1000000 / bw_hz -> us, then +25% and +100 ms margin. */
+	uint64_t us = ((uint64_t)n_sym << sf) * 1000000ULL / bw_hz;
+	uint32_t ms = (uint32_t)((us + 999U) / 1000U);
+
+	return ms + (ms / 4U) + 100U;
+}
+
 bool lr11xx_is_receiving(const struct device *dev)
 {
 	struct lr11xx_data *data = dev->data;
@@ -1087,10 +1155,35 @@ bool lr11xx_is_receiving(const struct device *dev)
 
 	/* Header landed: payload phase in progress.  The bit stays latched
 	 * until the terminal DIO1 event bulk-clears it, so this covers the
-	 * whole packet. */
+	 * whole packet — bounded by a payload deadline, because in continuous
+	 * RX that terminal event is not guaranteed to arrive and a header that
+	 * never completes would otherwise mute TX until reboot. */
 	if (irq & LR11XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID) {
+		uint32_t now = k_uptime_get_32();
+		uint32_t seen = data->header_seen_at_ms;
+
+		if (seen == 0) {
+			data->header_seen_at_ms = (now == 0) ? 1U : now;
+			k_mutex_unlock(&data->spi_mutex);
+			return true;
+		}
+		if ((now - seen) < lr11xx_max_payload_ms(data)) {
+			k_mutex_unlock(&data->spi_mutex);
+			return true;
+		}
+		LOG_WRN("RX header latched %u ms with no packet, releasing TX gate",
+			now - seen);
+		/* Drop the sticky reception bits so the next poll starts clean.
+		 * CMD_ERROR goes with them — the LR1110 sets it whenever ClearIrq
+		 * is called with a mask that excludes it (all FW versions). */
+		lr11xx_system_clear_irq_status(&data->hal_ctx,
+					       LR11XX_SYSTEM_IRQ_PREAMBLE_DETECTED |
+					       LR11XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID |
+					       LR11XX_SYSTEM_IRQ_HEADER_ERROR |
+					       LR11XX_SYSTEM_IRQ_CMD_ERROR);
+		lr11xx_reset_rx_busy_signals(data);
 		k_mutex_unlock(&data->spi_mutex);
-		return true;
+		return false;
 	}
 
 	/* PREAMBLE_DETECTED with SF-aware grace (SX126x-parity).  Within
@@ -1116,13 +1209,13 @@ bool lr11xx_is_receiving(const struct device *dev)
 		lr11xx_system_clear_irq_status(&data->hal_ctx,
 					       LR11XX_SYSTEM_IRQ_PREAMBLE_DETECTED |
 					       LR11XX_SYSTEM_IRQ_CMD_ERROR);
-		data->preamble_seen_at_ms = 0;
+		lr11xx_reset_rx_busy_signals(data);
 		k_mutex_unlock(&data->spi_mutex);
 		return false;
 	}
 
 	/* No preamble, no header: nothing in flight. */
-	data->preamble_seen_at_ms = 0;
+	lr11xx_reset_rx_busy_signals(data);
 	k_mutex_unlock(&data->spi_mutex);
 	return false;
 }
@@ -1282,7 +1375,7 @@ static int lr11xx_do_cad(struct lr11xx_data *data)
 	lr11xx_radio_set_cad_params(ctx, &cad);
 
 	lr11xx_system_clear_irq_status(ctx, LR11XX_SYSTEM_IRQ_ALL_MASK);
-	data->preamble_seen_at_ms = 0;
+	lr11xx_reset_rx_busy_signals(data);
 	data->cad_active = true;
 	lr11xx_radio_set_cad(ctx);
 

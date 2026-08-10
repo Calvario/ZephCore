@@ -749,6 +749,18 @@ int main(void)
 	lora_radio.setCadParams(prefs->cad_auto != 0, prefs->cad_offset,
 				prefs->probe_interval, prefs->cad_busycap);
 
+	/* LR2021 side detectors (multi-SF RX) from prefs.  extra_sf is a
+	 * zero-terminated list; a rejected set (SF/BW changed since it was
+	 * saved) just leaves the feature off, and non-LR2021 radios report it
+	 * unsupported. */
+	{
+		uint8_t n = 0;
+		while (n < EXTRA_SF_MAX && prefs->extra_sf[n] != 0) n++;
+		if (n > 0 && !lora_radio.configSideDetectors(prefs->extra_sf, n)) {
+			LOG_WRN("extra.sf %u SFs rejected for current SF/BW — side detectors off", n);
+		}
+	}
+
 	/* Feed initial UI state from loaded prefs */
 	ui_set_node_name(prefs->node_name);
 	refresh_repeater_ui_radio_state();

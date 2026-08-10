@@ -216,6 +216,9 @@ bool RepeaterDataStore::loadPrefs(NodePrefs& prefs) {
     fs_read(&file, &prefs.probe_interval, sizeof(prefs.probe_interval));
     /* cad_busycap absent in <301-byte files; EOF read keeps default 25 */
     fs_read(&file, &prefs.cad_busycap, sizeof(prefs.cad_busycap));
+    /* LR2021 side-detector SFs, offsets 301-303.  Absent in <304-byte files;
+     * the no-op EOF read leaves the zeroed default = feature off. */
+    fs_read(&file, prefs.extra_sf, sizeof(prefs.extra_sf));
 
     fs_close(&file);
 
@@ -363,6 +366,8 @@ bool RepeaterDataStore::savePrefs(const NodePrefs& prefs) {
     fs_write(&file, &prefs.cad_offset, sizeof(prefs.cad_offset));
     fs_write(&file, &prefs.probe_interval, sizeof(prefs.probe_interval));
     fs_write(&file, &prefs.cad_busycap, sizeof(prefs.cad_busycap));
+    /* LR2021 side-detector SFs (offsets 301-303) */
+    fs_write(&file, prefs.extra_sf, sizeof(prefs.extra_sf));
 
     ret = fs_sync(&file);
     fs_close(&file);

@@ -46,6 +46,27 @@ bool lr20xx_is_receiving(const struct device *dev);
 void lr20xx_set_rx_boost(const struct device *dev, bool enable);
 
 /**
+ * @brief Configure LoRa side detectors (multi-SF receive)
+ *
+ * Programs up to 3 extra spreading factors to be demodulated concurrently
+ * with the configured one, on the same bandwidth.  Applies immediately and
+ * is re-applied on every RX entry (the chip drops the set on each
+ * SetModulationParams, and LBT CAD has to switch it off — the datasheet's
+ * SF constraints for CAD are the inverse of those for RX).
+ *
+ * Datasheet constraints, enforced here: every side SF must be greater than
+ * the configured SF, all SFs distinct, highest - lowest <= 4, and at
+ * BW >= 500 kHz at most 2 side detectors (1 when the main SF is >= 10).
+ *
+ * @param dev LoRa device
+ * @param sfs Array of side spreading factors (5..12)
+ * @param num Number of side detectors, 0..3 (0 disables the feature)
+ * @return 0 on success, -EINVAL if the set violates a chip constraint
+ */
+int lr20xx_configure_side_detectors(const struct device *dev,
+				    const uint8_t *sfs, uint8_t num);
+
+/**
  * @brief Get a random number from the radio hardware RNG
  *
  * @param dev LoRa device

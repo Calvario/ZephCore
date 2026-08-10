@@ -24,7 +24,7 @@ env:
   # Release artifacts are still built and attached, so a manual download and
   # flash works exactly as usual.
   #
-  # 1.16.8: pre-release while ESP32 light sleep is unvalidated on hardware.
+  # 1.17.0: normal release.
   prerelease: "false"
 
 jobs:

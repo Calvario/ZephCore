@@ -46,6 +46,12 @@ public:
     /* Apply RX boosted gain live; returns false when the radio has no
      * RX boost feature (upstream PR #2844 semantics). */
     virtual bool setRxBoostedGain(bool enable) { (void)enable; return false; }
+    /* Configure LR2021 side detectors (multi-SF receive); num = 0 disables.
+     * Returns false when the radio has no side detectors, or when the set
+     * violates a chip constraint — the driver is the validator. */
+    virtual bool configSideDetectors(const uint8_t* sfs, uint8_t num) {
+        (void)sfs; (void)num; return false;
+    }
     /* Repeater-specific — default replies keep companion builds clean.
      * Repeater overrides all four; companions get "not available". */
     virtual void formatNeighborsReply(char* reply)      { strcpy(reply, "not available"); }

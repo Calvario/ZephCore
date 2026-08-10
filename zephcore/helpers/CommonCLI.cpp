@@ -134,6 +134,7 @@ void CommonCLI::loadPrefs(const char* path) {
     ok = ok && prefs_read(&file, &_prefs->cad_offset, sizeof(_prefs->cad_offset));             // 298
     ok = ok && prefs_read(&file, &_prefs->probe_interval, sizeof(_prefs->probe_interval)); // 299
     ok = ok && prefs_read(&file, &_prefs->cad_busycap, sizeof(_prefs->cad_busycap));            // 300
+    ok = ok && prefs_read(&file, _prefs->extra_sf, sizeof(_prefs->extra_sf));                  // 301-303
 
     if (!ok) {
         LOG_WRN("Prefs file %s truncated, some fields use defaults", path);
@@ -265,6 +266,7 @@ void CommonCLI::savePrefs(const char* path) {
     fs_write(&file, &_prefs->cad_offset, sizeof(_prefs->cad_offset));
     fs_write(&file, &_prefs->probe_interval, sizeof(_prefs->probe_interval));
     fs_write(&file, &_prefs->cad_busycap, sizeof(_prefs->cad_busycap));
+    fs_write(&file, _prefs->extra_sf, sizeof(_prefs->extra_sf));
 
     fs_close(&file);
     LOG_INF("Saved prefs to %s", path);
@@ -606,6 +608,17 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
             if (_callbacks->formatCadStatus(reply + n, (int)cap - n) == 0) {
                 strcpy(reply, "not available");
             }
+        } else if (memcmp(config, "extra.sf", 8) == 0) {
+            char* dp = reply;
+            dp += sprintf(dp, "> ");
+            int shown = 0;
+            for (int i = 0; i < EXTRA_SF_MAX && _prefs->extra_sf[i] != 0; i++) {
+                dp += sprintf(dp, "%s%u", shown++ ? "," : "",
+                              (unsigned)_prefs->extra_sf[i]);
+            }
+            if (shown == 0) {
+                strcpy(reply, "> none");
+            }
         } else if (memcmp(config, "meshtimesync", 12) == 0) {
             MeshTimeSync* ts = _callbacks->getMeshTimeSync();
             if (ts == nullptr) {
@@ -761,6 +774,32 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         } else if (memcmp(config, "cad.reset", 9) == 0) {
             _callbacks->resetCadStats();
             strcpy(reply, "OK - CAD probe stats cleared");
+        } else if (memcmp(config, "extra.sf ", 9) == 0) {
+            /* LR2021 side detectors: up to 3 extra SFs received alongside
+             * `sf`.  "0" / "off" clears the set.  The chip-side constraints
+             * (each > sf, distinct, spread <= 4, BW>=500 caps the count) are
+             * enforced in the driver, so an accepted set is a valid one. */
+            char tmp[32];
+            const char* parts[EXTRA_SF_MAX + 1];
+            uint8_t sfs[EXTRA_SF_MAX] = {0};
+            StrHelper::strncpy(tmp, &config[9], sizeof(tmp));
+            int num = mesh::Utils::parseTextParts(tmp, parts, EXTRA_SF_MAX + 1, ' ');
+            if (num == 1 && (strcmp(parts[0], "0") == 0 || strcmp(parts[0], "off") == 0)) {
+                num = 0;
+            }
+            if (num > EXTRA_SF_MAX) {
+                sprintf(reply, "Error: at most %d extra SFs", EXTRA_SF_MAX);
+            } else {
+                for (int i = 0; i < num; i++) sfs[i] = (uint8_t)atoi(parts[i]);
+                if (_callbacks->configSideDetectors(sfs, (uint8_t)num)) {
+                    memset(_prefs->extra_sf, 0, sizeof(_prefs->extra_sf));
+                    for (int i = 0; i < num; i++) _prefs->extra_sf[i] = sfs[i];
+                    savePrefs();
+                    strcpy(reply, num ? "OK - extra SFs set" : "OK - extra SFs cleared");
+                } else {
+                    strcpy(reply, "Error: unsupported or invalid extra SF config");
+                }
+            }
         } else if (memcmp(config, "multi.acks ", 11) == 0) {
             int val = atoi(&config[11]);
             if (val == 0 || val == 1) {

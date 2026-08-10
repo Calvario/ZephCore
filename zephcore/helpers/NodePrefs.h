@@ -52,6 +52,10 @@
 #define LEDS_PREF_ON    0xA0
 #define LEDS_PREF_OFF   0xA1
 
+/* Number of LR2021 side-detector slots stored in prefs.  Matches the chip's
+ * ConfigureSideDetectors limit of 3. */
+#define EXTRA_SF_MAX    3
+
 struct NodePrefs {
 	/* ---- Common fields (both roles) ---- */
 	float airtime_factor;
@@ -107,6 +111,13 @@ struct NodePrefs {
 	                                // one noise-floor sample, and the CAD probe that
 	                                // consumes it (0 = CAD probing off, default 15)
 	uint8_t cad_busycap;            // airtime-protection: max % of TX attempts deferred before backing off detPeak (0 = off, default 25)
+	/* LR2021 side detectors: extra spreading factors received concurrently
+	 * with `sf`, on the same bandwidth.  Zero-terminated list — the first 0
+	 * ends it, so an all-zero array means the feature is off (which is what
+	 * every node upgrading from a build without this field has).  Every
+	 * entry must be greater than `sf`, all distinct, spread <= 4; the
+	 * driver rejects anything else.  Ignored on non-LR2021 radios. */
+	uint8_t extra_sf[EXTRA_SF_MAX];
 
 	/* ---- Companion-only fields ---- */
 	uint8_t manual_add_contacts;

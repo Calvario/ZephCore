@@ -18,6 +18,9 @@ public:
 
 	void begin() override;
 
+	/* LoRa side detectors — LR2021-only multi-SF receive. */
+	bool configSideDetectors(const uint8_t *sfs, uint8_t num) override;
+
 protected:
 	/* Hardware primitives */
 	bool hwConfigure(const struct lora_modem_config &cfg) override;

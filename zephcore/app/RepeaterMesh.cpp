@@ -1205,6 +1205,10 @@ bool RepeaterMesh::setRxBoostedGain(bool enable) {
     return getRadioDriver(_radio).setRxBoost(enable);
 }
 
+bool RepeaterMesh::configSideDetectors(const uint8_t* sfs, uint8_t num) {
+    return getRadioDriver(_radio).configSideDetectors(sfs, num);
+}
+
 void RepeaterMesh::formatNeighborsReply(char* reply) {
     char* dp = reply;
 

@@ -944,6 +944,10 @@ bool RoomServerMesh::setRxBoostedGain(bool enable) {
     return getRadioDriver(_radio).setRxBoost(enable);
 }
 
+bool RoomServerMesh::configSideDetectors(const uint8_t* sfs, uint8_t num) {
+    return getRadioDriver(_radio).configSideDetectors(sfs, num);
+}
+
 /* A room server keeps no neighbour table (it is not a repeater). */
 void RoomServerMesh::formatNeighborsReply(char* reply) {
     strcpy(reply, "not supported");

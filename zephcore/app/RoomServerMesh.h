@@ -203,6 +203,7 @@ public:
     void dumpLogFile() override;
     void setTxPower(int8_t power_dbm) override;
     bool setRxBoostedGain(bool enable) override;
+    bool configSideDetectors(const uint8_t* sfs, uint8_t num) override;
     void formatNeighborsReply(char* reply) override;
     void formatStatsReply(char* reply) override;
     void formatRadioStatsReply(char* reply) override;

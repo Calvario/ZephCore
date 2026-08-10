@@ -807,6 +807,14 @@ void ZephyrDataStore::loadPrefs(NodePrefs &prefs)
 			prefs.adc_multiplier = 0.0f;
 		}
 	}
+
+	/* Offset 163-165: extra_sf (ZephCore extension, LR2021 side detectors).
+	 * Absent in pre-existing files → stays zeroed = feature off.  Values
+	 * are re-validated by the driver when applied, so a corrupt byte here
+	 * costs a rejected config, not a bad radio state. */
+	for (int i = 0; i < EXTRA_SF_MAX && off < len; i++) {
+		prefs.extra_sf[i] = buf[off++];
+	}
 }
 
 void ZephyrDataStore::savePrefs(const NodePrefs &prefs)
@@ -901,7 +909,10 @@ void ZephyrDataStore::savePrefs(const NodePrefs &prefs)
 	 * field existed — battery calibration silently reset every reboot. */
 	memcpy(&buf[off], &prefs.adc_multiplier, sizeof(float));
 	off += 4;
-	/* Total: 163 bytes */
+	/* Offset 163-165: extra_sf (ZephCore extension, LR2021 side detectors) */
+	memcpy(&buf[off], prefs.extra_sf, EXTRA_SF_MAX);
+	off += EXTRA_SF_MAX;
+	/* Total: 166 bytes */
 
 	bool ok = atomicReplaceFile(PREFS_FILE, buf, off);
 	LOG_DBG("savePrefs: wrote %s, ok=%d (%d bytes), name='%.16s'",

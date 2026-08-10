@@ -31,6 +31,20 @@ void LR2021Radio::begin()
 	LoRaRadioBase::begin();
 }
 
+bool LR2021Radio::configSideDetectors(const uint8_t *sfs, uint8_t num)
+{
+	/* The driver validates against the configured SF/BW, so this must run
+	 * after the modem is configured — which it is: the CLI path only
+	 * reaches here on a live radio. */
+	int ret = lr20xx_configure_side_detectors(_dev, sfs, num);
+
+	if (ret < 0) {
+		LOG_WRN("side detector config rejected: %d", ret);
+		return false;
+	}
+	return true;
+}
+
 /* ── Hardware primitives ──────────────────────────────────────────────── */
 
 bool LR2021Radio::hwConfigure(const struct lora_modem_config &cfg)

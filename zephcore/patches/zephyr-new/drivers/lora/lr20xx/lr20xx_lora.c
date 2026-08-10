@@ -36,6 +36,10 @@ LOG_MODULE_REGISTER(lr20xx_lora, CONFIG_LORA_LOG_LEVEL);
 #define LR20XX_DIO1_WQ_STACK_SIZE 2560
 K_THREAD_STACK_DEFINE(lr20xx_dio1_wq_stack, LR20XX_DIO1_WQ_STACK_SIZE);
 
+/* Hardware limit on concurrent LoRa side detectors (ConfigureSideDetectors
+ * takes n in [0:3]). */
+#define LR20XX_MAX_SIDE_DETECTORS 3
+
 /* ── Driver data structures ─────────────────────────────────────────── */
 
 struct lr20xx_config {
@@ -112,6 +116,16 @@ struct lr20xx_data {
 	/* DIO1 stuck-HIGH detection */
 	int dio1_stuck_count;
 	bool tcxo_disabled;   /* set when the TCXO fallback has already fired */
+
+	/* LoRa side detectors — up to 3 extra spreading factors demodulated
+	 * concurrently with the main one, on the same bandwidth.  Stored here
+	 * because the chip forgets them on every SetModulationParams, so they
+	 * have to be re-issued after each apply_modem_config, and because CAD
+	 * has to switch them off (see lr20xx_apply_side_detectors).
+	 * side_det_num == 0 means the feature is off. */
+	uint8_t side_det_sf[LR20XX_MAX_SIDE_DETECTORS];
+	uint8_t side_det_num;
+	bool side_det_applied;   /* currently programmed into the chip */
 
 	/* RX data buffer */
 	uint8_t rx_buf[256];
@@ -485,6 +499,69 @@ static void lr20xx_check_cmd(void *ctx, const char *what)
 #define CHECK_CMD(ctx, what) do { } while (0)
 #endif
 
+/* Program the stored side-detector set into the chip (or clear it).
+ *
+ * The chip drops every side detector on SetModulationParams, so this has to
+ * run after each apply_modem_config and after anything else that reprograms
+ * the modem — the caller owns spi_mutex and must have the chip out of Rx/Tx.
+ *
+ * `enable == false` writes the n=0 form, which is how the datasheet says to
+ * turn the feature off.  That is needed around CAD: the constraints are
+ * directional and mutually exclusive with ours — normal Rx requires the main
+ * SF to be *lower* than every side SF, CAD requires it to be *higher*.  Since
+ * this driver runs LBT CAD before every TX, side detectors are switched off
+ * for the CAD and restored when RX is re-armed.  (Upstream MeshCore hit the
+ * same wall from the other side: RadioLib returned -706 on the startReceive
+ * after a hardware CAD with side detectors enabled.) */
+static void lr20xx_apply_side_detectors(struct lr20xx_data *data, bool enable)
+{
+	void *ctx = &data->hal_ctx;
+	lr20xx_radio_lora_side_detector_cfg_t det[LR20XX_MAX_SIDE_DETECTORS];
+	uint8_t syncwords[LR20XX_MAX_SIDE_DETECTORS];
+	uint8_t n = enable ? data->side_det_num : 0;
+	uint32_t bw_hz;
+
+	if (n == 0) {
+		if (!data->side_det_applied) {
+			return;   /* already off — don't spend an SPI command */
+		}
+		lr20xx_radio_lora_configure_side_detectors(ctx, NULL, 0);
+		data->side_det_applied = false;
+		return;
+	}
+
+	bw_hz = (uint32_t)(bw_enum_to_khz(data->modem_cfg.bandwidth) * 1000.0f);
+
+	for (uint8_t i = 0; i < n; i++) {
+		uint32_t symbol_time_us = bw_hz ?
+			((1U << data->side_det_sf[i]) * 1000000U) / bw_hz : 0;
+
+		det[i].sf = (lr20xx_radio_lora_sf_t)data->side_det_sf[i];
+		/* Same LDRO rule as the main modem config — per side detector,
+		 * since each runs at its own SF and a longer symbol crosses the
+		 * 16.38 ms threshold before the main one does. */
+		det[i].ppm = (symbol_time_us > 16380) ? LR20XX_RADIO_LORA_PPM_1_4
+						      : LR20XX_RADIO_LORA_NO_PPM;
+		det[i].iq = data->modem_cfg.iq_inverted
+				? LR20XX_RADIO_LORA_IQ_INVERTED
+				: LR20XX_RADIO_LORA_IQ_STANDARD;
+		/* One mesh, one sync word: side detectors carry the same
+		 * public/private word as the main detector. */
+		syncwords[i] = data->modem_cfg.public_network ? 0x34 : 0x12;
+	}
+
+	lr20xx_radio_lora_configure_side_detectors(ctx, det, n);
+	CHECK_CMD(ctx, "configure_side_detectors");
+	lr20xx_radio_lora_set_side_detector_syncwords(ctx, syncwords, n);
+	CHECK_CMD(ctx, "set_side_detector_syncwords");
+	data->side_det_applied = true;
+
+	LOG_DBG("side detectors: %u active (SF%u/%u/%u)", n,
+		data->side_det_sf[0],
+		n > 1 ? data->side_det_sf[1] : 0,
+		n > 2 ? data->side_det_sf[2] : 0);
+}
+
 static void lr20xx_apply_modem_config(struct lr20xx_data *data,
 				      const struct lr20xx_config *cfg,
 				      bool tx_mode)
@@ -549,6 +626,8 @@ static void lr20xx_apply_modem_config(struct lr20xx_data *data,
 	LOG_DBG("modem_cfg: set_mod(SF%d BW%d CR%d PPM%d)=%d",
 		mod.sf, mod.bw, mod.cr, mod.ppm, rc);
 	CHECK_CMD(ctx, "set_mod_params");
+	/* SetModulationParams disables every side detector, chip-side. */
+	data->side_det_applied = false;
 
 	/* DCDC workaround removed — LDO mode, RadioLib doesn't do it */
 
@@ -609,6 +688,11 @@ static void lr20xx_apply_modem_config(struct lr20xx_data *data,
 		LR20XX_SYSTEM_IRQ_CMD_ERROR);
 	LOG_DBG("modem_cfg: set_dio_irq=%d", rc);
 	CHECK_CMD(ctx, "set_dio_irq");
+
+	/* Re-arm side detectors for RX; leave them off for the TX path (their
+	 * constraints are RX-directional, and set_mod_params just cleared
+	 * them anyway). */
+	lr20xx_apply_side_detectors(data, !tx_mode);
 
 	DUMP_CHIP_STATE(ctx, &data->hal_ctx, tx_mode ? "modem-TX" : "modem-RX");
 }
@@ -694,6 +778,11 @@ static void lr20xx_restart_rx(struct lr20xx_data *data)
 	void *ctx = &data->hal_ctx;
 
 	lr20xx_system_clear_irq_status(ctx, LR20XX_SYSTEM_IRQ_ALL_MASK);
+
+	/* LBT CAD switches side detectors off (their SF constraint is the
+	 * inverse of the Rx one), so restore them on the way back into RX.
+	 * No-op when none are configured or they are still programmed. */
+	lr20xx_apply_side_detectors(data, true);
 
 	/* TX rewrites payload_len to the length it sent, and in explicit-header
 	 * RX that field is a filter: "accept 1..payload_len, reject anything
@@ -1294,6 +1383,73 @@ bool lr20xx_is_receiving(const struct device *dev)
 		       LR20XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID)) != 0;
 }
 
+int lr20xx_configure_side_detectors(const struct device *dev,
+				    const uint8_t *sfs, uint8_t num)
+{
+	struct lr20xx_data *data = dev->data;
+	const struct lr20xx_config *cfg = dev->config;
+	uint8_t main_sf = (uint8_t)data->modem_cfg.datarate;
+	uint8_t lowest = main_sf, highest = main_sf;
+	uint8_t max_allowed = LR20XX_MAX_SIDE_DETECTORS;
+
+	if (num > LR20XX_MAX_SIDE_DETECTORS) {
+		return -EINVAL;
+	}
+
+	/* Constraints are the datasheet's, via the vendor driver header:
+	 *   - normal Rx: the main SF must be lower than every side SF
+	 *   - all SFs distinct
+	 *   - highest - lowest <= 4 (main SF counts, it is one of the set)
+	 *   - BW >= 500 kHz caps the count at 2, or 1 when main SF >= SF10
+	 * They are checked here rather than at the CLI so the chip limits live
+	 * next to the chip. */
+	if (data->modem_cfg.bandwidth >= BW_500_KHZ) {
+		max_allowed = (main_sf >= 10) ? 1 : 2;
+	}
+	if (num > max_allowed) {
+		return -EINVAL;
+	}
+
+	for (uint8_t i = 0; i < num; i++) {
+		if (sfs[i] < 5 || sfs[i] > 12 || sfs[i] <= main_sf) {
+			return -EINVAL;
+		}
+		for (uint8_t j = 0; j < i; j++) {
+			if (sfs[j] == sfs[i]) {
+				return -EINVAL;
+			}
+		}
+		if (sfs[i] < lowest)  { lowest = sfs[i]; }
+		if (sfs[i] > highest) { highest = sfs[i]; }
+	}
+	if (highest - lowest > 4) {
+		return -EINVAL;
+	}
+
+	k_mutex_lock(&data->spi_mutex, K_FOREVER);
+
+	data->side_det_num = num;
+	for (uint8_t i = 0; i < num; i++) {
+		data->side_det_sf[i] = sfs[i];
+	}
+
+	/* Take effect now.  A full RX restart is the cheapest correct way to
+	 * get there: the command needs the chip out of Rx, and start_rx runs
+	 * apply_modem_config, which re-applies the set on our behalf. */
+	if (data->in_rx_mode && !data->tx_active) {
+		lr20xx_start_rx(data, cfg);
+	} else {
+		/* Not receiving — nothing to reprogram yet, the next RX entry
+		 * picks the stored set up. */
+		data->side_det_applied = false;
+	}
+
+	k_mutex_unlock(&data->spi_mutex);
+
+	LOG_INF("side detectors configured: %u", num);
+	return 0;
+}
+
 void lr20xx_set_rx_boost(const struct device *dev, bool enable)
 {
 	struct lr20xx_data *data = dev->data;
@@ -1428,6 +1584,11 @@ static int lr20xx_do_cad(struct lr20xx_data *data)
 		/* One-shot calibration probe: absolute peak wins over all. */
 		cad.cad_detect_peak = data->cad_probe_peak;
 	}
+
+	/* Side detectors must be off for CAD: normal Rx needs the main SF
+	 * below every side SF, CAD needs it above — the two cannot hold at
+	 * once.  restart_rx puts them back. */
+	lr20xx_apply_side_detectors(data, false);
 
 	lr20xx_radio_lora_configure_cad_params(ctx, &cad);
 	CHECK_CMD(ctx, "configure_cad_params");
