@@ -1,10 +1,10 @@
 /*!
- * @file      lr20xx_driver_version.h
+ * @file      lr20xx_patch_types.h
  *
- * @brief     Placeholder to keep the version of LR20XX driver.
+ * @brief     Patch types driver definition for LR20XX
  *
  * The Clear BSD License
- * Copyright Semtech Corporation 2024. All rights reserved.
+ * Copyright Semtech Corporation 2026. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the disclaimer
@@ -32,12 +32,15 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef LR20XX_DRIVER_VERSION_H
-#define LR20XX_DRIVER_VERSION_H
+#ifndef LR20XX_PATCH_TYPES_H
+#define LR20XX_PATCH_TYPES_H
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#include <stdint.h>
+#include <stdbool.h>
 
 /*
  * -----------------------------------------------------------------------------
@@ -54,32 +57,36 @@ extern "C" {
  * --- PUBLIC CONSTANTS --------------------------------------------------------
  */
 
-/**
- * @brief Value of driver version string
- */
-#define LR20XX_DRIVER_VERSION "v2.0.2"
-
 /*
  * -----------------------------------------------------------------------------
  * --- PUBLIC TYPES ------------------------------------------------------------
  */
+
+/**
+ * @brief PRAM version information
+ *
+ * @ref lr20xx_patch_version_e::is_pram_loaded indicates if a PRAM is loaded.
+ * If @ref lr20xx_patch_version_e::is_pram_loaded is true then lr20xx_patch_version_e::pram_type contains the type of
+ * PRAM, and lr20xx_patch_version_e::pram_version contains the version of the loaded PRAM. If @ref
+ * lr20xx_patch_version_e::is_pram_loaded is false, then value of fields lr20xx_patch_version_e::pram_type and
+ * lr20xx_patch_version_e::pram_version are undefined, and should not be read.
+ */
+typedef struct lr20xx_patch_version_e
+{
+    bool    is_pram_loaded;  //!< True if the PRAM is loaded, false otherwise
+    uint8_t pram_type;       //!< Type of the loaded PRAM, if lr20xx_patch_version_e::is_pram_loaded is true
+    uint8_t pram_version;    //!< Version of the loaded PRAM, if lr20xx_patch_version_e::is_pram_loaded is true
+} lr20xx_patch_version_t;
 
 /*
  * -----------------------------------------------------------------------------
  * --- PUBLIC FUNCTIONS PROTOTYPES ---------------------------------------------
  */
 
-/**
- * @brief Get version of driver as string
- *
- * @return String describing driver version
- */
-const char* lr20xx_driver_version_get_version_string( void );
-
 #ifdef __cplusplus
 }
 #endif
 
-#endif  // LR20XX_DRIVER_VERSION_H
+#endif  // LR20XX_PATCH_TYPES_H
 
 /* --- EOF ------------------------------------------------------------------ */

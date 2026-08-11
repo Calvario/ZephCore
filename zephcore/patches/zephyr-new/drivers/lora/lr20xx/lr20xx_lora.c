@@ -28,6 +28,11 @@
 #include "lr20xx_system_types.h"
 #include "lr20xx_workarounds.h"
 #include "lr20xx_regmem.h"
+#include "lr20xx_patch.h"
+/* Defines the PRAM image itself (pram_lr2021 / pram_lr2021_size).  In C these
+ * are const objects at file scope and therefore have external linkage, so this
+ * header must be included from exactly one translation unit — this one. */
+#include "lr20xx_pram_lr2021.h"
 
 LOG_MODULE_REGISTER(lr20xx_lora, CONFIG_LORA_LOG_LEVEL);
 
@@ -384,6 +389,80 @@ static void lr20xx_get_pa_cfg_for_power(int8_t power_dbm,
 
 static lr20xx_status_t lr20xx_calibrate_front_end(void *ctx, uint32_t freq_hz);
 
+/* ── Firmware Patch RAM (PRAM) ──────────────────────────────────────── */
+
+/* Base address the patch image is written to — DS §22.3.1, and the same value
+ * lr20xx_patch.c uses internally (it does not export it). */
+#define LR20XX_PRAM_BASE_ADDRESS 0x801000
+
+/* Load and activate the firmware Patch RAM.
+ *
+ * DS §22.3: "using the chip without the PRAM can create performance issues and
+ * unexpected bugs. The use of the PRAM is therefore highly recommended", and
+ * §22: "Most of the workarounds are implemented in the Firmware Patch RAM".
+ * Semtech's own driver confirms the relationship — v2.0.2 added PRAM support and
+ * deleted its BLE, RTToF and DC-DC workaround functions in the same release,
+ * because the patch supersedes them.
+ *
+ * The image is volatile: lost on reset and on cold start, preserved by sleep
+ * with retention (§22.3).  Every sleep this driver issues sets retention
+ * (lr20xx_reset_agc), and duty-cycle sleep is retention by definition (§6.3.8),
+ * so the reset paths are the only places it has to be (re)loaded.  Costs 2240
+ * bytes of flash and +80 nA of retention sleep current.
+ *
+ * Best-effort: a chip without the patch still works, so a failure here is a
+ * warning, not a reason to fail init. */
+static void lr20xx_load_pram(struct lr20xx_data *data)
+{
+	void *ctx = &data->hal_ctx;
+	lr20xx_system_version_t chip = { 0 };
+	lr20xx_patch_version_t pram = { 0 };
+	lr20xx_status_t rc;
+
+	/* DS §22.3.1: "There is one dedicated to the LR2021 and another one for
+	 * the LR2012/LR2022.  The GetVersion(...) API indicates which PRAM is
+	 * needed."  Per DS Table 6-40 the LR2021 answers 0x01/0x18; the other two
+	 * answer 0x02/0x00 and want lr20xx_pram_lr20x2.h, which is not vendored
+	 * because this driver only binds to semtech,lr2021.  Read the version
+	 * here rather than taking it from the caller so both reset paths get the
+	 * same check. */
+	if (lr20xx_system_get_version(ctx, &chip) != LR20XX_STATUS_OK) {
+		LOG_WRN("PRAM: get_version failed — skipping patch load");
+		return;
+	}
+	if (chip.major != 0x01 || chip.minor != 0x18) {
+		LOG_WRN("PRAM: chip reports FW %u.%u, not the LR2021's 1.24 — "
+			"no matching patch image vendored, skipping",
+			chip.major, chip.minor);
+		return;
+	}
+
+	rc = lr20xx_patch_load_pram(ctx, LR20XX_PRAM_BASE_ADDRESS, pram_lr2021,
+				    pram_lr2021_size);
+	if (rc != LR20XX_STATUS_OK) {
+		LOG_ERR("PRAM: load failed (rc=%d) — running unpatched", rc);
+		return;
+	}
+
+	rc = lr20xx_patch_enable_pram(ctx);
+	if (rc != LR20XX_STATUS_OK) {
+		LOG_ERR("PRAM: enable failed (rc=%d) — running unpatched", rc);
+		return;
+	}
+
+	/* Reads back the magic word at 0x800FF8 (DS §22.3.2) — the only proof
+	 * the chip actually took the patch, so it is worth the two extra reads
+	 * on a path that runs once per reset. */
+	if (lr20xx_patch_get_version(ctx, &pram) != LR20XX_STATUS_OK ||
+	    !pram.is_pram_loaded) {
+		LOG_ERR("PRAM: magic word absent after load — running unpatched");
+		return;
+	}
+
+	LOG_INF("PRAM loaded: type=0x%02x version=0x%02x (%u words)",
+		pram.pram_type, pram.pram_version, pram_lr2021_size);
+}
+
 /* ── Hardware reset (BUSY stuck recovery) ───────────────────────────── */
 
 static void lr20xx_hardware_reset(struct lr20xx_data *data,
@@ -395,7 +474,15 @@ static void lr20xx_hardware_reset(struct lr20xx_data *data,
 
 	lr20xx_hal_reset(ctx);
 
-	/* SIMO workaround skipped — LDO mode (see DS §22.6) */
+	/* The reset wiped the patch — DS §22.3: "The PRAM is lost after a reset
+	 * or a cold start", and §22.3.1 requires it be reloaded "after a reset,
+	 * as part of the reset sequence". */
+	lr20xx_load_pram(data);
+
+	/* SIMO workaround skipped — LDO mode.  (The citation here used to be
+	 * "DS §22.6"; rev 2.1 has no such section — §22 ends at 22.3.  The
+	 * conclusion still holds via Table 6-26: simo_usage 0x00 SIMO_OFF is the
+	 * reset default and we never issue SetRegMode.) */
 
 	if (cfg->tcxo_voltage_mv > 0) {
 		/* Timeout in RTC ticks (30.52 µs/tick) */
@@ -1991,6 +2078,13 @@ static int lr20xx_hw_init(struct lr20xx_data *data,
 		LOG_WRN("Unexpected LR2021 FW %u.%u (datasheet documents 1.24)",
 			ver.major, ver.minor);
 	}
+
+	/* Patch the firmware before anything is configured or calibrated — DS
+	 * §22.3.1: load "after a reset, as part of the reset sequence".  The
+	 * TCXO→XTAL fallback below re-enters this function, which resets the chip
+	 * again and so reaches this point again; that is required, since the
+	 * reset drops the patch. */
+	lr20xx_load_pram(data);
 
 	DUMP_CHIP_STATE(data, "post-reset");
 

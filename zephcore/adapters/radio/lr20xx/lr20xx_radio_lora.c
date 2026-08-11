@@ -47,7 +47,10 @@
  * --- PRIVATE MACROS-----------------------------------------------------------
  */
 
-#define LR20XX_RADIO_LORA_CAD_SIDE_DETECTOR_CONFIGURATION_LENGTH ( 2u )  /* pnr_delta + det_peak */
+/**
+ * @brief Length in byte of one side detector CAD configuration
+ */
+#define LR20XX_RADIO_LORA_CAD_SIDE_DETECTOR_CONFIGURATION_LENGTH ( 2u )
 
 #define LR20XX_RADIO_LORA_SET_SIDE_DETECTOR_CONFIGURE_CAD_CMD_LENGTH ( 2 )
 #define LR20XX_RADIO_LORA_SET_MODULATION_PARAMS_CMD_LENGTH ( 2 + 2 )
@@ -66,8 +69,8 @@
 #define LR20XX_RADIO_LORA_CONFIGURE_SIDE_DETECTOR_CAD_TEMP_LENGTH \
     ( 3 * LR20XX_RADIO_LORA_CAD_SIDE_DETECTOR_CONFIGURATION_LENGTH )
 
-#define LR20XX_RADIO_LORA_GET_RX_STATISTICS_RBUFFER_LENGTH ( 8 )
-#define LR20XX_RADIO_LORA_GET_PACKET_STATUS_RBUFFER_LENGTH ( 6 )
+#define LR20XX_RADIO_LORA_GET_RX_STATISTICS_RBUFFER_LENGTH ( 10 )
+#define LR20XX_RADIO_LORA_GET_PACKET_STATUS_RBUFFER_LENGTH ( 9 )
 
 /*
  * -----------------------------------------------------------------------------
@@ -79,7 +82,9 @@
  * --- PRIVATE TYPES -----------------------------------------------------------
  */
 
-/* LoRa radio command opcodes */
+/*!
+ * @brief Operating codes for radio related operations
+ */
 enum
 {
     LR20XX_RADIO_LORA_SET_SIDE_DETECTOR_CONFIGURE_CAD_OC = 0x021E,
@@ -113,11 +118,34 @@ typedef enum
  * --- PRIVATE FUNCTIONS DECLARATION -------------------------------------------
  */
 
-/* Send SET_LORA_SEARCH_SYMBOLS command with given n_symbols value and format byte */
+/**
+ * @brief Helper function that abstract the call for lr20xx_radio_lora_set_lora_search_symbols_by_number and
+ * lr20xx_radio_lora_set_lora_search_symbols_by_mantissa
+ *
+ * @param[in] context Chip implementation context
+ * @param[in] n_symbols A byte representing the number of symbol. Meaning depends on format
+ * @param[in] format  The format that defines the meaning of n_symbols
+ * @return lr20xx_status_t
+ */
 static lr20xx_status_t abstract_search_symbols( const void* context, uint8_t n_symbols, search_symbol_format_t format );
-/* Read 2 bytes MSB-first from buffer into uint16_t */
+
+/**
+ * @brief Read two bytes from buffer and convert it in 16 bits value MSB first
+ *
+ * @param buffer Pointer to location where to read 2 bytes. It is up to the caller to ensure there are at least two
+ * bytes to read
+ *
+ * @return The MSB first value corresponding to the consecutive bytes read
+ */
 static uint16_t read_2_bytes_msbf( const uint8_t* buffer );
-/* Pack lr20xx_radio_lora_side_detector_cfg_t into a single command byte: sf[7:4] | ppm[3:2] | iq[1:0] */
+
+/**
+ * @brief Compute the byte representation of LoRa side detector configuration
+ *
+ * @param side_detector_cfg The LoRa side detector configuration
+ *
+ * @return uint8_t The byte representing the LoRa side detector configuration
+ */
 static uint8_t radio_lora_side_detector_cfg_to_byte( const lr20xx_radio_lora_side_detector_cfg_t* side_detector_cfg );
 
 /*
@@ -163,17 +191,8 @@ lr20xx_status_t lr20xx_radio_lora_set_modulation_params( const void*            
         ( uint8_t ) ( ( mod_params->cr << 4 ) + mod_params->ppm ),
     };
 
-    const lr20xx_status_t write_status = ( lr20xx_status_t ) lr20xx_hal_write(
-        context, cbuffer, LR20XX_RADIO_LORA_SET_MODULATION_PARAMS_CMD_LENGTH, 0, 0 );
-
-    if( write_status != LR20XX_STATUS_OK )
-    {
-        return write_status;
-    }
-    else
-    {
-        return LR20XX_WORKAROUNDS_CONDITIONAL_APPLY_AUTOMATIC_DCDC_CONFIGURE( context );
-    }
+    return ( lr20xx_status_t ) lr20xx_hal_write( context, cbuffer, LR20XX_RADIO_LORA_SET_MODULATION_PARAMS_CMD_LENGTH,
+                                                 0, 0 );
 }
 
 lr20xx_status_t lr20xx_radio_lora_set_packet_params( const void*                           context,
@@ -324,7 +343,8 @@ lr20xx_status_t lr20xx_radio_lora_get_rx_statistics( const void*                
         statistics->n_received_packets      = read_2_bytes_msbf( rbuffer + 0 );
         statistics->n_crc_errors            = read_2_bytes_msbf( rbuffer + 2 );
         statistics->n_header_errors         = read_2_bytes_msbf( rbuffer + 4 );
-        statistics->n_false_synchronisation = read_2_bytes_msbf( rbuffer + 6 );
+        statistics->n_header_valid          = read_2_bytes_msbf( rbuffer + 6 );
+        statistics->n_false_synchronisation = read_2_bytes_msbf( rbuffer + 8 );
     }
 
     return status;
@@ -355,6 +375,10 @@ lr20xx_status_t lr20xx_radio_lora_get_packet_status( const void*                
         pkt_status->detector                       = ( rbuffer[5] >> 2 ) & 0x0F;
         pkt_status->rssi_pkt_half_dbm_count        = ( rbuffer[5] >> 1 ) & 0x01;
         pkt_status->rssi_signal_pkt_half_dbm_count = ( rbuffer[5] >> 0 ) & 0x01;
+        /* Extract 24-bit signed value and sign-extend to 32 bits */
+        int32_t freq_offset_24 = ( ( rbuffer[6] << 16 ) | ( rbuffer[7] << 8 ) | rbuffer[8] ) & 0x00FFFFFF;
+        /* Sign-extend: shift left 8 bits then arithmetic shift right 8 bits */
+        pkt_status->freq_offset_hz = ( freq_offset_24 << 8 ) >> 8;
     }
 
     return status;
@@ -535,20 +559,24 @@ uint32_t lr20xx_radio_lora_get_time_on_air_in_ms( const lr20xx_radio_lora_pkt_pa
 {
     uint32_t numerator   = 1000U * lr20xx_radio_lora_get_time_on_air_numerator( pkt_p, mod_p );
     uint32_t denominator = lr20xx_radio_lora_get_bw_in_hz( mod_p->bw );
+    // Perform integral ceil()
     return ( numerator + denominator - 1 ) / denominator;
 }
 
 lr20xx_radio_lora_ppm_t lr20xx_radio_lora_get_recommended_ppm_offset( lr20xx_radio_lora_sf_t sf,
                                                                       lr20xx_radio_lora_bw_t bw )
 {
+    // PPM offset is LR20XX_RADIO_LORA_PPM_1_4, except for the cases that follow
     lr20xx_radio_lora_ppm_t ppm_offset = LR20XX_RADIO_LORA_PPM_1_4;
 
     if( ( sf != LR20XX_RADIO_LORA_SF11 ) && ( sf != LR20XX_RADIO_LORA_SF12 ) )
     {
+        // 1. If sf is not SF11 nor SF12: no ppm offset
         ppm_offset = LR20XX_RADIO_LORA_NO_PPM;
     }
     else
     {
+        // 2. Else it depends on the bandwidth
         switch( bw )
         {
         case LR20XX_RADIO_LORA_BW_1000:

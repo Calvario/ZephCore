@@ -67,7 +67,7 @@ extern "C" {
 typedef enum lr20xx_hal_status_e
 {
     LR20XX_HAL_STATUS_OK    = 0,
-    LR20XX_HAL_STATUS_ERROR = 3,  /* Must match lr20xx_status_t ERROR value */
+    LR20XX_HAL_STATUS_ERROR = 3,
 } lr20xx_hal_status_t;
 
 /*

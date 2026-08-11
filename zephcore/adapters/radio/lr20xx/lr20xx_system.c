@@ -78,12 +78,35 @@
 #define LR20XX_SYSTEM_SET_TEMP_COMP_CFG_CMD_LENGTH ( 2 + 1 )
 #define LR20XX_SYSTEM_SET_NTC_PARAMS_CMD_LENGTH ( 2 + 5 )
 
-#define LR20XX_SYSTEM_GET_STATUS_DIRECT_READ_LENGTH ( 6 )  /* stat1 + stat2 + 4-byte IRQ mask */
-#define LR20XX_SYSTEM_VERSION_LENGTH ( 2 )                 /* major + minor */
-#define LR20XX_SYSTEM_ERRORS_LENGTH ( 2 )                  /* 16-bit error bitmask */
-#define LR20XX_SYSTEM_RANDOM_NUMBER_LENGTH ( 4 )           /* 32-bit random number */
-#define LR20XX_SYSTEM_MEASURE_LENGTH ( 2 )                 /* vbat / temp measurement */
-#define LR20XX_SYSTEM_INTERRUPTS_LENGTH ( 4 )              /* 32-bit IRQ mask */
+/*!
+ * @brief Length in byte of the status returned by the transceiver
+ */
+#define LR20XX_SYSTEM_GET_STATUS_DIRECT_READ_LENGTH ( 6 )
+
+/*!
+ * @brief Length in byte of the version returned by the transceiver
+ */
+#define LR20XX_SYSTEM_VERSION_LENGTH ( 2 )
+
+/*!
+ * @brief Length in byte of the error list returned by the transceiver
+ */
+#define LR20XX_SYSTEM_ERRORS_LENGTH ( 2 )
+
+/*!
+ * @brief Length in byte of the random number returned by the transceiver
+ */
+#define LR20XX_SYSTEM_RANDOM_NUMBER_LENGTH ( 4 )
+
+/*!
+ * @brief Length in byte of the measure (temperature or voltage) returned by the transceiver
+ */
+#define LR20XX_SYSTEM_MEASURE_LENGTH ( 2 )
+
+/*!
+ * @brief Length in byte of the interrupt flags returned by the transceiver
+ */
+#define LR20XX_SYSTEM_INTERRUPTS_LENGTH ( 4 )
 
 static const lr20xx_system_dio_t dio_list[] = {
     LR20XX_SYSTEM_DIO_5, LR20XX_SYSTEM_DIO_6,  LR20XX_SYSTEM_DIO_7,  LR20XX_SYSTEM_DIO_8,
@@ -95,7 +118,9 @@ static const lr20xx_system_dio_t dio_list[] = {
  * --- PRIVATE TYPES -----------------------------------------------------------
  */
 
-/* System command opcodes */
+/*!
+ * @brief Operating codes for system related operations
+ */
 enum
 {
     LR20XX_SYSTEM_GET_STATUS_OC                    = 0x0100,
@@ -135,9 +160,24 @@ enum
  * --- PRIVATE FUNCTIONS DECLARATION -------------------------------------------
  */
 
-/* Parse stat1 byte into stat1 struct; no-op if stat1 is NULL */
+/*!
+ * @brief Fill stat1 structure with data from stat1_byte
+ *
+ * @remark If \p stat1 is NULL, the function does not perform any operation
+ *
+ * @param [in]  stat1_byte stat1 byte
+ * @param [out] stat1      stat1 structure
+ */
 static void lr20xx_system_convert_stat1_byte_to_enum( uint8_t stat1_byte, lr20xx_system_stat1_t* stat1 );
-/* Parse stat2 byte into stat2 struct; no-op if stat2 is NULL */
+
+/*!
+ * @brief Fill stat2 structure with data from stat2_byte
+ *
+ * @remark If \p stat2 is NULL, the function does not perform any operation
+ *
+ * @param [in]  stat2_byte stat2 byte
+ * @param [out] stat2      stat2 structure
+ */
 static void lr20xx_system_convert_stat2_byte_to_enum( uint8_t stat2_byte, lr20xx_system_stat2_t* stat2 );
 
 /*
@@ -428,7 +468,7 @@ lr20xx_status_t lr20xx_system_get_temp( const void* context, lr20xx_system_value
 
     if( status == LR20XX_STATUS_OK )
     {
-        *temp = ( uint16_t ) ( ( ( ( uint16_t ) rbuffer[0] << 8 ) + ( uint16_t ) rbuffer[1] ) >> 3 );  /* 3 LSBs are status bits, not measurement data */
+        *temp = ( uint16_t ) ( ( ( ( uint16_t ) rbuffer[0] << 8 ) + ( uint16_t ) rbuffer[1] ) >> 3 );
     }
 
     return status;
@@ -464,8 +504,8 @@ lr20xx_status_t lr20xx_system_set_sleep_mode( const void* context, const lr20xx_
     const uint8_t cbuffer[LR20XX_SYSTEM_SET_SLEEP_MODE_CMD_LENGTH] = {
         ( uint8_t ) ( LR20XX_SYSTEM_SET_SLEEP_MODE_OC >> 8 ),
         ( uint8_t ) ( LR20XX_SYSTEM_SET_SLEEP_MODE_OC >> 0 ),
-        ( uint8_t ) ( ( ( sleep_cfg->is_ram_retention_enabled == true ) ? 0x02 : 0x00 ) +  /* bit[1]: RAM retention */
-                      ( ( sleep_cfg->is_clk_32k_enabled == true ) ? 0x01 : 0x00 ) ),       /* bit[0]: 32kHz clock */
+        ( uint8_t ) ( ( ( sleep_cfg->is_ram_retention_enabled == true ) ? 0x02 : 0x00 ) +
+                      ( ( sleep_cfg->is_clk_32k_enabled == true ) ? 0x01 : 0x00 ) ),
         ( uint8_t ) ( sleep_time >> 24 ),
         ( uint8_t ) ( sleep_time >> 16 ),
         ( uint8_t ) ( sleep_time >> 8 ),

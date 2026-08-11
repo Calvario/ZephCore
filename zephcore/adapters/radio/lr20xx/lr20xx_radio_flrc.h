@@ -68,39 +68,124 @@ extern "C" {
  * --- PUBLIC FUNCTIONS PROTOTYPES ---------------------------------------------
  */
 
-/*
- * Set FLRC modulation params. Not available on LR2022.
- * Applies lr20xx_workarounds_dcdc_configure automatically unless LR20XX_WORKAROUNDS_DISABLE_AUTOMATIC_DCDC_CONFIGURE.
+/**
+ * @brief Set the modulation parameters for FLRC packets
+ *
+ * @note This command is not available to LR2022
+ *
+ * @param[in] context Chip implementation context
+ * @param[in] params Structure of FLRC modulation configuration
+ *
+ * @return lr20xx_status_t Operation status
  */
 lr20xx_status_t lr20xx_radio_flrc_set_modulation_params( const void*                           context,
                                                          const lr20xx_radio_flrc_mod_params_t* params );
 
-/* Set FLRC packet params. Not available on LR2022. */
+/**
+ * @brief Set the packet parameters for FLRC packets
+ *
+ * @note This command is not available to LR2022
+ *
+ * @param[in] context Chip implementation context
+ * @param[in] params Structure of FLRC packet configuration
+ *
+ * @return lr20xx_status_t Operation status
+ */
 lr20xx_status_t lr20xx_radio_flrc_set_pkt_params( const void* context, const lr20xx_radio_flrc_pkt_params_t* params );
 
-/*
- * Get FLRC Rx statistics. Not available on LR2022.
- * Stats reset on POR, retention-less sleep, or lr20xx_radio_common_reset_rx_stats.
+/**
+ * @brief Get the internal statistics of received FLRC packets
+ *
+ * The internal statistics are reset on:
+ *   - Power On Reset (POR)
+ *   - sleep without memory retention
+ *   - call to lr20xx_radio_common_reset_rx_stats
+ *
+ * @note This command is not available to LR2022
+ *
+ * @param[in] context Chip implementation context
+ * @param[out] statistics FLRC received packet statistics
+ *
+ * @return lr20xx_status_t Operation status
+ *
+ * @see lr20xx_radio_common_reset_rx_stats
  */
 lr20xx_status_t lr20xx_radio_flrc_get_rx_stats( const void* context, lr20xx_radio_flrc_rx_stats_t* statistics );
 
-/*
- * Get status of last FLRC received packet. Not available on LR2022.
- * rssi_sync/syncword_index available from SYNC_WORD_HEADER_VALID IRQ.
- * rssi_avg available from RX_DONE IRQ.
+/**
+ * @brief Get the status of the last FLRC received packet
+ *
+ * Availability of the packet status fields depend on the IRQ as follows:
+ * - Available from LR20XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID:
+ *     - lr20xx_radio_flrc_pkt_status_t.rssi_sync_in_dbm
+ *     - lr20xx_radio_flrc_pkt_status_t.rssi_sync_half_dbm_count
+ *     - lr20xx_radio_flrc_pkt_status_t.syncword_index
+ * - Available from LR20XX_SYSTEM_IRQ_RX_DONE:
+ *     - lr20xx_radio_flrc_pkt_status_t.rssi_avg_in_dbm
+ *     - lr20xx_radio_flrc_pkt_status_t.rssi_avg_half_dbm_count
+ *
+ * @note This command is not available to LR2022
+ *
+ * @param[in] context Chip implementation context
+ * @param[out] pkt_status FLRC packet status structure
+ *
+ * @return lr20xx_status_t Operation status
  */
 lr20xx_status_t lr20xx_radio_flrc_get_pkt_status( const void* context, lr20xx_radio_flrc_pkt_status_t* pkt_status );
 
-/* Set 2-byte short syncword at syncword_index. Not available on LR2022. */
+/**
+ * @brief Set a short syncword for FLRC packet
+ *
+ * A short syncword is a 2-bytes long syncword.
+ *
+ * Status is available only after the end of a packet reception.
+ *
+ * @note This command is not available to LR2022
+ *
+ * @param[in] context Chip implementation context
+ * @param[in] syncword_index Syncword index to be configured
+ * @param[in] short_syncword Syncword value to be configured. It is up to the caller to ensure @p short_syncword is at
+ * least @ref LR20XX_RADIO_FLRC_SHORT_SYNCWORD_LENGTH bytes long
+ *
+ * @return lr20xx_status_t Operation status
+ *
+ * @see lr20xx_radio_flrc_set_syncword
+ */
 lr20xx_status_t lr20xx_radio_flrc_set_short_syncword(
     const void* context, uint8_t syncword_index,
     const uint8_t short_syncword[LR20XX_RADIO_FLRC_SHORT_SYNCWORD_LENGTH] );
 
-/* Set 4-byte syncword at syncword_index. Not available on LR2022. */
+/**
+ * @brief Set the syncword for FLRC packet
+ *
+ * Status is available only after the end of a packet reception.
+ *
+ * @note This command is not available to LR2022
+ *
+ * @param[in] context Chip implementation context
+ * @param[in] syncword_index Syncword index to be configured
+ * @param[in] syncword Syncword value to be configured. It is up to the caller to ensure @p short_syncword is at least
+ * @ref LR20XX_RADIO_FLRC_SYNCWORD_LENGTH bytes long
+ *
+ * @return lr20xx_status_t Operation status
+ *
+ * @see lr20xx_radio_flrc_set_short_syncword
+ */
 lr20xx_status_t lr20xx_radio_flrc_set_syncword( const void* context, uint8_t syncword_index,
                                                 const uint8_t syncword[LR20XX_RADIO_FLRC_SYNCWORD_LENGTH] );
 
-/* Compute FLRC time-on-air in microseconds. Not available on LR2022. */
+/**
+ * @brief Helper function to get the time-on-air of FLRC packet, in microseconds
+ *
+ * @note This command is not available to LR2022
+ *
+ * @param pkt_params The packet parameter configuration
+ * @param mod_params The modulation parameter configuration
+ *
+ * @return Time-on-air of the packet in microsecond
+ *
+ * @see lr20xx_radio_flrc_set_modulation_params, lr20xx_radio_flrc_set_pkt_params
+ */
 uint32_t lr20xx_get_flrc_time_on_air_in_us( const lr20xx_radio_flrc_pkt_params_t* pkt_params,
                                             const lr20xx_radio_flrc_mod_params_t* mod_params );
 

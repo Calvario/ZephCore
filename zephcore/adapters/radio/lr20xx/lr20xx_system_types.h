@@ -127,7 +127,7 @@ typedef struct lr20xx_system_version_s
 } lr20xx_system_version_t;
 
 /**
- * @brief Sleep mode configuration
+ * @brief Version structure definition
  */
 typedef struct lr20xx_system_sleep_cfg_s
 {
@@ -345,8 +345,9 @@ typedef enum
  */
 typedef enum lr20xx_system_reg_mode_e
 {
-    LR20XX_SYSTEM_REG_MODE_LDO  = 0x00,  //!< (Default) Only use the Low-Dropout Regulator
-    LR20XX_SYSTEM_REG_MODE_DCDC = 0x02,  //!< Switch on the DC-to-DC regulator in applicable chip modes
+    LR20XX_SYSTEM_REG_MODE_LDO = 0x00,  //!< (Default) Only use the Low-Dropout Regulator
+    LR20XX_SYSTEM_REG_MODE_DCDC =
+        0x02,  //!< Switch on the DC-to-DC regulator in applicable chip modes (a.k.a. SIMO converter)
 } lr20xx_system_reg_mode_t;
 
 /**
@@ -394,7 +395,12 @@ typedef enum lr20xx_system_temp_src_e
     LR20XX_SYSTEM_TEMP_SRC_NTC  = 0x02,
 } lr20xx_system_temp_src_t;
 
-/** @brief Entropy source selection for random number generator (default: PLL | ADC) */
+/**
+ * @brief Select the entropy source to enable for random number generator
+ *
+ * It is advised to enable both PLL and ADC entropy sources.
+ * By default PLL and ADC are used as entropy sources.
+ */
 typedef enum
 {
     LR20XX_SYSTEM_RANDOM_ENTROPY_SOURCE_PLL = 0x01,  //!< PLL is used as entropy source. The chip automatically goes to
@@ -403,7 +409,11 @@ typedef enum
                                                      //!< FS mode when needed, and goes back to original mode afterward.
 } lr20xx_system_random_entropy_source_t;
 
-/** @brief Bitmask of lr20xx_system_random_entropy_source_t values */
+/**
+ * @brief Bit mask of entropy source to enable.
+ *
+ * The values are from @ref lr20xx_system_random_entropy_source_t.
+ */
 typedef uint8_t lr20xx_system_random_entropy_source_bitmask_t;
 
 /**

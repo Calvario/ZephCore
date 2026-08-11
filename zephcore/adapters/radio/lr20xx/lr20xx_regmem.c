@@ -37,6 +37,7 @@
  * --- DEPENDENCIES ------------------------------------------------------------
  */
 
+#include <stdbool.h>
 #include "lr20xx_regmem.h"
 #include "lr20xx_hal.h"
 
@@ -54,7 +55,6 @@
 #define LR20XX_REGMEM_WRITE_REGMEM32_MASK_CMD_LENGTH ( 2 + 3 + 4 + 4 )
 #define LR20XX_REGMEM_READ_REGMEM32_CMD_LENGTH ( 2 + 3 + 1 )
 
-/* 32 words × 4 bytes = 128 bytes max payload; 256 provides headroom */
 #define LR20XX_REGMEM_BUFFER_SIZE_MAX ( 256 )
 
 /*
@@ -82,24 +82,65 @@ enum
  * --- PRIVATE FUNCTIONS DECLARATION -------------------------------------------
  */
 
-/* @warning caller must ensure cbuffer is sized for opcode + 3-byte address */
+/*!
+ * @brief Helper function that fill both cbuffer with opcode and memory address
+ *
+ * It is typically used in read/write regmem32 functions.
+ *
+ * @warning It is up to the caller to ensure cbuffer is big enough to contain opcode and address!
+ */
 static void lr20xx_regmem_fill_cbuffer_opcode_address( uint8_t* cbuffer, uint16_t opcode, uint32_t address );
 
-/* @warning caller must ensure cbuffer is sized for opcode + 3-byte address + length byte */
+/*!
+ * @brief Helper function that fill both cbuffer with opcode memory address, and data length to read
+ *
+ * It is typically used in read functions.
+ *
+ * @warning It is up to the caller to ensure cbuffer is big enough to contain opcode and address!
+ */
 static void lr20xx_regmem_fill_cbuffer_opcode_address_length( uint8_t* cbuffer, uint16_t opcode, uint32_t address,
                                                               uint8_t length );
 
-/* @warning caller must ensure cdata is sized for data_length × 4 bytes */
+/*!
+ * @brief Helper function that fill both cbuffer with data
+ *
+ * It is typically used in write write regmem32 functions.
+ *
+ * @warning It is up to the caller to ensure cdata is big enough to contain all data!
+ */
 static void lr20xx_regmem_fill_cdata( uint8_t* cdata, const uint32_t* data, uint8_t data_length );
 
-/* @warning caller must ensure cbuffer and cdata are appropriately sized */
+/*!
+ * @brief Helper function that fill both cbuffer and cdata buffers with opcode, memory address and data
+ *
+ * It is typically used to factorize and write regmem32 operations. Behind the scene it calls the other helpers
+ * lr20xx_regmem_fill_cbuffer_opcode_address and lr20xx_regmem_fill_cdata.
+ *
+ * @warning It is up to the caller to ensure cbuffer and cdata are big enough to contain their respective information!
+ */
 static void lr20xx_regmem_fill_cbuffer_cdata_opcode_address_data( uint8_t* cbuffer, uint8_t* cdata, uint16_t opcode,
                                                                   uint32_t address, const uint32_t* data,
                                                                   uint8_t data_length );
 
-/* @warning caller must ensure raw_buffer is at least out_buffer_length × 4 bytes */
+/*!
+ * @brief Helper function that convert an array of uint8_t into an array of uint32_t
+ *
+ * Typically used in the read function returning uint32_t array.
+ *
+ * @warning It is up to the caller to ensure the raw_buffer is of length at least "out_buffer_length *
+ * sizeof(uint32_t)"!
+ */
 static void lr20xx_regmem_fill_out_buffer_from_raw_buffer( uint32_t* out_buffer, const uint8_t* raw_buffer,
                                                            uint8_t out_buffer_length );
+
+/**
+ * @brief Check buffer length is appropriate for read/write regmem32 operations
+ *
+ * @param buffer_length The buffer length
+ * @return true The buffer length is correct for the operation
+ * @return false The buffer length is incorrect and the operation should not be executed
+ */
+static inline bool lr20xx_regmem_buffer_length_is_correct( uint8_t buffer_length );
 
 /*
  * -----------------------------------------------------------------------------
@@ -112,7 +153,7 @@ lr20xx_status_t lr20xx_regmem_write_regmem32( const void* context, const uint32_
     uint8_t cbuffer[LR20XX_REGMEM_WRITE_REGMEM32_CMD_LENGTH];
     uint8_t cdata[LR20XX_REGMEM_BUFFER_SIZE_MAX];
 
-    if( length > LR20XX_REGMEM_MAX_WRITE_READ_WORDS )
+    if( !lr20xx_regmem_buffer_length_is_correct( length ) )
     {
         return LR20XX_STATUS_ERROR;
     }
@@ -149,7 +190,7 @@ lr20xx_status_t lr20xx_regmem_read_regmem32( const void* context, const uint32_t
 {
     uint8_t cbuffer[LR20XX_REGMEM_READ_REGMEM32_CMD_LENGTH];
 
-    if( length > LR20XX_REGMEM_MAX_WRITE_READ_WORDS )
+    if( !lr20xx_regmem_buffer_length_is_correct( length ) )
     {
         return LR20XX_STATUS_ERROR;
     }
@@ -221,6 +262,11 @@ void lr20xx_regmem_fill_out_buffer_from_raw_buffer( uint32_t* out_buffer, const 
                                 ( ( uint32_t ) raw_buffer_local[1] << 16 ) + ( ( uint32_t ) raw_buffer_local[2] << 8 ) +
                                 ( ( uint32_t ) raw_buffer_local[3] << 0 );
     }
+}
+
+bool lr20xx_regmem_buffer_length_is_correct( uint8_t buffer_length )
+{
+    return buffer_length <= LR20XX_REGMEM_MAX_WRITE_READ_WORDS;
 }
 
 /* --- EOF ------------------------------------------------------------------ */

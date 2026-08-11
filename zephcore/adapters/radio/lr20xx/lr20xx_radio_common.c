@@ -49,13 +49,21 @@
  * --- PRIVATE MACROS-----------------------------------------------------------
  */
 
-/* LR2021 internal RTC: 32.768kHz (datasheet §5.3) */
+/**
+ * @brief Internal RTC frequency
+ */
 #define LR20XX_RTC_FREQ_IN_HZ ( 32768UL )
 
-/* Front-end calibration granularity: 4MHz steps (LR2021 datasheet §5.5.1) */
+/*!
+ * @brief Frequency step in Hz used to compute the front end calibration parameter
+ *
+ * @see lr20xx_radio_common_calibrate_front_end_helper
+ */
 #define LR20XX_RADIO_COMMON_FRONT_END_CALIBRATION_STEP_IN_HZ ( 4000000u )
 
-/* LR2021 register: LQI (Link Quality Indicator) — Semtech SWDR001 register map */
+/**
+ * Register address holding the LQI value
+ */
 #define LR20XX_RADIO_COMMON_REGISTER_LQI ( 0xF30C38 )
 
 /*
@@ -145,13 +153,27 @@ enum
  * --- PRIVATE FUNCTIONS DECLARATION -------------------------------------------
  */
 
-/* Serialize one RSSI calibration gain item; returns pointer past written data.
- * Caller ensures array has sufficient space. */
+/*!
+ * @brief Serialize an RSSI calibration item into an array
+ *
+ * @param array Pointer to the array to write to. It is up to the caller to ensure the array is long enough to store the
+ * serialized item
+ * @param rssi_calibration_item Pointer to the RSSI calibration item to serialize. It is up to the caller to ensure it
+ * points to an actual item.
+ * @return uint8_t* Pointer to the next memory slot to write
+ */
 uint8_t* lr20xx_radio_common_serialize_rssi_calibration_item(
     uint8_t* array, const lr20xx_radio_common_rssi_calibration_gain_item_t* rssi_calibration_item );
 
-/* Serialize a full RSSI calibration gain table; no-op if rssi_calibration_table is NULL.
- * Returns pointer past written data. */
+/**
+ * @brief Serialize an RSSI calibration table into an array
+ *
+ * @param array Pointer to the array to write to. It is up to the caller to ensure the array is long enough to store the
+ * serialized table
+ * @param rssi_calibration_table Pointer to the calibration table to serialize. Can be NULL, in which case nothing is
+ * written to the array
+ * @return uint8_t* Pointer to the next memory slot to write
+ */
 uint8_t* lr20xx_radio_common_serialize_rssi_calibration_table(
     uint8_t* array, const lr20xx_radio_common_rssi_calibration_gain_table_t* rssi_calibration_table );
 
@@ -237,17 +259,7 @@ lr20xx_status_t lr20xx_radio_common_set_rx_path( const void* context, lr20xx_rad
         ( uint8_t ) boost_mode,
     };
 
-    const lr20xx_status_t write_status =
-        ( lr20xx_status_t ) lr20xx_hal_write( context, cbuffer, LR20XX_RADIO_COMMON_SET_RX_PATH_CMD_LENGTH, 0, 0 );
-
-    if( write_status != LR20XX_STATUS_OK )
-    {
-        return write_status;
-    }
-    else
-    {
-        return LR20XX_WORKAROUNDS_CONDITIONAL_APPLY_AUTOMATIC_DCDC_CONFIGURE( context );
-    }
+    return ( lr20xx_status_t ) lr20xx_hal_write( context, cbuffer, LR20XX_RADIO_COMMON_SET_RX_PATH_CMD_LENGTH, 0, 0 );
 }
 
 lr20xx_status_t lr20xx_radio_common_set_pa_cfg( const void* context, const lr20xx_radio_common_pa_cfg_t* pa_cfg )
@@ -330,17 +342,7 @@ lr20xx_status_t lr20xx_radio_common_set_pkt_type( const void* context, lr20xx_ra
         ( uint8_t ) pkt_type,
     };
 
-    const lr20xx_status_t write_status =
-        ( lr20xx_status_t ) lr20xx_hal_write( context, cbuffer, LR20XX_RADIO_COMMON_SET_PKT_TYPE_CMD_LENGTH, 0, 0 );
-
-    if( write_status != LR20XX_STATUS_OK )
-    {
-        return write_status;
-    }
-    else
-    {
-        return LR20XX_WORKAROUNDS_CONDITIONAL_APPLY_AUTOMATIC_DCDC_RESET( context );
-    }
+    return ( lr20xx_status_t ) lr20xx_hal_write( context, cbuffer, LR20XX_RADIO_COMMON_SET_PKT_TYPE_CMD_LENGTH, 0, 0 );
 }
 
 lr20xx_status_t lr20xx_radio_common_get_pkt_type( const void* context, lr20xx_radio_common_pkt_type_t* pkt_type )
