@@ -110,6 +110,25 @@ bool ZephyrDataStore::mount()
 		 * on /ext.  Without this the store silently falls back to internal /lfs,
 		 * and the next boot that does mount /ext runs a needless contact
 		 * migration — the "Migrating contacts to external storage" churn. */
+#if DT_NODE_HAS_PROP(DT_COMPAT_GET_ANY_STATUS_OKAY(nordic_qspi_nor), zephyr_deferred_init)
+		/* The flash is deferred-init: probing it at boot raced its own
+		 * power rail and the JEDEC read came back 00 00 00, so the
+		 * driver failed and /ext could never mount. Initialising it here
+		 * instead means the part has had until first use to wake up —
+		 * over a second — rather than us guessing a settling delay. */
+		{
+			const struct device *qspi_dev =
+				DEVICE_DT_GET(DT_COMPAT_GET_ANY_STATUS_OKAY(nordic_qspi_nor));
+
+			if (!device_is_ready(qspi_dev)) {
+				int drc = device_init(qspi_dev);
+
+				LOG_INF("QSPI flash deferred init: rc=%d ready=%d",
+					drc, (int)device_is_ready(qspi_dev));
+			}
+		}
+#endif
+
 		FS_FSTAB_DECLARE_ENTRY(DT_NODELABEL(qspi_lfs));
 		int rc = fs_mount(&FS_FSTAB_ENTRY(DT_NODELABEL(qspi_lfs)));
 		if (is_mounted(extMountPoint())) {

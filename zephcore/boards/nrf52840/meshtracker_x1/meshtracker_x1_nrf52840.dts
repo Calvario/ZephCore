@@ -113,7 +113,13 @@
 		regulator-name = "flash-power";
 		enable-gpios = <&gpio0 15 GPIO_ACTIVE_HIGH>;
 		regulator-boot-on;
-		startup-delay-us = <10000>;
+		/* Documents the part's requirement, but do not rely on it:
+		 * regulator_fixed_init() drives the enable GPIO active and then
+		 * passes is_enabled=true into regulator_common_init(), which
+		 * takes the refcount-only branch — regulator_delay() sits on the
+		 * other one and never runs. The flash gets its settling time
+		 * from deferred init instead (see the qspi_flash node). */
+		startup-delay-us = <100000>;
 	};
 
 	/* P1.06 — gates the battery ADC divider, enabled on demand */
@@ -328,6 +334,14 @@
 	qspi_flash: qspi_flash@0 {
 		compatible = "nordic,qspi-nor";
 		reg = <0>;
+		/* Do not probe this at boot. The rail is switched on by
+		 * flash-power a few init priorities earlier, and the part is not
+		 * driving the bus yet when the driver's JEDEC read goes out —
+		 * it answers 00 00 00 at 0.4 s and a correct c8 40 17 by 5.9 s
+		 * on the very same boot. A fixed settling delay would only be a
+		 * guess at where in between it wakes; instead the driver is
+		 * initialised on demand, when the store first mounts /ext. */
+		zephyr,deferred-init;
 		writeoc = "pp4io";
 		readoc = "read4io";
 		sck-frequency = <16000000>;

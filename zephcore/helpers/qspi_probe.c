@@ -24,6 +24,7 @@
 #include <zephyr/init.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/regulator.h>
 #include <zephyr/logging/log.h>
 
 #if IS_ENABLED(CONFIG_ZEPHCORE_QSPI_RDID_PROBE) && \
@@ -80,6 +81,23 @@ static int qspi_rdid_probe(void)
 		"SCK=P0.%02d CSN=P0.%02d IO0=P0.%02d IO1=P0.%02d",
 		flash->name, (int)flash->state->init_res,
 		P_SCK, P_CSN, P_IO0, P_IO1);
+
+#if DT_NODE_EXISTS(DT_NODELABEL(flash_power))
+	/* The driver reading 00 00 00 says the part was not driving the bus,
+	 * which is either "the rail never came up" or "it came up too late".
+	 * Those need opposite fixes, and the supply state here separates them:
+	 * enabled now but the JEDEC read failed means the rail is fine and the
+	 * startup delay is short. */
+	{
+		const struct device *supply =
+			DEVICE_DT_GET(DT_NODELABEL(flash_power));
+
+		LOG_INF("flash supply '%s': ready=%d enabled=%d",
+			supply->name, (int)device_is_ready(supply),
+			device_is_ready(supply)
+				? (int)regulator_is_enabled(supply) : -1);
+	}
+#endif
 
 	gpio_pin_configure(p0, P_CSN, GPIO_OUTPUT_HIGH);
 	gpio_pin_configure(p0, P_SCK, GPIO_OUTPUT_LOW);
