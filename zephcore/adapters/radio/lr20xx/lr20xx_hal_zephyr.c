@@ -76,13 +76,27 @@ static lr20xx_hal_status_t wait_on_busy(struct lr20xx_hal_context *ctx)
 static lr20xx_hal_status_t check_device_ready(struct lr20xx_hal_context *ctx)
 {
 	if (!ctx->radio_is_sleeping) {
-		/* In RX duty cycle the chip sleeps between windows on its own, so
-		 * the flag above is false while BUSY is high and the radio is not
-		 * listening. Waiting would just burn the BUSY timeout; wake it the
-		 * same way an explicit sleep is woken. */
-		if (!ctx->auto_sleeps || !gpio_pin_get_dt(&ctx->busy)) {
-			return wait_on_busy(ctx);
-		}
+		/* Always wait — never second-guess a high BUSY.
+		 *
+		 * There used to be an "if a duty cycle is armed and BUSY is high
+		 * the chip must have self-slept, so wake it" short-circuit here.
+		 * It could not tell self-sleep apart from a command still running,
+		 * and BUSY is high for both: CAD holds it for the CAD duration,
+		 * SetTx until the PA has ramped, SetRxDutyCycle and the FE
+		 * calibration for their own spans.  So after every slow command
+		 * the next one skipped the wait and fired an NSS pulse instead —
+		 * a frame with no clock cycles, which the chip reads as a
+		 * malformed command (CMD_PERR, DS Table 6-38) and which latches
+		 * CmdError.  That is the rejection storm and reset loop seen on
+		 * the MeshTracker X1 whenever rxduty was on, and why rxduty off
+		 * always worked.
+		 *
+		 * Waiting costs nothing worth saving: a duty-cycle sleep window is
+		 * bounded by cycle_time - rx_max_time (25 ms at the presets we
+		 * use) and the chip drops BUSY by itself on waking into its RX
+		 * window.  There is no timeout to burn.  The LR11xx driver has
+		 * never had such a branch, for the same reason. */
+		return wait_on_busy(ctx);
 	}
 
 	/* Wake from sleep: the chip leaves Sleep when NSS is held low for 100us

@@ -46,6 +46,18 @@ bool lr20xx_is_receiving(const struct device *dev);
 void lr20xx_set_rx_boost(const struct device *dev, bool enable);
 
 /**
+ * @brief GPIO-only check for "chip is in a duty-cycle sleep window" (no SPI)
+ *
+ * True only while an RX duty cycle is armed and BUSY is high.  Deliberately
+ * not raw BUSY: this chip holds BUSY high during continuous RX too, so a raw
+ * reading would report the radio permanently unavailable.
+ *
+ * @param dev LoRa device
+ * @return true if the host should not issue commands right now
+ */
+bool lr20xx_is_chip_busy(const struct device *dev);
+
+/**
  * @brief Configure LoRa side detectors (multi-SF receive)
  *
  * Programs up to 3 extra spreading factors to be demodulated concurrently

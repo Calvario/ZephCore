@@ -113,6 +113,11 @@ struct lr20xx_data {
 	/* Deferred hardware init */
 	bool hw_initialized;
 
+	/* Chip-side DIO carrying the IRQ line, cached from the devicetree at
+	 * hw init.  Reporting only — so the debug dump can name the pin this
+	 * board actually wired instead of assuming one. */
+	uint8_t irq_dio;
+
 	/* DIO1 stuck-HIGH detection */
 	int dio1_stuck_count;
 	bool tcxo_disabled;   /* set when the TCXO fallback has already fired */
@@ -134,26 +139,43 @@ struct lr20xx_data {
 /* ── Debug: dump full chip state (log builds only) ──────────────────── */
 
 #if IS_ENABLED(CONFIG_LOG)
-static void dump_chip_state(void *ctx, struct lr20xx_hal_context *hal,
-			    const char *label)
+/* One line of chip state.  Takes the whole driver instance: the old signature
+ * took a command context and a HAL context separately, and every one of the
+ * nine call sites passed the same object twice. */
+static void dump_chip_state(struct lr20xx_data *data, const char *label)
 {
+	struct lr20xx_hal_context *hal = &data->hal_ctx;
+	void *ctx = hal;
 	lr20xx_system_stat1_t s1 = {0};
 	lr20xx_system_stat2_t s2 = {0};
 	lr20xx_system_irq_mask_t irq = 0;
 	lr20xx_system_errors_t err = 0;
 
+	/* Sample the pins BEFORE issuing any SPI.  DS §5: "The BUSY pin is
+	 * automatically asserted on the falling edge of the NSS" — read after
+	 * the two commands below and this dump reports its own footprint, not
+	 * the chip's state.  Every BUSY=1 in the X1 bring-up logs came from
+	 * that, and it cost a whole (wrong) conclusion about this chip holding
+	 * BUSY high during Rx.  It does not: "In Rx mode, BUSY goes low as soon
+	 * as the chip is ready to receive data." */
+	int busy = gpio_pin_get_dt(&hal->busy);
+	int dio = gpio_pin_get_dt(&hal->dio1);
+
 	lr20xx_system_get_status(ctx, &s1, &s2, &irq);
 	lr20xx_system_get_errors(ctx, &err);
 
-	int busy = gpio_pin_get_dt(&hal->busy);
-	int dio9 = gpio_pin_get_dt(&hal->dio1);
-
-	LOG_INF("[%s] cmd=%d mode=%d err=0x%04x irq=0x%08x BUSY=%d DIO9=%d",
-		label, s1.command_status, s2.chip_mode, err, irq, busy, dio9);
+	/* Name the DIO the board actually uses.  This was hardcoded "DIO9",
+	 * which is right on promicro_lr2021 and wrong on meshtracker_x1 (DIO8,
+	 * per irq-dio in its DTS and the Seeed block diagram) — a label that is
+	 * correct on one board and silently lying on another is worse than one
+	 * that is obviously generic. */
+	LOG_INF("[%s] cmd=%d mode=%d err=0x%04x irq=0x%08x BUSY=%d DIO%u=%d",
+		label, s1.command_status, s2.chip_mode, err, irq, busy,
+		(unsigned)data->irq_dio, dio);
 }
-#define DUMP_CHIP_STATE(ctx, hal, label) dump_chip_state(ctx, hal, label)
+#define DUMP_CHIP_STATE(data, label) dump_chip_state(data, label)
 #else
-#define DUMP_CHIP_STATE(ctx, hal, label) do { } while (0)
+#define DUMP_CHIP_STATE(data, label) do { } while (0)
 #endif /* IS_ENABLED(CONFIG_LOG) */
 
 /* ── Helpers ────────────────────────────────────────────────────────── */
@@ -382,7 +404,13 @@ static void lr20xx_hardware_reset(struct lr20xx_data *data,
 					    tcxo_start_time_periods(cfg->tcxo_startup_delay_ms));
 	}
 
-	/* LDO mode — no cfg_lfclk, no set_reg_mode, no DCDC workarounds */
+	/* LDO mode — no cfg_lfclk, no set_reg_mode, no DCDC workarounds.
+	 *
+	 * cfg_lfclk(LF_RC) was tried here on the theory that LF_XOSC_START_ERR
+	 * meant the LF domain needed an explicit enable-and-wait (DS §6.11.1).
+	 * It changed nothing on hardware — the error still appears — so it is
+	 * not the cause and the command is not carried.  RC is the reset
+	 * default and the X1 routes no DIO11, so RC is what we get either way. */
 
 	lr20xx_configure_rfswitch(ctx, cfg);
 
@@ -694,7 +722,7 @@ static void lr20xx_apply_modem_config(struct lr20xx_data *data,
 	 * them anyway). */
 	lr20xx_apply_side_detectors(data, !tx_mode);
 
-	DUMP_CHIP_STATE(ctx, &data->hal_ctx, tx_mode ? "modem-TX" : "modem-RX");
+	DUMP_CHIP_STATE(data, tx_mode ? "modem-TX" : "modem-RX");
 }
 
 /* ── RX duty cycle ──────────────────────────────────────────────────── */
@@ -711,18 +739,102 @@ static bool lr20xx_apply_rx_duty_cycle(struct lr20xx_data *data)
 	if (data->dc_rx_ms == 0 || data->dc_sleep_ms == 0) {
 		LOG_WRN("No duty-cycle timing stored — continuous RX");
 		data->rx_duty_cycle_enabled = false;
-		data->hal_ctx.auto_sleeps = false;
 		lr20xx_radio_common_set_rx_with_timeout_in_rtc_step(
 			ctx, 0xFFFFFF);
 		return false;
 	}
 
-	lr20xx_radio_common_set_rx_duty_cycle(ctx, data->dc_rx_ms,
-		data->dc_sleep_ms, LR20XX_RADIO_COMMON_RX_DUTY_CYCLE_MODE_RX);
+	/* Clear the error state the wake itself provokes, before re-arming.
+	 *
+	 * Reaching here almost always means the cycle was just broken by a host
+	 * command landing in a sleep window — DS §6.3.8: "wake up by the device
+	 * with a falling edge of NSS" terminates the loop, and every SPI
+	 * transaction asserts NSS.  The HAL's wake pulse is a frame with no
+	 * clock cycles, which the chip reads as a malformed command and answers
+	 * with CMD_PERR (DS Table 6-38, "wrong Opcode, arguments") plus a
+	 * latched CmdError IRQ.
+	 *
+	 * Left set, that IRQ holds DIO1 high; the work handler finds no event
+	 * it recognises, the safety path restarts RX, this re-arm is refused
+	 * again, and after five strikes the driver hardware-resets — the loop
+	 * seen on the X1, where the node never recovers and never gives up.
+	 * The error is self-inflicted by the wake and says nothing about the
+	 * command about to be issued, so clear it here rather than letting it
+	 * poison the re-arm.  The SX126x driver survives the same race by the
+	 * same principle: re-arm unconditionally from the broken state. */
+	lr20xx_system_clear_errors(ctx);
+	lr20xx_system_clear_irq_status(ctx, LR20XX_SYSTEM_IRQ_CMD_ERROR);
 
-	LOG_DBG("RX duty cycle re-armed: rx=%ums sleep=%ums",
-		data->dc_rx_ms, data->dc_sleep_ms);
+	/* The second SetRxDutyCycle field is cycle_time, NOT sleep time —
+	 * DS §6.3.8 Table 6-14: "cycle_time specifies the duration of the period
+	 * between the start of consecutive Rx windows", and the chip sleeps for
+	 * cycle_time - rx_max_time.  The vendor SDK calls the argument
+	 * `sleep_period_in_ms` and marshals it straight into those bytes, which
+	 * is correct for the LR11xx (whose field really is SleepPeriod) and
+	 * wrong here — the LR2021 redefined it.  Passing the sleep time raw
+	 * makes cycle_time < rx_max_time for every preset we use, and the
+	 * datasheet is explicit: "If cycle_time is lower than rx_max_time a
+	 * CMD_ERR is returned in the status of the next command."  That is the
+	 * CMD_ERROR IRQ and the rejected commands seen on the X1 the moment a
+	 * duty cycle armed.  Convert here rather than at the call sites so
+	 * dc_sleep_ms keeps its plain meaning everywhere else. */
+	lr20xx_radio_common_set_rx_duty_cycle(ctx, data->dc_rx_ms,
+		data->dc_rx_ms + data->dc_sleep_ms,
+		LR20XX_RADIO_COMMON_RX_DUTY_CYCLE_MODE_RX);
+
+	LOG_DBG("RX duty cycle re-armed: rx=%ums sleep=%ums (cycle=%ums)",
+		data->dc_rx_ms, data->dc_sleep_ms,
+		data->dc_rx_ms + data->dc_sleep_ms);
 	return true;
+}
+
+/* GPIO-only "can the host talk to this chip right now" check, no SPI.
+ *
+ * Gated on an armed duty cycle: unlike the SX126x, the LR2021 holds BUSY high
+ * during ordinary continuous RX, so reporting raw BUSY would tell the caller
+ * the radio is permanently unavailable — which gates TX as well as the probes
+ * and mutes the node.  With a cycle armed, BUSY high does mean the chip is in
+ * its own sleep window and must not be disturbed. */
+bool lr20xx_is_chip_busy(const struct device *dev)
+{
+	struct lr20xx_data *data = dev->data;
+
+	return data->rx_duty_cycle_enabled &&
+	       gpio_pin_get_dt(&data->hal_ctx.busy);
+}
+
+/* Take an armed duty cycle down deliberately, for a path that MUST command the
+ * chip rather than skip when it is asleep — i.e. TX.
+ *
+ * Polling BUSY and waiting for a gap does not work for transmit.  The main
+ * loop is event-driven, so a deferred send has nothing to re-wake it: one
+ * "asleep" sample and the packet sits until the dispatcher's 4 s CAD timeout
+ * fires, which is what the X1 logged as `isRadioReady=0`.  The LR11xx driver
+ * guards its two incidental pollers and pointedly leaves TX alone for the
+ * same reason.
+ *
+ * DS §6.3.8 makes the sequence explicit: an NSS falling edge ends the
+ * duty-cycle loop, and "a SetStandby command should also be sent, to avoid
+ * the race conditions".  The wake arrives via the HAL's pulse in
+ * check_device_ready(); the SetStandby is here.  Clearing errors + CmdError
+ * afterwards drops the CMD_PERR the clockless wake frame provokes, so it
+ * cannot poison the TX commands that follow.  RX is re-armed by restart_rx()
+ * on TX completion, and by start_rx() on the CAD-busy path. */
+static void lr20xx_dc_takeover(struct lr20xx_data *data)
+{
+	void *ctx = &data->hal_ctx;
+
+	if (!data->rx_duty_cycle_enabled) {
+		return;
+	}
+
+	k_mutex_lock(&data->spi_mutex, K_FOREVER);
+	lr20xx_system_set_standby_mode(ctx, LR20XX_SYSTEM_STANDBY_MODE_RC);
+	lr20xx_system_clear_errors(ctx);
+	lr20xx_system_clear_irq_status(ctx, LR20XX_SYSTEM_IRQ_CMD_ERROR);
+	k_mutex_unlock(&data->spi_mutex);
+
+	LOG_DBG("duty cycle stood down for TX");
 }
 
 /* ── Start RX (internal) ────────────────────────────────────────────── */
@@ -768,7 +880,7 @@ static void lr20xx_start_rx(struct lr20xx_data *data,
 
 	/* DEBUG: dump state AFTER SET_RX — should show mode=4 (RX). The
 	 * "modem-RX" dump inside apply_modem_config is taken before SET_RX. */
-	DUMP_CHIP_STATE(ctx, &data->hal_ctx, "post-SET_RX");
+	DUMP_CHIP_STATE(data, "post-SET_RX");
 }
 
 /* ── Lightweight RX restart (no modem reconfig) ─────────────────────── */
@@ -1120,7 +1232,7 @@ static int lr20xx_lora_config(const struct device *dev,
 
 	lr20xx_calibrate_front_end(&data->hal_ctx, config->frequency);
 
-	DUMP_CHIP_STATE(&data->hal_ctx, &data->hal_ctx, "config-FEcal");
+	DUMP_CHIP_STATE(data, "config-FEcal");
 	k_mutex_unlock(&data->spi_mutex);
 
 	LOG_DBG("config: %uHz SF%d BW%d CR%d pwr=%d tx=%d",
@@ -1192,6 +1304,10 @@ static int lr20xx_lora_send_async(const struct device *dev,
 	if (!data->configured) return -EINVAL;
 	if (data->tx_active) return -EBUSY;
 	if (data_len > 255 || data_len == 0) return -EINVAL;
+
+	/* Own the chip for the whole transmit, LBT CAD included — the CAD below
+	 * commands it too, so this has to come first. */
+	lr20xx_dc_takeover(data);
 
 	/* LBT: perform blocking CAD before transmitting.  On CAD-busy, restore
 	 * RX in-driver before returning -EBUSY so the C++ layer doesn't have
@@ -1270,7 +1386,7 @@ static int lr20xx_lora_send_async(const struct device *dev,
 
 	/* Command status here is SET_TX's own (2=accepted, 1=rejected,
 	 * 0=not executed) and the mode should have left standby. */
-	DUMP_CHIP_STATE(ctx, &data->hal_ctx, "post-SET_TX");
+	DUMP_CHIP_STATE(data, "post-SET_TX");
 
 	k_mutex_unlock(&data->spi_mutex);
 
@@ -1354,7 +1470,25 @@ int16_t lr20xx_get_rssi_inst(const struct device *dev)
 	int16_t rssi = 0;
 	uint8_t half_dbm = 0;
 
-	k_mutex_lock(&data->spi_mutex, K_FOREVER);
+	/* GPIO BUSY read first, before any SPI: issuing GetRssiInst into a
+	 * duty-cycle sleep window ends the cycle (DS §6.3.8 — an NSS falling
+	 * edge terminates the loop).  Best-effort, not airtight: the chip can
+	 * re-enter sleep between this read and the command below.  That is why
+	 * the re-arm in lr20xx_apply_rx_duty_cycle() has to be able to recover
+	 * rather than this guard having to be perfect — same division of labour
+	 * as sx126x_get_rssi_inst and its RxTimeout re-arm.
+	 *
+	 * -128 is the busy/contended sentinel the sampler understands
+	 * (LoRaRadioBase::triggerNoiseFloorCalibrate retries on the next tick);
+	 * returning a plausible-looking number would feed the floor EMA a
+	 * reading nobody took. */
+	if (lr20xx_is_chip_busy(dev)) {
+		return -128;
+	}
+	if (k_mutex_lock(&data->spi_mutex, K_NO_WAIT) != 0) {
+		return -128;
+	}
+
 	lr20xx_radio_common_get_rssi_inst(&data->hal_ctx, &rssi, &half_dbm);
 	k_mutex_unlock(&data->spi_mutex);
 
@@ -1366,6 +1500,18 @@ bool lr20xx_is_receiving(const struct device *dev)
 	struct lr20xx_data *data = dev->data;
 
 	if (!data->in_rx_mode || data->tx_active) {
+		return false;
+	}
+
+	/* Sleep-window guard, and the one that matters most: this path is the
+	 * TX gate and runs on every send attempt, far more often than the
+	 * 15 s probe.  Asking a sleeping chip "are you receiving?" would end
+	 * the cycle being asked about (DS §6.3.8 — an NSS falling edge
+	 * terminates the loop, and every SPI transaction asserts NSS).  A
+	 * sleeping chip is also by definition not mid-packet, so not-receiving
+	 * is the truthful answer, not just the safe one.  CAD still gates TX,
+	 * so the channel check is not lost.  Same guard the LR11xx applies. */
+	if (lr20xx_is_chip_busy(dev)) {
 		return false;
 	}
 
@@ -1770,10 +1916,12 @@ static int lr20xx_lora_recv_duty_cycle(const struct device *dev,
 	data->dc_rx_ms = rx_ms;
 	data->dc_sleep_ms = slp_ms;
 	data->rx_duty_cycle_enabled = true;
-	data->hal_ctx.auto_sleeps = true;
-	lr20xx_radio_common_set_rx_duty_cycle(ctx, rx_ms, slp_ms,
-		LR20XX_RADIO_COMMON_RX_DUTY_CYCLE_MODE_RX);
-	LOG_INF("recv_duty_cycle: rx=%ums sleep=%ums", rx_ms, slp_ms);
+	/* Arm through the shared helper so the cycle_time conversion lives in
+	 * exactly one place — this site and the re-arm path had to agree, and
+	 * two copies of that conversion is how they would stop agreeing. */
+	lr20xx_apply_rx_duty_cycle(data);
+	LOG_INF("recv_duty_cycle: rx=%ums sleep=%ums (cycle=%ums)",
+		rx_ms, slp_ms, rx_ms + slp_ms);
 
 	lr20xx_system_clear_irq_status(ctx, LR20XX_SYSTEM_IRQ_ALL_MASK);
 	data->in_rx_mode = true;
@@ -1791,6 +1939,8 @@ static int lr20xx_hw_init(struct lr20xx_data *data,
 	void *ctx = &data->hal_ctx;
 
 	LOG_INF("LR20xx hardware init starting");
+
+	data->irq_dio = cfg->irq_dio;
 
 	lr20xx_system_version_t ver;
 	bool found = false;
@@ -1855,7 +2005,7 @@ static int lr20xx_hw_init(struct lr20xx_data *data,
 			ver.major, ver.minor);
 	}
 
-	DUMP_CHIP_STATE(ctx, &data->hal_ctx, "post-reset");
+	DUMP_CHIP_STATE(data, "post-reset");
 
 	/* SIMO DC-DC workaround REMOVED — datasheet §22.6 says it's only
 	 * needed when SetRegMode simo_usage=0x02 (SIMO_NORMAL).
@@ -1897,7 +2047,7 @@ static int lr20xx_hw_init(struct lr20xx_data *data,
 	st = lr20xx_radio_common_set_rx_tx_fallback_mode(ctx,
 						    LR20XX_RADIO_FALLBACK_STDBY_RC);
 
-	DUMP_CHIP_STATE(ctx, &data->hal_ctx, "pre-cal");
+	DUMP_CHIP_STATE(data, "pre-cal");
 
 	lr20xx_system_clear_errors(ctx);
 	lr20xx_system_clear_irq_status(ctx, LR20XX_SYSTEM_IRQ_ALL_MASK);
@@ -1918,7 +2068,7 @@ static int lr20xx_hw_init(struct lr20xx_data *data,
 		}
 	}
 
-	DUMP_CHIP_STATE(ctx, &data->hal_ctx, "post-cal");
+	DUMP_CHIP_STATE(data, "post-cal");
 
 	/* The 32 MHz reference is what calibration needs, so this is where a
 	 * wrong clock source shows up. One retry only — if XTAL fails too, the
@@ -1941,7 +2091,7 @@ static int lr20xx_hw_init(struct lr20xx_data *data,
 	 * raw_value = ceil(868000000/4000000) = 217 = 0x00D9 */
 	st = lr20xx_calibrate_front_end(ctx, 868000000);
 
-	DUMP_CHIP_STATE(ctx, &data->hal_ctx, "post-FEcal");
+	DUMP_CHIP_STATE(data, "post-FEcal");
 
 	/* Verify: set packet type to LoRa and read it back */
 	st = lr20xx_radio_common_set_pkt_type(ctx, LR20XX_RADIO_COMMON_PKT_TYPE_LORA);
@@ -1951,7 +2101,7 @@ static int lr20xx_hw_init(struct lr20xx_data *data,
 	lr20xx_radio_common_pkt_type_t pkt_readback = 0xFF;
 	lr20xx_radio_common_get_pkt_type(ctx, &pkt_readback);
 
-	DUMP_CHIP_STATE(ctx, &data->hal_ctx, "init-done");
+	DUMP_CHIP_STATE(data, "init-done");
 
 #if IS_ENABLED(CONFIG_LOG)
 	/* Does merely polling status raise CmdError? get_status is a bare

@@ -73,6 +73,16 @@ int16_t LR2021Radio::hwGetCurrentRSSI()
 	return lr20xx_get_rssi_inst(_dev);
 }
 
+/* Deliberately no hwIsChipBusy() override, matching the LR11xx.
+ *
+ * It backs LoRaRadioBase::isRadioReady(), which gates TX in startSendRaw() as
+ * well as the probes.  Wiring BUSY into the transmit path stalled sends until
+ * the dispatcher's 4 s CAD timeout, because the event-driven loop has nothing
+ * to re-wake a deferred send.  The duty-cycle sleep window is handled where it
+ * belongs instead: skipped in the two incidental pollers
+ * (lr20xx_is_receiving, lr20xx_get_rssi_inst) and stood down deliberately for
+ * TX inside the driver. */
+
 bool LR2021Radio::hwIsReceiving()
 {
 	/* MUST be non-destructive: never clear IRQ bits from this path.

@@ -35,11 +35,12 @@ struct lr20xx_hal_context {
 	struct gpio_dt_spec busy;   /* BUSY: high = chip processing command */
 	struct gpio_dt_spec dio1;   /* DIO1 interrupt */
 
+	/* Tracks an explicit host SetSleep only.  There is deliberately no
+	 * companion flag for the autonomous duty-cycle sleep: BUSY cannot
+	 * distinguish that from a command still executing, so acting on it
+	 * corrupted transactions (see check_device_ready).  A duty-cycle sleep
+	 * is simply waited out. */
 	volatile bool radio_is_sleeping;
-	/* Set while RX duty cycling: the chip parks itself in sleep between
-	 * windows without the host ever sending SetSleep, so radio_is_sleeping
-	 * cannot be trusted to spot it. */
-	volatile bool auto_sleeps;
 };
 
 /**
