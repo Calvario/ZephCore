@@ -342,8 +342,23 @@
 		 * guess at where in between it wakes; instead the driver is
 		 * initialised on demand, when the store first mounts /ext. */
 		zephyr,deferred-init;
-		writeoc = "pp4io";
-		readoc = "read4io";
+		/* Single-line, as every other QSPI board here uses.
+		 *
+		 * Quad needs the part's QE bit set, and the binding defaults
+		 * quad-enable-requirements to S1B6 — QE in status register 1
+		 * bit 6, which is the Macronix layout. This is a GigaDevice
+		 * part, where that bit is not QE at all; the driver read SR1
+		 * 0x40, decided QE was already on, and never enabled quad. The
+		 * JEDEC id still read back fine (single-line), but every 4-line
+		 * read and program went out over data lines the flash was not
+		 * driving, so littlefs formatted, read back nothing it wrote,
+		 * and declared block 0 bad.
+		 *
+		 * QER NONE keeps the driver off the status register entirely
+		 * rather than having it clear a bit it has misidentified. */
+		quad-enable-requirements = "NONE";
+		writeoc = "pp";
+		readoc = "fastread";
 		sck-frequency = <16000000>;
 		jedec-id = [c8 40 17];
 		size = <67108864>;            /* 64Mbit = 8MB, in bits */
