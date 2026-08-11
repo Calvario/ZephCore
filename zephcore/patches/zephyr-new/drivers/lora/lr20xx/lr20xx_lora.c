@@ -1321,7 +1321,15 @@ static int lr20xx_lora_send_async(const struct device *dev,
 					      K_MSEC(lr20xx_cad_timeout_ms(data)));
 		if (cad_ret > 0) {
 			LOG_DBG("LBT: channel busy");
-			if (was_in_rx && data->async_rx_cb != NULL) {
+			/* Re-arm whenever there was anything to re-arm.  The
+			 * async_rx_cb condition was safe while a busy CAD only
+			 * cost the RX mode, but lr20xx_dc_takeover() above has
+			 * already stood the duty cycle down by this point — so
+			 * bailing out without restarting leaves the radio
+			 * parked in standby, deaf, with nothing scheduled to
+			 * bring it back.  rx_duty_cycle_enabled covers the case
+			 * the callback check would miss. */
+			if (was_in_rx || data->rx_duty_cycle_enabled) {
 				k_mutex_lock(&data->spi_mutex, K_FOREVER);
 				lr20xx_start_rx(data, cfg);
 				k_mutex_unlock(&data->spi_mutex);
@@ -1970,34 +1978,13 @@ static int lr20xx_hw_init(struct lr20xx_data *data,
 
 	LOG_INF("LR20xx SDK get_version: major=%u minor=%u", ver.major, ver.minor);
 
-#if IS_ENABLED(CONFIG_LOG)
-	/* GET_VERSION (0x0101) must answer 0x01 0x18 for the documented FW 1.24.
-	 * Two dumps, because the two references disagree on the protocol and
-	 * our layout matches RadioLib on paper yet reads shifted on silicon:
+	/* The frame A / frame B bring-up dumps lived here: two hexdumps of
+	 * GET_VERSION, one per candidate SPI framing, to settle which protocol
+	 * this chip actually speaks.  Answered — the two-window read in
+	 * lr20xx_spi_read_frame() is correct, and TX/RX both work on it.
+	 * Removed rather than left firing on every boot.
 	 *
-	 *   frame A = command and response in ONE NSS window (RadioLib's model)
-	 *   frame B = a bare read in a SECOND window (the Semtech HAL's model)
-	 *
-	 * Whichever one contains 01 18 is the protocol this chip actually
-	 * speaks, and its offset is the skip the HAL should use.
-	 */
-	{
-		const uint8_t ver_cmd[2] = { 0x01, 0x01 };
-		uint8_t follow[8] = { 0 };
-
-		lr20xx_hal_debug_raw_frame(ctx, ver_cmd, sizeof(ver_cmd), 10);
-
-		if (lr20xx_hal_direct_read(ctx, follow, sizeof(follow)) ==
-		    LR20XX_HAL_STATUS_OK) {
-			LOG_HEXDUMP_INF(follow, sizeof(follow),
-					"frame B: bare read after GET_VERSION");
-		} else {
-			LOG_WRN("frame B: bare read failed");
-		}
-	}
-#endif
-
-	/* The only base FW version the datasheet documents is 1.24 (0x01/0x18).
+	 * The only base FW version the datasheet documents is 1.24 (0x01/0x18).
 	 * Anything else still runs — the mismatch is worth a line in the log
 	 * when a bring-up goes sideways, not a hard failure. */
 	if (ver.major != 0x01 || ver.minor != 0x18) {
@@ -2103,33 +2090,14 @@ static int lr20xx_hw_init(struct lr20xx_data *data,
 
 	DUMP_CHIP_STATE(data, "init-done");
 
-#if IS_ENABLED(CONFIG_LOG)
-	/* Does merely polling status raise CmdError? get_status is a bare
-	 * direct_read (no opcode) in this SDK, where RadioLib sends GET_STATUS
-	 * as a real command — so if the chip parses those clocked-out zeros as
-	 * a malformed command, our own polling is manufacturing the CMD_ERROR
-	 * storm rather than reporting one. Chip is idle here, so nothing else
-	 * can set the bit. */
-	{
-		lr20xx_system_irq_mask_t before = 0, after = 0;
-		lr20xx_system_stat1_t s1 = {0};
-
-		lr20xx_system_clear_irq_status(ctx, LR20XX_SYSTEM_IRQ_ALL_MASK);
-		lr20xx_system_get_status(ctx, NULL, NULL, &before);
-
-		for (int i = 0; i < 5; i++) {
-			lr20xx_system_get_status(ctx, &s1, NULL, NULL);
-		}
-
-		lr20xx_system_get_status(ctx, NULL, NULL, &after);
-		LOG_INF("status-poll probe: irq before=0x%08x after=0x%08x "
-			"(CMD_ERROR %s self-inflicted)", before, after,
-			(after & LR20XX_SYSTEM_IRQ_CMD_ERROR) ? "IS" : "is NOT");
-		lr20xx_system_clear_irq_status(ctx, LR20XX_SYSTEM_IRQ_ALL_MASK);
-	}
-#endif
-
-	/* DEBUG: what voltage does the chip see on its OWN supply pin? (mV,
+	/* The status-poll probe lived here, asking whether merely polling
+	 * GetStatus raised CmdError — i.e. whether our own polling was
+	 * manufacturing the CMD_ERROR storm.  It reported "is NOT" on every
+	 * run, and the real source is now known: the NSS wake pulse that
+	 * check_device_ready() used to fire at a merely-busy chip, which the
+	 * chip read as a clockless malformed command.  Question closed.
+	 *
+	 * DEBUG: what voltage does the chip see on its OWN supply pin? (mV,
 	 * after MU calibration).  If this reads low (≪3000mV) while the board
 	 * is powered, the LR2021 VBAT/supply pin is floating or miswired — that
 	 * is why it flags LOW_BATTERY and aborts TX no matter the system rail

@@ -313,52 +313,6 @@ static int lr20xx_spi_read_frame(struct lr20xx_hal_context *ctx, const uint8_t *
 	return ret;
 }
 
-#if IS_ENABLED(CONFIG_LOG)
-/*
- * Dump one command frame from byte 0 — command echo, stat header and payload
- * all in one line, nothing discarded. The single-NSS read layout above has
- * never been checked against real silicon; this shows where the payload
- * actually starts instead of assuming it.
- */
-void lr20xx_hal_debug_raw_frame(const void *context, const uint8_t *command,
-				uint16_t command_length, uint16_t extra)
-{
-	struct lr20xx_hal_context *ctx = (struct lr20xx_hal_context *)context;
-	uint8_t rx[24] = { 0 };
-	uint16_t total = command_length + extra;
-
-	if (total > sizeof(rx)) {
-		total = sizeof(rx);
-	}
-
-	const struct spi_buf tx_bufs[] = {
-		{ .buf = (uint8_t *)command, .len = command_length },
-		{ .buf = NULL, .len = (size_t)(total - command_length) },
-	};
-	const struct spi_buf rx_bufs[] = {
-		{ .buf = rx, .len = total },
-	};
-	const struct spi_buf_set tx = { .buffers = tx_bufs, .count = 2 };
-	const struct spi_buf_set rxs = { .buffers = rx_bufs, .count = 1 };
-
-	if (check_device_ready(ctx) != LR20XX_HAL_STATUS_OK) {
-		LOG_WRN("raw frame: device not ready");
-		return;
-	}
-
-	gpio_pin_set_dt(&ctx->nss, 1);
-	int ret = spi_transceive(ctx->spi_dev, &ctx->spi_cfg, &tx, &rxs);
-	gpio_pin_set_dt(&ctx->nss, 0);
-
-	if (ret < 0) {
-		LOG_ERR("raw frame: spi err %d", ret);
-		return;
-	}
-
-	LOG_HEXDUMP_INF(rx, total, "frame A: one NSS window, from byte 0");
-}
-#endif /* CONFIG_LOG */
-
 lr20xx_hal_status_t lr20xx_hal_read(const void *context, const uint8_t *command,
 				     const uint16_t command_length,
 				     uint8_t *data, const uint16_t data_length)
