@@ -100,6 +100,22 @@
 		startup-delay-us = <5000>;
 	};
 
+	/* P0.15 — 3V3 rail feeding the QSPI flash.
+	 *
+	 * A regulator rather than a gpio-hog so the part's power-up time is an
+	 * enforced delay instead of a race: a hog raises the rail and returns,
+	 * and the flash driver a few init priorities later clocks out RDID
+	 * microseconds afterwards — before the switch and the rail's bulk
+	 * capacitance have settled. The read comes back as 0x00/0xff, the JEDEC
+	 * compare fails, and /ext never mounts. */
+	flash_power: flash-power {
+		compatible = "regulator-fixed";
+		regulator-name = "flash-power";
+		enable-gpios = <&gpio0 15 GPIO_ACTIVE_HIGH>;
+		regulator-boot-on;
+		startup-delay-us = <10000>;
+	};
+
 	/* P1.06 — gates the battery ADC divider, enabled on demand */
 	vbat_enable: vbat-enable {
 		compatible = "regulator-fixed";
@@ -222,13 +238,6 @@
 	rtc-power-on {
 		gpio-hog;
 		gpios = <9 GPIO_ACTIVE_HIGH>;
-		output-high;
-	};
-
-	/* QSPI flash power switch (P0.15) */
-	flash-power-on {
-		gpio-hog;
-		gpios = <15 GPIO_ACTIVE_HIGH>;
 		output-high;
 	};
 };

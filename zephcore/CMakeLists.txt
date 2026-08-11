@@ -574,6 +574,8 @@ target_sources(app PRIVATE
   # Notification-mode gate. Same reason as led_gate: the CLI needs these
   # symbols on boards that compile no buzzer at all.
   helpers/buzzer_gate.c
+  # QSPI bring-up probe. Self-stubs unless CONFIG_ZEPHCORE_QSPI_RDID_PROBE.
+  helpers/qspi_probe.c
 )
 
 # Boot-time hardware-RTC auto-discovery (compact raw-I2C). Always compiled so

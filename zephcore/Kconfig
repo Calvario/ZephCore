@@ -51,6 +51,16 @@ source "$(ZEPHYR_BASE)/subsys/logging/Kconfig.template.log_config"
 
 menu "ZephCore"
 
+config ZEPHCORE_QSPI_RDID_PROBE
+	bool "QSPI flash bring-up probe"
+	help
+	  Five seconds after boot, report whether the QSPI flash driver came
+	  up. If it did not, print the init errno the driver discards and
+	  re-read the JEDEC id by bit-banging the pins as single-lane SPI,
+	  which distinguishes a driver-side fault from a part that is not
+	  answering. Skipped entirely when the flash is working, so it is safe
+	  to leave enabled. Bring-up diagnostic.
+
 config ZEPHCORE_RESET_ON_FATAL_ERROR
 	bool "Reboot on fatal error"
 	default y
