@@ -85,10 +85,15 @@ int16_t LR2021Radio::hwGetCurrentRSSI()
 
 bool LR2021Radio::hwIsReceiving()
 {
-	/* MUST be non-destructive: never clear IRQ bits from this path.
-	 * Foreign-preamble release is hardware-driven (chip-internal release
-	 * on HEADER_ERROR / sync timeout). The driver's lr20xx_is_receiving()
-	 * reads via get_status() without clearing. */
+	/* The poll itself is non-destructive: lr20xx_is_receiving() reads the
+	 * IRQ register via get_status(), which clears nothing.
+	 *
+	 * Foreign-preamble release is NOT hardware-driven, whatever the comment
+	 * that stood here (copy-pasted from LR1110Radio.cpp) claimed.  DS §5.7:
+	 * IRQ status bits are latched until ClearIrq, and continuous RX has no
+	 * timeout — so the driver releases them in software, on an SF-aware
+	 * grace for the preamble and a max-airtime deadline for the header,
+	 * exactly as the LR11xx and SX126x drivers do. */
 	return lr20xx_is_receiving(_dev);
 }
 

@@ -1,0 +1,29 @@
+diff --git a/zephcore/patches/zephyr-new/drivers/lora/lr20xx/lr20xx_lora.c b/zephcore/patches/zephyr-new/drivers/lora/lr20xx/lr20xx_lora.c
+index d283ba4..ccbf5e3 100644
+--- a/zephcore/patches/zephyr-new/drivers/lora/lr20xx/lr20xx_lora.c
++++ b/zephcore/patches/zephyr-new/drivers/lora/lr20xx/lr20xx_lora.c
+@@ -2111,7 +2111,23 @@ static int lr20xx_do_cad(struct lr20xx_data *data)
+ 	uint8_t symb_nb = lr20xx_cad_symb_nb(mc);
+ 	lr20xx_radio_lora_cad_params_t cad = {
+ 		.cad_symb_nb = symb_nb,
+-		.pnr_delta = 0,	/* exact symbol count, no best-effort */
++		/* BENCH EXPERIMENT — best-effort ("fast") CAD.  DS §6.3.11:
++		 * "CadDone time is shortened in case of early no detection";
++		 * the vendor header calls 8 the recommended best-effort value.
++		 * Most LBT CADs find nothing, so this shortens the common
++		 * pre-TX blocking path.
++		 *
++		 * NOT a fix — revert unless the bench A/B justifies it.  Judge
++		 * on `get cad`, per-level line (probes / busy / false-pos /
++		 * true-pos / fp-rate) over a comparable window.  A materially
++		 * LOWER busy rate is a RED FLAG, not a win: it more likely means
++		 * CAD stopped detecting than that the channel went quiet.
++		 * Side detectors are already off during CAD, so the DS's
++		 * multi-SF "main SF determines the not-detect condition" caveat
++		 * does not apply.
++		 *
++		 * Revert value: 0 (exact symbol count, no best-effort). */
++		.pnr_delta = 8,
+ 		.cad_exit_mode = LR20XX_RADIO_LORA_CAD_EXIT_MODE_STANDBYRC,
+ 		.cad_timeout_in_pll_step = 0,
+ 		/* Peak is looked up for the window actually programmed, so the

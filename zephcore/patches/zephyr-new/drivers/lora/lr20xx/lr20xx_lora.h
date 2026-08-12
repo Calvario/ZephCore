@@ -48,9 +48,17 @@ void lr20xx_set_rx_boost(const struct device *dev, bool enable);
 /**
  * @brief GPIO-only check for "chip is in a duty-cycle sleep window" (no SPI)
  *
- * True only while an RX duty cycle is armed and BUSY is high.  Deliberately
- * not raw BUSY: this chip holds BUSY high during continuous RX too, so a raw
- * reading would report the radio permanently unavailable.
+ * True only while an RX duty cycle is armed and BUSY is high — the chip is in
+ * its own sleep window (DS Table 4-1: "Sleep: busy=1") and an NSS falling edge
+ * would end the cycle (DS §6.3.8).
+ *
+ * Deliberately gated on the duty cycle rather than reading raw BUSY, but NOT
+ * for the reason once given here: BUSY is *not* held high during continuous
+ * RX.  DS §5.2 is explicit — "In Rx mode, BUSY goes low as soon as the chip is
+ * ready to receive data."  (The BUSY=1 readings the X1 bring-up logs showed
+ * came from sampling the pin after issuing SPI, i.e. the dump's own footprint;
+ * dump_chip_state() now samples before.)  The gate is still right: without it
+ * a stray BUSY would gate TX as well as the probes and mute the node.
  *
  * @param dev LoRa device
  * @return true if the host should not issue commands right now

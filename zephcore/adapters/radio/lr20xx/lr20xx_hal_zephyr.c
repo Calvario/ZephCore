@@ -14,6 +14,18 @@ LOG_MODULE_REGISTER(lr20xx_hal, CONFIG_LORA_LOG_LEVEL);
 /* BUSY timeout; covers worst-case post-reset firmware boot (~300ms) with margin */
 #define LR20XX_BUSY_TIMEOUT_MS  3000
 
+/* This HAL is single-instance: everything below is file-scope, not per-context.
+ * The driver instantiates with DT_INST_FOREACH_STATUS_OKAY, so a second
+ * semtech,lr2021 node would silently share the DIO1 callback, the BUSY
+ * callback and the BUSY semaphore between two radios — the second init would
+ * overwrite the first's callback and both would wait on one semaphore.  No
+ * board does this today; the assert makes the assumption fail loudly at build
+ * time instead of mysteriously at run time.  The fix, if a board ever needs
+ * two, is to move these into struct lr20xx_hal_context. */
+BUILD_ASSERT(DT_NUM_INST_STATUS_OKAY(semtech_lr2021) <= 1,
+	     "lr20xx_hal_zephyr.c holds its DIO1/BUSY state in file-scope "
+	     "statics — it supports exactly one LR20xx instance");
+
 /* Static state for DIO1 interrupt handling */
 static struct gpio_callback dio1_gpio_cb;
 static lr20xx_dio1_callback_t dio1_user_cb = NULL;
@@ -432,15 +444,26 @@ lr20xx_hal_status_t lr20xx_hal_reset(const void *context)
 {
 	struct lr20xx_hal_context *ctx = (struct lr20xx_hal_context *)context;
 
-	LOG_INF("LR20xx reset: assert reset, hold 10ms");
+	LOG_INF("LR20xx reset: assert reset, hold 1ms");
 
+	/* DS §4.2: "Assert NRESET low for minimum 100 us."  1 ms is 10x the
+	 * minimum and matches Semtech's reference HAL; the 10 ms here before
+	 * was 100x it. */
 	gpio_pin_set_dt(&ctx->reset, 1);
-	k_msleep(10);   /* ≥100us reset pulse per LR2021 datasheet §5.1 */
+	k_msleep(1);
 
 	gpio_pin_set_dt(&ctx->reset, 0);
 
-	k_msleep(300);  /* LR2021 firmware boot time per datasheet §5.1 */
-
+	/* No blind boot delay.  DS §4.2/§4.3 make BUSY the completion signal —
+	 * "During each of the reset procedures … the BUSY signal remains high …
+	 * As the device enters Standby RC mode, the BUSY signal returns to a low
+	 * state" — and the datasheet prescribes no post-release wait.  The
+	 * wait_on_busy() below is interrupt-driven with a 3 s bound and logs on
+	 * timeout, so the 300 ms that used to sit here was 300 ms of sleeping
+	 * before asking the question that answers itself.  It cost that on every
+	 * one of up to 3 boot attempts, and again inside lr20xx_hardware_reset(),
+	 * which runs on the DIO1 work queue holding spi_mutex and now also
+	 * carries the PRAM block writes. */
 	LOG_INF("LR20xx reset complete, BUSY=%d", gpio_pin_get_dt(&ctx->busy));
 
 	ctx->radio_is_sleeping = false;

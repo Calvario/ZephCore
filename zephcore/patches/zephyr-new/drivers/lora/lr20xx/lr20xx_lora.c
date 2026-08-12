@@ -115,6 +115,29 @@ struct lr20xx_data {
 	int8_t cad_peak_offset;
 	uint8_t cad_probe_peak;
 
+	/* BENCH INSTRUMENTATION — CAD_DONE -> carrier-up latency.
+	 *
+	 * k_cycle_get_32() stamped where the DIO1 work handler observes
+	 * CAD_DONE, read again immediately before SetTx.  The delta is the
+	 * whole host round-trip the chip's CAD_LBT exit mode would remove:
+	 * IRQ -> work queue -> semaphore -> mesh thread -> apply_modem_config
+	 * -> SetTx.  0 = no CAD preceded this transmit (nothing to report).
+	 *
+	 * This is measurement only, no behaviour change — flash it FIRST and
+	 * record the baseline, because a CAD_LBT number is meaningless without
+	 * one.  Remove with the experiment. */
+	uint32_t cad_done_cycles;
+
+	/* BENCH EXPERIMENT — CAD_LBT.  When set, the next lr20xx_do_cad() asks
+	 * the chip for CadExitMode = TX (0x10, DS Table 6-18: "The chip performs
+	 * a CAD operation and if no activity is detected, it goes to Tx mode and
+	 * takes cad_timeout as Tx timeout") instead of the STANDBY_RC fallback,
+	 * and passes cad_lbt_tx_timeout as that Tx timeout.  Both are cleared by
+	 * do_cad once consumed, so an ordinary adaptive-CAD probe can never
+	 * inherit them and accidentally transmit. */
+	bool cad_lbt_exit_tx;
+	uint32_t cad_lbt_tx_timeout;   /* 32 MHz periods, <= 0x00FFFFFF */
+
 	/* Deferred hardware init */
 	bool hw_initialized;
 
@@ -126,6 +149,32 @@ struct lr20xx_data {
 	/* DIO1 stuck-HIGH detection */
 	int dio1_stuck_count;
 	bool tcxo_disabled;   /* set when the TCXO fallback has already fired */
+
+	/* Timestamp (k_uptime_get_32(), ms) of the first sighting of a latched
+	 * PREAMBLE_DETECTED by lr20xx_is_receiving() in the current RX cycle;
+	 * 0 = none tracked.  DS §5.7: IRQ status bits are latched and cleared
+	 * only by ClearIrq.  This driver deliberately keeps PREAMBLE_DETECTED
+	 * and SYNC_WORD_HEADER_VALID off DIO1 (they fire on noise), and the poll
+	 * below reads them non-destructively — so in continuous RX, which has no
+	 * timeout IRQ, a preamble raised by noise or a foreign sync word stays
+	 * set until the next real RxDone/CrcError/HeaderError.  Until then the
+	 * TX gate reads busy and the dispatcher only recovers after its 4 s CAD
+	 * timeout, at the cost of a stall plus a full RX rebuild.  Real packets
+	 * latch the header bit inside the grace window; after grace expires with
+	 * no header, the bit is cleared and TX released.  Same shape as the
+	 * LR11xx and SX126x (patch 0013) drivers.  All accesses under
+	 * spi_mutex. */
+	uint32_t preamble_seen_at_ms;
+
+	/* Timestamp (k_uptime_get_32(), ms) at which lr20xx_is_receiving()
+	 * first saw SYNC_WORD_HEADER_VALID latched in the current RX cycle;
+	 * 0 = no payload phase being timed.  Bounds the payload phase the same
+	 * way preamble_seen_at_ms bounds the preamble phase: continuous RX has
+	 * no symbol timer, so a header whose packet never completes produces no
+	 * terminal IRQ and would pin the TX gate true forever — the node keeps
+	 * receiving but never transmits again, silently.  Released after
+	 * lr20xx_max_payload_ms().  All accesses under spi_mutex. */
+	uint32_t header_seen_at_ms;
 
 	/* LoRa side detectors — up to 3 extra spreading factors demodulated
 	 * concurrently with the main one, on the same bandwidth.  Stored here
@@ -185,6 +234,17 @@ static void dump_chip_state(struct lr20xx_data *data, const char *label)
 
 /* ── Helpers ────────────────────────────────────────────────────────── */
 
+/* Reset all software state that says "we are currently receiving": the
+ * preamble-grace timestamp and the payload-phase deadline.  Paired write so the
+ * two never drift out of sync — same shape as lr11xx_reset_rx_busy_signals()
+ * and sx126x_reset_rx_busy_signals().  Called from every RX (re)start site and
+ * before TX / CAD entry. */
+static inline void lr20xx_reset_rx_busy_signals(struct lr20xx_data *data)
+{
+	data->preamble_seen_at_ms = 0;
+	data->header_seen_at_ms = 0;
+}
+
 static lr20xx_radio_lora_bw_t bw_enum_to_lr20xx(enum lora_signal_bandwidth bw)
 {
 	switch (bw) {
@@ -227,6 +287,10 @@ static lr20xx_system_tcxo_supply_voltage_t get_tcxo_voltage(uint16_t mv)
 	if (mv >= 2400) return LR20XX_SYSTEM_TCXO_CTRL_2_4V;
 	if (mv >= 2200) return LR20XX_SYSTEM_TCXO_CTRL_2_2V;
 	if (mv >= 1800) return LR20XX_SYSTEM_TCXO_CTRL_1_8V;
+	/* DS Table 6-65 value 0x01.  No board declares 1700 mV today — this is
+	 * future-proofing, not a fix: without it such a board would silently be
+	 * supplied 1.6 V. */
+	if (mv >= 1700) return LR20XX_SYSTEM_TCXO_CTRL_1_7V;
 	return LR20XX_SYSTEM_TCXO_CTRL_1_6V;
 }
 
@@ -246,6 +310,39 @@ static float bw_enum_to_khz(enum lora_signal_bandwidth bw)
 	case BW_500_KHZ: return 500.0f;
 	default:         return 125.0f;
 	}
+}
+
+/* The one LDRO rule, used everywhere.
+ *
+ * PPM offset is this chip's name for LDRO and occupies the same wire field.
+ * The rule is symbol time > 16.38 ms, NOT the SF-based one DS §9.9.1
+ * recommends ("0 for SF5-10 …; 1 for all other BW and SF11/12") and the
+ * vendor helper implements.  That is a deliberate deviation: LDRO must match
+ * between transmitter and receiver, and the rest of the mesh (SX126x and
+ * RadioLib stacks) switches on symbol time.  Do not "fix" it to the datasheet
+ * recommendation.
+ *
+ * It lives in one place because it did not: airtime used to carry its own
+ * (sf >= 11 && bw <= 125 kHz) predicate, which disagrees with what the modem
+ * is actually programmed with at SF10/BW62.5, SF10/BW31.25 and SF9/BW31.25 —
+ * the chip ran LDRO on while airtime assumed off, under-estimating airtime by
+ * ~20 % into the backoff and duty-cycle maths. */
+static inline bool lr20xx_ldro_enabled(uint8_t sf, uint32_t bw_hz)
+{
+	if (bw_hz == 0U) {
+		return false;
+	}
+	/* SF12 is the worst case: 4096 * 1e6 fits in uint32_t. */
+	return (((1U << sf) * 1000000U) / bw_hz) > 16380U;
+}
+
+/* The CAD symbol count actually programmed.  LoRaRadioBase asks for
+ * LORA_CAD_SYMB_4 via mc->cad.symbol_num; the 4 here is the fallback when it is
+ * left zero.  Single source so the CAD window, its detPeak (DS Table 6-19 is
+ * 2-D over both) and the blocking-wait budget can never disagree. */
+static inline uint8_t lr20xx_cad_symb_nb(const struct lora_modem_config *mc)
+{
+	return mc->cad.symbol_num ? (uint8_t)mc->cad.symbol_num : 4;
 }
 
 /* ── IRQ DIO ────────────────────────────────────────────────────────── */
@@ -308,65 +405,84 @@ static void lr20xx_configure_rfswitch(void *ctx, const struct lr20xx_config *cfg
 
 /* ── PA power lookup table (LF / sub-GHz) ─────────────────────────────
  *
- * Mirrors RadioLib's paOptTableLf (known-good on real LR2021 silicon).
- * Each row is { pa_lf_duty_cycle, pa_lf_slices, pa_val } where pa_val is the
- * value passed to SetTxParams.
+ * Semtech's own reference table, LR20XX_PA_LF_CFG_TABLE from
+ * examples/radio_hal/lr20xx_pa_pwr_cfg.h in the USP tree (Clear BSD, same
+ * licence as the vendored driver), indexed -10 dBm .. +22 dBm.  The lookup
+ * below mirrors lr20xx_get_tx_cfg() in Semtech's reference BSP
+ * (ral_lr20xx_bsp.c): clamp to [MIN, MAX], index by (power - MIN), feed
+ * pa_duty_cycle/pa_lf_slices to SetPaConfig and half_power to SetTxParams.
  *
- * IMPORTANT: pa_val is a PA *calibration* value, NOT power in dBm or half-dBm.
- * Our previous table mis-modeled it as 0.5dB steps (e.g. 44 for +22dBm); the
- * chip rejected those out-of-range values (PERR / CMD_ERROR) and refused TX.
- * RadioLib's LF range is -9..+22 dBm, indexed as (power_dbm + 9).
+ * half_power really is power in half-dBm, not an opaque calibration value.
+ * The comment that used to stand here claimed otherwise and the table under it
+ * came from RadioLib; four Semtech sources say half-dBm — DS Table 7-20
+ * ("in +0.5dB steps: PA_LF: [-19: 44]"), the SDK's own parameter name
+ * `power_half_dbm`, DS Table 7-16, and this table's `half_power` field, whose
+ * top entry is 44 = 22.0 dBm exactly.  The old table asked for 35 at +22 dBm,
+ * i.e. 17.5 dBm — 4.5 dB low — and was non-monotonic at the bottom.
+ *
+ * This is the chip-level truth for Semtech's reference design.  Semtech keeps
+ * the per-board matching-network correction separate
+ * (radio_utilities_get_tx_power_offset(), added to the requested dBm before
+ * the lookup); we have no such offset yet, so absolute output on the X1 is
+ * uncalibrated even with the right table.
  */
 struct lr20xx_pa_pwr_entry {
-	uint8_t pa_duty_cycle;
-	uint8_t pa_lf_slices;
-	int8_t  pa_val;
+	int8_t  half_power;      /* -> SetTxParams, in half-dBm */
+	uint8_t pa_duty_cycle;   /* -> SetPaConfig pa_lf_duty_cycle */
+	uint8_t pa_lf_slices;    /* -> SetPaConfig pa_lf_slices */
 };
 
-#define LR20XX_LF_MIN_PWR (-9)
+#define LR20XX_LF_MIN_PWR (-10)
 #define LR20XX_LF_MAX_PWR 22
 
 static const struct lr20xx_pa_pwr_entry pa_lf_table[] = {
-	{ 1, 1,  8 }, /*  -9 dBm */
-	{ 2, 2,  1 }, /*  -8 dBm */
-	{ 2, 2,  3 }, /*  -7 dBm */
-	{ 2, 2,  5 }, /*  -6 dBm */
-	{ 1, 2, 13 }, /*  -5 dBm */
-	{ 2, 1, 13 }, /*  -4 dBm */
-	{ 2, 2, 11 }, /*  -3 dBm */
-	{ 2, 2, 13 }, /*  -2 dBm */
-	{ 3, 1, 12 }, /*  -1 dBm */
-	{ 1, 1, 18 }, /*   0 dBm */
-	{ 1, 1, 20 }, /*   1 dBm */
-	{ 1, 1, 23 }, /*   2 dBm */
-	{ 1, 1, 27 }, /*   3 dBm */
-	{ 1, 1, 33 }, /*   4 dBm */
-	{ 1, 2, 26 }, /*   5 dBm */
-	{ 1, 2, 31 }, /*   6 dBm */
-	{ 1, 3, 27 }, /*   7 dBm */
-	{ 1, 1, 37 }, /*   8 dBm */
-	{ 1, 2, 40 }, /*   9 dBm */
-	{ 2, 1, 38 }, /*  10 dBm */
-	{ 2, 2, 39 }, /*  11 dBm */
-	{ 2, 4, 40 }, /*  12 dBm */
-	{ 2, 7, 41 }, /*  13 dBm */
-	{ 3, 2, 39 }, /*  14 dBm */
-	{ 3, 3, 39 }, /*  15 dBm */
-	{ 3, 6, 38 }, /*  16 dBm */
-	{ 4, 3, 37 }, /*  17 dBm */
-	{ 4, 5, 37 }, /*  18 dBm */
-	{ 4, 7, 38 }, /*  19 dBm */
-	{ 5, 3, 37 }, /*  20 dBm */
-	{ 5, 6, 37 }, /*  21 dBm */
-	{ 6, 7, 35 }, /*  22 dBm */
+	{ -18, 3, 6 }, /* -10 dBm */
+	{ -13, 2, 5 }, /*  -9 dBm */
+	{ -13, 6, 1 }, /*  -8 dBm */
+	{  -6, 6, 0 }, /*  -7 dBm */
+	{   4, 1, 0 }, /*  -6 dBm */
+	{   4, 2, 0 }, /*  -5 dBm */
+	{   2, 1, 3 }, /*  -4 dBm */
+	{  14, 0, 0 }, /*  -3 dBm */
+	{   9, 0, 3 }, /*  -2 dBm */
+	{  11, 3, 0 }, /*  -1 dBm */
+	{  16, 1, 0 }, /*   0 dBm */
+	{  11, 7, 0 }, /*   1 dBm */
+	{  18, 2, 0 }, /*   2 dBm */
+	{  16, 5, 0 }, /*   3 dBm */
+	{  17, 7, 0 }, /*   4 dBm */
+	{  21, 1, 2 }, /*   5 dBm */
+	{  25, 3, 0 }, /*   6 dBm */
+	{  32, 0, 1 }, /*   7 dBm */
+	{  32, 2, 0 }, /*   8 dBm */
+	{  27, 3, 1 }, /*   9 dBm */
+	{  32, 2, 1 }, /*  10 dBm */
+	{  28, 5, 1 }, /*  11 dBm */
+	{  30, 5, 1 }, /*  12 dBm */
+	{  34, 4, 1 }, /*  13 dBm */
+	{  31, 5, 4 }, /*  14 dBm */
+	{  34, 4, 4 }, /*  15 dBm */
+	{  34, 5, 6 }, /*  16 dBm */
+	{  39, 3, 5 }, /*  17 dBm */
+	{  37, 6, 6 }, /*  18 dBm */
+	{  40, 5, 5 }, /*  19 dBm */
+	{  41, 7, 4 }, /*  20 dBm */
+	{  43, 7, 4 }, /*  21 dBm */
+	{  44, 7, 7 }, /*  22 dBm */
 };
 
-/* PA_HF_DUTY_CYCLE "unused" marker (RADIOLIB_LR2021_PA_HF_DUTY_CYCLE_UNUSED) */
+BUILD_ASSERT(ARRAY_SIZE(pa_lf_table) ==
+		     (size_t)(LR20XX_LF_MAX_PWR - LR20XX_LF_MIN_PWR + 1),
+	     "PA LF table must span [LR20XX_LF_MIN_PWR, LR20XX_LF_MAX_PWR] "
+	     "exactly — an off-by-one here silently mis-sets every power level");
+
+/* DS §7.4.1: "Only values from 16-31 are authorized… If the HF PA is not used,
+ * set the parameter to 16 (default)."  Semtech's BSP writes 16 here too. */
 #define LR20XX_PA_HF_DUTY_CYCLE_UNUSED 16
 
 static void lr20xx_get_pa_cfg_for_power(int8_t power_dbm,
 					lr20xx_radio_common_pa_cfg_t *pa,
-					int8_t *pa_val_out)
+					int8_t *half_power_out)
 {
 	if (power_dbm < LR20XX_LF_MIN_PWR) {
 		power_dbm = LR20XX_LF_MIN_PWR;
@@ -384,7 +500,7 @@ static void lr20xx_get_pa_cfg_for_power(int8_t power_dbm,
 	pa->pa_lf_slices     = e->pa_lf_slices;
 	pa->pa_hf_duty_cycle = LR20XX_PA_HF_DUTY_CYCLE_UNUSED;
 
-	*pa_val_out = e->pa_val;
+	*half_power_out = e->half_power;
 }
 
 static lr20xx_status_t lr20xx_calibrate_front_end(void *ctx, uint32_t freq_hz);
@@ -513,11 +629,20 @@ static void lr20xx_hardware_reset(struct lr20xx_data *data,
 	lr20xx_system_clear_errors(ctx);
 	lr20xx_system_clear_irq_status(ctx, LR20XX_SYSTEM_IRQ_ALL_MASK);
 
+	/* No delay after Calibrate — DS §6.4.1: "Upon completion of the
+	 * calibration, the chip automatically enters Standby RC mode", BUSY
+	 * deasserts, and the next command's check_device_ready() waits on it. */
 	lr20xx_system_calibrate(ctx, 0x6F);
-	k_msleep(5);
 
-	/* Front-end calibration — single LF frequency (RadioLib approach) */
-	lr20xx_calibrate_front_end(ctx, 868000000);
+	/* The reset wiped the front-end calibration — DS §6.4.2: "There is no
+	 * Front End calibration performed after a POR or cold start".  Every
+	 * caller of this function is post-config (the DIO1 stuck-recovery path
+	 * and three standby-failure paths), and lr20xx_start_rx() follows
+	 * immediately, so calibrate for the frequency actually about to be
+	 * received on.  Same shape as lr20xx_reset_agc(). */
+	if (data->configured) {
+		lr20xx_calibrate_front_end(ctx, data->modem_cfg.frequency);
+	}
 
 	data->rx_boost_applied = false;
 
@@ -537,20 +662,100 @@ static void lr20xx_hardware_reset(struct lr20xx_data *data,
  */
 #define LR20XX_MAX_CAL_ATTEMPTS 10
 
+/* Calibrate the front end for one frequency — always the operating frequency.
+ *
+ * One LF calibration covers ±20 MHz (Semtech's reference BSP,
+ * ral_lr20xx_bsp_get_front_end_calibration_cfg(); the datasheet never states
+ * the tolerance, and the "±50 MHz" this file used to quote is the HF figure).
+ * Semtech's BSP calibrates fixed band centres because ral_lr20xx_init() runs
+ * before the radio is tuned — we do not have that problem: every site that
+ * needs a calibration already knows the frequency it is about to receive on.
+ *
+ * The three call sites, and why one frequency is sufficient at each:
+ *   lr20xx_lora_config()   — it is the argument.  This is the calibration that
+ *                            matters; DS §6.4.2 keeps it on chip across every
+ *                            sleep this driver issues, so it holds until the
+ *                            frequency changes (which comes back through here)
+ *                            or the chip is reset.
+ *   lr20xx_hardware_reset()— data->modem_cfg.frequency.  The reset wiped the
+ *                            calibration (DS §6.4.2: none is performed after a
+ *                            POR or cold start) and lr20xx_start_rx() follows
+ *                            immediately, so this one is load-bearing.
+ *   lr20xx_reset_agc()     — data->modem_cfg.frequency, already.
+ *
+ * lr20xx_hw_init() deliberately does NOT calibrate: it is called only from
+ * lora_config(), which calibrates at the operating frequency ~27 ms later with
+ * no RX in between.
+ *
+ * Unlike the SX126x and LR11xx, whose CalibrateImage takes a freq1/freq2 BAND
+ * with datasheet-prescribed edges (SX126x DS §13.1.12), CalibFE takes up to
+ * three independent point frequencies and there is no band table — DS §6.4.2
+ * even documents "if no frequency is given as argument, the Front End is
+ * calibrated for the current RF frequency".  Passing the operating frequency is
+ * the intended usage here, not an abuse of it.  The failure mode is loud rather
+ * than silent too: an uncovered RX frequency is refused outright with
+ * RXFREQ_NO_FE_CAL_ERR (error bit 9), not quietly received with poor image
+ * rejection.
+ *
+ * The argument is quantised to 4 MHz and 869.618 MHz is not on that grid, so
+ * "calibrate at the operating frequency" is not literally expressible — you get
+ * one of its two neighbours.  Which one is not obvious: the SDK helper rounds
+ * UP (lr20xx_radio_common.c: ceil(freq_hz / 4 MHz)) where the chip's own
+ * no-argument default truncates DOWN, so the two disagree by a step.
+ *
+ * Rather than bet on one, calibrate BOTH neighbours, nearest first — 869.618
+ * gets 868 MHz in slot 1 and 872 MHz in slot 2.  The operating frequency is
+ * then bracketed, so whatever the chip's (undocumented) rule for deciding a
+ * stored calibration is "available" for a given RF frequency, it cannot end up
+ * using one further away than a single-slot choice would have forced.  We have
+ * three slots and were using one.
+ *
+ * This costs one extra CalibFE (~9 ms) and only on cold paths — lora_config(),
+ * hardware_reset(), reset_agc().  Nothing on the Tx/Rx path, which C5 took out
+ * of the calibration business entirely.
+ *
+ * Worth being honest about why this exists: the difference between the two
+ * neighbours is expected to be small — CalibFE corrects image rejection (IQ
+ * comp) and ADC offset, which bear on blocker immunity far more than on the
+ * thermal sensitivity floor — but "small" is an expectation, not a measurement.
+ * The datasheet states no tolerance at all, and the ±20 MHz above is a BSP
+ * comment that reads like an acceptance window rather than a flat-quality
+ * guarantee.  Bracketing costs ~9 ms on paths that run once, which is cheaper
+ * than being wrong. */
 static lr20xx_status_t lr20xx_calibrate_front_end(void *ctx, uint32_t freq_hz)
 {
-	/* All three frequency slots are sent, the unused two as 0, so CalibFE
-	 * gets its full 8-byte form. The datasheet allows both "not providing"
-	 * the extra slots and "setting other calibration frequencies to 0", but
-	 * a short 4-byte command is the one thing that lines up with the
-	 * CMD_PERR observed across exactly this call, with a clean error word
-	 * and the chip in STBY_RC (so not a mode violation). Zeroed slots are
-	 * documented as no-ops. */
+	/* DS §6.4.2: "Frequencies are given in 4MHz steps (Ex: 900MHz ->
+	 * 0x00E1)".  Passing an exact multiple makes the SDK's ceil a no-op, so
+	 * each slot lands on precisely the grid point intended. */
+	const uint32_t step = 4000000U;
+	uint32_t lo = (freq_hz / step) * step;
+	uint32_t hi = ((freq_hz + step - 1U) / step) * step;
+	uint32_t first = lo, second = 0;
+
+	if (lo != hi) {
+		/* Nearest neighbour first: it goes in slot 1, which is also the
+		 * slot the chip's no-argument default would overwrite. */
+		if ((freq_hz - lo) <= (hi - freq_hz)) {
+			first = lo;
+			second = hi;
+		} else {
+			first = hi;
+			second = lo;
+		}
+	}
+
+	/* All three frequency slots are always sent, unused ones as 0, so
+	 * CalibFE gets its full 8-byte form. The datasheet allows both "not
+	 * providing" the extra slots and "setting other calibration frequencies
+	 * to 0", but a short 4-byte command is the one thing that lines up with
+	 * the CMD_PERR observed across exactly this call, with a clean error
+	 * word and the chip in STBY_RC (so not a mode violation). Zeroed slots
+	 * are documented as no-ops (DS §6.4.2). */
 	lr20xx_radio_common_front_end_calibration_value_t fe_cal[3] = {
 		{ .rx_path = LR20XX_RADIO_COMMON_RX_PATH_LF,
-		  .frequency_in_hertz = freq_hz },
+		  .frequency_in_hertz = first },
 		{ .rx_path = LR20XX_RADIO_COMMON_RX_PATH_LF,
-		  .frequency_in_hertz = 0 },
+		  .frequency_in_hertz = second },
 		{ .rx_path = LR20XX_RADIO_COMMON_RX_PATH_LF,
 		  .frequency_in_hertz = 0 },
 	};
@@ -566,8 +771,14 @@ static lr20xx_status_t lr20xx_calibrate_front_end(void *ctx, uint32_t freq_hz)
 
 		if (rc == LR20XX_STATUS_OK &&
 		    !(errs & LR20XX_SYSTEM_ERRORS_SRC_SATURATION_CALIB_MASK)) {
-			LOG_DBG("FE cal(%u Hz) ok on attempt %d (errors=0x%04x)",
-				freq_hz, i + 1, errs);
+			/* Report the grid points actually programmed, not just
+			 * the operating frequency — the two differ, and a
+			 * bring-up log that hides that is how the 4 MHz
+			 * quantisation goes unnoticed. */
+			LOG_DBG("FE cal(%u Hz -> %u/%u MHz) ok on attempt %d "
+				"(errors=0x%04x)", freq_hz,
+				first / 1000000U, second / 1000000U,
+				i + 1, errs);
 			return LR20XX_STATUS_OK;
 		}
 
@@ -648,15 +859,13 @@ static void lr20xx_apply_side_detectors(struct lr20xx_data *data, bool enable)
 	bw_hz = (uint32_t)(bw_enum_to_khz(data->modem_cfg.bandwidth) * 1000.0f);
 
 	for (uint8_t i = 0; i < n; i++) {
-		uint32_t symbol_time_us = bw_hz ?
-			((1U << data->side_det_sf[i]) * 1000000U) / bw_hz : 0;
-
 		det[i].sf = (lr20xx_radio_lora_sf_t)data->side_det_sf[i];
-		/* Same LDRO rule as the main modem config — per side detector,
-		 * since each runs at its own SF and a longer symbol crosses the
-		 * 16.38 ms threshold before the main one does. */
-		det[i].ppm = (symbol_time_us > 16380) ? LR20XX_RADIO_LORA_PPM_1_4
-						      : LR20XX_RADIO_LORA_NO_PPM;
+		/* Same LDRO rule as the main modem config — evaluated per side
+		 * detector, since each runs at its own SF and a longer symbol
+		 * crosses the 16.38 ms threshold before the main one does. */
+		det[i].ppm = lr20xx_ldro_enabled(data->side_det_sf[i], bw_hz)
+				     ? LR20XX_RADIO_LORA_PPM_1_4
+				     : LR20XX_RADIO_LORA_NO_PPM;
 		det[i].iq = data->modem_cfg.iq_inverted
 				? LR20XX_RADIO_LORA_IQ_INVERTED
 				: LR20XX_RADIO_LORA_IQ_STANDARD;
@@ -701,14 +910,23 @@ static void lr20xx_apply_modem_config(struct lr20xx_data *data,
 	LOG_DBG("modem_cfg: set_pkt_type=%d", rc);
 	CHECK_CMD(ctx, "set_pkt_type");
 
-	/* Front-end calibration paired with set_rf_freq, exactly like RadioLib's
-	 * setFrequency() (cal THEN set, together).  One cal covers ±50MHz so the
-	 * bin is not the issue — the cal just has to be (re)applied here, right
-	 * before the frequency is set and RX/TX starts.  Doing it only once at
-	 * config time left the chip reporting RXFREQ_NO_FE_CAL (0x0200) at RX and
-	 * refusing TX (PERR). */
-	lr20xx_calibrate_front_end(ctx, mc->frequency);
-
+	/* No front-end calibration here — deliberately.  This function runs
+	 * three times per transmitted packet (send_async, the TX_DONE handler's
+	 * start_rx, and the C++ TX-wait thread's startReceive), and CalibFE is
+	 * clear_errors + CalibFE + get_errors, each with a BUSY handshake.
+	 *
+	 * DS §6.4.2: the calibration values live on chip and survive every sleep
+	 * this driver issues (all are with retention).  Semtech's own
+	 * ral_lr20xx_init() calibrates once at init and never on the Tx/Rx path.
+	 * The cal that matters is in lr20xx_lora_config(), at the operating
+	 * frequency, and lr20xx_hardware_reset() redoes it when a chip reset
+	 * throws it away.
+	 *
+	 * The RXFREQ_NO_FE_CAL (0x0200) that motivated calibrating on every
+	 * entry came from hw_init calibrating a hardcoded 868 MHz — which covers
+	 * only 848–888 MHz, so a US node at ~906 MHz was out of the window.
+	 * Calibrating only for the frequency actually in use removes the cause;
+	 * this was treating the symptom. */
 	rc = lr20xx_radio_common_set_rf_freq(ctx, mc->frequency);
 	LOG_DBG("modem_cfg: set_rf_freq(%u)=%d", mc->frequency, rc);
 	CHECK_CMD(ctx, "set_rf_freq");
@@ -723,19 +941,15 @@ static void lr20xx_apply_modem_config(struct lr20xx_data *data,
 	data->rx_boost_applied = data->rx_boost_enabled;
 	CHECK_CMD(ctx, "set_rx_path");
 
-	/* PPM offset is this chip's name for LDRO and occupies the same wire
-	 * field. The Semtech "recommended offset" helper only ever enables it
-	 * for SF11/SF12, which disagrees with the rest of the mesh below
-	 * 125 kHz — every other stack switches on symbol time > 16.38 ms. */
 	uint32_t bw_hz = (uint32_t)(bw_enum_to_khz(mc->bandwidth) * 1000.0f);
-	uint32_t symbol_time_us = ((1U << (uint8_t)mc->datarate) * 1000000U) / bw_hz;
 
 	lr20xx_radio_lora_mod_params_t mod = {
 		.sf  = (lr20xx_radio_lora_sf_t)mc->datarate,
 		.bw  = bw_enum_to_lr20xx(mc->bandwidth),
 		.cr  = cr_enum_to_lr20xx(mc->coding_rate),
-		.ppm = (symbol_time_us > 16380) ? LR20XX_RADIO_LORA_PPM_1_4
-					        : LR20XX_RADIO_LORA_NO_PPM,
+		.ppm = lr20xx_ldro_enabled((uint8_t)mc->datarate, bw_hz)
+			       ? LR20XX_RADIO_LORA_PPM_1_4
+			       : LR20XX_RADIO_LORA_NO_PPM,
 	};
 	rc = lr20xx_radio_lora_set_modulation_params(ctx, &mod);
 	LOG_DBG("modem_cfg: set_mod(SF%d BW%d CR%d PPM%d)=%d",
@@ -768,21 +982,22 @@ static void lr20xx_apply_modem_config(struct lr20xx_data *data,
 	CHECK_CMD(ctx, "set_syncword");
 
 	if (tx_mode) {
-		/* PA config + TX params from RadioLib's known-good LF table.
-		 * pa_val is a PA calibration value (NOT dBm/half-dBm). */
+		/* PA config + TX params from Semtech's reference LF table.
+		 * DS §7.4.3: SetPaConfig must precede SetTxParams. */
 		lr20xx_radio_common_pa_cfg_t pa;
-		int8_t pa_val;
+		int8_t half_power;
 
-		lr20xx_get_pa_cfg_for_power(mc->tx_power, &pa, &pa_val);
+		lr20xx_get_pa_cfg_for_power(mc->tx_power, &pa, &half_power);
 		rc = lr20xx_radio_common_set_pa_cfg(ctx, &pa);
 		LOG_DBG("modem_cfg: set_pa_cfg(sel=%d mode=%d duty=%d slices=%d hf_duty=%d)=%d",
 			pa.pa_sel, pa.pa_lf_mode, pa.pa_lf_duty_cycle,
 			pa.pa_lf_slices, pa.pa_hf_duty_cycle, rc);
 
-		rc = lr20xx_radio_common_set_tx_params(ctx, pa_val,
+		rc = lr20xx_radio_common_set_tx_params(ctx, half_power,
 						  LR20XX_RADIO_COMMON_RAMP_48_US);
-		LOG_DBG("modem_cfg: set_tx_params(pa_val=%d ramp=0x05)=%d",
-			pa_val, rc);
+		LOG_DBG("modem_cfg: set_tx_params(%d half-dBm = %d.%d dBm, ramp=0x05)=%d",
+			half_power, half_power / 2,
+			(half_power & 1) ? 5 : 0, rc);
 	}
 
 	/* Only the events the DIO1 handler actually acts on. PREAMBLE_DETECTED
@@ -964,6 +1179,9 @@ static void lr20xx_start_rx(struct lr20xx_data *data,
 
 	data->in_rx_mode = true;
 	data->tx_active = false;
+	/* Fresh RX cycle: any preamble/header timestamps belong to the old one
+	 * and the bulk clear above just dropped the bits they were tracking. */
+	lr20xx_reset_rx_busy_signals(data);
 
 	/* DEBUG: dump state AFTER SET_RX — should show mode=4 (RX). The
 	 * "modem-RX" dump inside apply_modem_config is taken before SET_RX. */
@@ -977,6 +1195,7 @@ static void lr20xx_restart_rx(struct lr20xx_data *data)
 	void *ctx = &data->hal_ctx;
 
 	lr20xx_system_clear_irq_status(ctx, LR20XX_SYSTEM_IRQ_ALL_MASK);
+	lr20xx_reset_rx_busy_signals(data);
 
 	/* LBT CAD switches side detectors off (their SF constraint is the
 	 * inverse of the Rx one), so restore them on the way back into RX.
@@ -1024,6 +1243,39 @@ static void lr20xx_restart_rx(struct lr20xx_data *data)
 	}
 
 	if (data->rx_duty_cycle_enabled) {
+		/* Stand the cycle down before re-arming it.  SetRxDutyCycle is
+		 * refused while the previous cycle is still running, and a
+		 * header error does not terminate that cycle — DS §6.3.8 ends
+		 * the loop on packet *reception*, which a header error is not.
+		 * So the re-arm was rejected, the rejection latched CMD_ERROR,
+		 * CMD_ERROR held DIO1 high, the work handler found no event it
+		 * recognised and ran the safety restart, which was refused
+		 * again: five strikes and the driver hardware-reset itself.
+		 * Observed on the X1 2026-08-12, ~88 ms of outage triggered by
+		 * one noise header error:
+		 *
+		 *   RX error: CRC=0 HDR=1 RXDONE=0
+		 *   RX duty cycle re-armed: rx=35ms sleep=25ms (cycle=60ms)
+		 *   command REJECTED after restart_rx set_rx: cmd=0
+		 *   DIO1 safety: no IRQ handled (0x00020000 rc=0) ...
+		 *   DIO1 stuck HIGH for 5 cycles — hardware reset
+		 *
+		 * Clearing CMD_ERROR inside apply_rx_duty_cycle() cannot help:
+		 * the error is raised *by* the command it precedes.  DS §6.3.8
+		 * prescribes the standby directly — "A SetStandby command
+		 * should also be sent, to avoid the race conditions" — which is
+		 * what dc_takeover() already does on the TX path.  Order
+		 * matters: standby first, then apply_rx_duty_cycle()'s
+		 * clear_errors + clear(CMD_ERROR), then the re-arm.
+		 *
+		 * Near-free.  The re-arms that already succeed do so because
+		 * the chip is in STDBY_RC (its RxTxFallbackMode) — standby into
+		 * the current state is a register write, not a mode change.
+		 * When it does tear down a live Rx that is ~41 us (DS Table
+		 * 3-23 TSXORC, the nearest tabulated teardown), and the 115 us
+		 * TSRCRX re-entry is paid either way. */
+		lr20xx_system_set_standby_mode(ctx,
+					       LR20XX_SYSTEM_STANDBY_MODE_RC);
 		lr20xx_apply_rx_duty_cycle(data);
 	} else {
 		lr20xx_radio_common_set_rx_with_timeout_in_rtc_step(
@@ -1144,7 +1396,17 @@ static void lr20xx_dio1_work_handler(struct k_work *work)
 			rx_restarted = true;
 
 			/* When SNR < 0, use signal RSSI for a more
-			 * accurate reading on weak links. */
+			 * accurate reading on weak links.
+			 *
+			 * This branch is in fact DEAD, and deliberately left
+			 * that way.  Per the vendor struct doc
+			 * (lr20xx_radio_lora_types.h), a negative snr_pkt_raw
+			 * gives rssi_signal = rssi_pkt + snr/4, i.e. strictly
+			 * lower — so the `>` can never hold.  The LR11xx driver
+			 * carries the identical dead branch.  Removing it here
+			 * alone would shift reported RSSI on this radio relative
+			 * to the others (nothing would change, but the next
+			 * reader would assume it had); fix both or neither. */
 			int16_t rssi = pkt_stat.rssi_pkt_in_dbm;
 			int8_t snr = ((int8_t)pkt_stat.snr_pkt_raw + 2) >> 2;
 
@@ -1172,6 +1434,15 @@ static void lr20xx_dio1_work_handler(struct k_work *work)
 	/* ── CAD done ── */
 	if (irq & LR20XX_SYSTEM_IRQ_CAD_DONE) {
 		bool detected = (irq & LR20XX_SYSTEM_IRQ_CAD_DETECTED) != 0;
+
+		/* BENCH INSTRUMENTATION: stamp as early as possible in the
+		 * handler — everything after this point is the host round-trip
+		 * being measured.  Only a free channel leads to a transmit, so
+		 * only that case is worth stamping. */
+		data->cad_done_cycles = detected ? 0U : k_cycle_get_32();
+		if (!detected && data->cad_done_cycles == 0U) {
+			data->cad_done_cycles = 1U;   /* 0 is the "none" sentinel */
+		}
 
 		LOG_DBG("CAD done: %s", detected ? "activity" : "free");
 		data->cad_active = false;
@@ -1310,12 +1581,11 @@ static int lr20xx_lora_config(const struct device *dev,
 	memcpy(&data->modem_cfg, config, sizeof(*config));
 	data->configured = true;
 
-	/* Image calibration at operating frequency */
+	/* Front-end calibration at the operating frequency.  This is the ONE
+	 * place it belongs on a configured radio: DS §6.4.2 keeps the values on
+	 * chip across every sleep this driver issues, and Semtech's own
+	 * ral_lr20xx_init() calibrates at init and never on the Tx/Rx path. */
 	k_mutex_lock(&data->spi_mutex, K_FOREVER);
-
-	/* FE cal raw value: ceil(freq / 4MHz), bit 15 = HF flag */
-	uint16_t fe_raw = (uint16_t)((config->frequency + 3999999U) / 4000000U);
-	LOG_DBG("config: FE cal freq=%uHz raw=0x%04x", config->frequency, fe_raw);
 
 	lr20xx_calibrate_front_end(&data->hal_ctx, config->frequency);
 
@@ -1342,7 +1612,9 @@ static uint32_t lr20xx_lora_airtime(const struct device *dev,
 	uint8_t cr = (uint8_t)mc->coding_rate + 4;
 
 	float ts = (float)(1 << sf) / bw;
-	int de = (sf >= 11 && bw <= 125000.0f) ? 1 : 0;
+	/* Must be the predicate the modem is actually programmed with, not an
+	 * SF-based approximation of it — see lr20xx_ldro_enabled(). */
+	int de = lr20xx_ldro_enabled(sf, (uint32_t)bw) ? 1 : 0;
 	float n_payload = 8.0f + fmaxf(
 		ceilf((8.0f * data_len - 4.0f * sf + 28.0f + 16.0f) /
 		      (4.0f * (sf - 2.0f * de))) * cr,
@@ -1365,8 +1637,11 @@ static uint32_t lr20xx_cad_timeout_ms(struct lr20xx_data *data)
 {
 	struct lora_modem_config *mc = &data->modem_cfg;
 	uint8_t sf = (uint8_t)mc->datarate;
-	uint8_t symb_nb = mc->cad.symbol_num ?
-			  (uint8_t)mc->cad.symbol_num : 2;
+	/* Shared helper so the budget is sized for the window actually
+	 * programmed — this used to default to 2 symbols where lr20xx_do_cad()
+	 * defaults to 4, which would have under-budgeted the wait if
+	 * buildModemConfig() ever stopped setting symbol_num explicitly. */
+	uint8_t symb_nb = lr20xx_cad_symb_nb(mc);
 	uint32_t bw_hz = (uint32_t)(bw_enum_to_khz(mc->bandwidth) * 1000.0f);
 
 	if (bw_hz == 0 || sf < 5 || sf > 12) {
@@ -1378,6 +1653,151 @@ static uint32_t lr20xx_cad_timeout_ms(struct lr20xx_data *data)
 	uint32_t ms = ((symb_nb + 1U) * tsym_us) / 1000U + 100U;
 
 	return MAX(ms, 200U);
+}
+
+/* ── BENCH EXPERIMENT: hardware CAD_LBT ─────────────────────────────────
+ *
+ * DS Table 6-18, CadExitMode = 0x10: the chip runs the CAD and, if the channel
+ * is clear, goes straight to Tx with no host round-trip — removing the
+ * IRQ -> work queue -> semaphore -> mesh thread -> apply_modem_config -> SetTx
+ * path between "channel measured free" and "carrier up".  Bench 2a measures
+ * exactly that gap; this is the thing that closes it.
+ *
+ * Judge on latency only (A7).  Post-CAD collisions are not separable from any
+ * other loss with CoreScope, so make no collision-rate claim either way.
+ *
+ * Nobody has this working on an LR2021: USP #125 reported its RAL path
+ * non-functional (that entry is absent from the current KNOWN_LIMITATIONS.md,
+ * which is the removal of a warning, not a fix), and RadioLib never implemented
+ * LoRa CAD at all.  FAILURE IS AN ACCEPTABLE OUTCOME — revert and report rather
+ * than sink time into it.
+ *
+ * Requirements the restructure exists to satisfy: the payload must be in the Tx
+ * FIFO and the packet params set BEFORE SetLoraCAD, since the chip transmits
+ * whatever is staged.  DIO1 must stay enabled across the CAD (both CAD_DONE and
+ * TX_DONE arrive on it).  The busy case exits to fallback STDBY_RC, not RX, so
+ * the host still re-arms RX there — that path is unchanged.
+ *
+ * HARD CEILING: cad_timeout is 24 bits of 32 MHz periods = 0x00FFFFFF / 32e6 =
+ * 524 ms of Tx timeout, against the 5000 ms the normal path uses.  Anything
+ * whose airtime does not fit is transmitted the old way instead of being
+ * silently truncated mid-packet.  At SF7/BW250 a 100-byte frame is ~80 us*1000
+ * and fits easily; SF10/BW250 at the same length is ~720 ms and does not.
+ */
+#define LR20XX_CAD_LBT_MAX_TX_TIMEOUT_STEPS 0x00FFFFFFU
+#define LR20XX_CAD_LBT_STEPS_PER_MS         32000U
+
+static int lr20xx_do_cad(struct lr20xx_data *data);
+
+static int lr20xx_lora_send_cad_lbt(const struct device *dev,
+				    uint8_t *buf, uint32_t data_len,
+				    struct k_poll_signal *async,
+				    uint32_t tx_timeout_ms)
+{
+	struct lr20xx_data *data = dev->data;
+	const struct lr20xx_config *cfg = dev->config;
+	void *ctx = &data->hal_ctx;
+	bool was_in_rx = data->in_rx_mode;
+	int ret;
+
+	k_mutex_lock(&data->spi_mutex, K_FOREVER);
+
+	/* Same reasoning as the normal path: async_rx_cb stays registered. */
+	data->in_rx_mode = false;
+	lr20xx_reset_rx_busy_signals(data);
+
+	/* DIO1 deliberately NOT disabled — CAD_DONE and TX_DONE both arrive on
+	 * it, and with CAD_LBT there is no host step in between to re-enable. */
+
+	if (lr20xx_system_set_standby_mode(ctx, LR20XX_SYSTEM_STANDBY_MODE_RC)
+	    != LR20XX_STATUS_OK) {
+		LOG_ERR("CAD_LBT standby failed — HW reset");
+		lr20xx_hardware_reset(data, cfg);
+	}
+
+	lr20xx_system_clear_errors(ctx);
+	lr20xx_system_clear_irq_status(ctx, LR20XX_SYSTEM_IRQ_ALL_MASK);
+
+	/* Full TX-side modem setup must complete before the CAD. */
+	lr20xx_apply_modem_config(data, cfg, true);
+
+	lr20xx_radio_lora_pkt_params_t pkt = {
+		.preamble_len_in_symb = data->modem_cfg.preamble_len,
+		.pkt_mode = LR20XX_RADIO_LORA_PKT_EXPLICIT,
+		.pld_len_in_bytes = (uint8_t)data_len,
+		.crc = data->modem_cfg.packet_crc_disable
+			? LR20XX_RADIO_LORA_CRC_DISABLED
+			: LR20XX_RADIO_LORA_CRC_ENABLED,
+		.iq = data->modem_cfg.iq_inverted
+			? LR20XX_RADIO_LORA_IQ_INVERTED
+			: LR20XX_RADIO_LORA_IQ_STANDARD,
+	};
+	lr20xx_radio_lora_set_packet_params(ctx, &pkt);
+	lr20xx_radio_fifo_write_tx(ctx, buf, (uint16_t)data_len);
+
+	/* Armed before SetLoraCAD: on a clear channel the chip starts Tx
+	 * autonomously, so TX_DONE can land before this function returns. */
+	data->tx_signal = async;
+	data->tx_active = true;
+
+	data->cad_lbt_exit_tx = true;
+	data->cad_lbt_tx_timeout = tx_timeout_ms * LR20XX_CAD_LBT_STEPS_PER_MS;
+
+	k_sem_reset(&data->cad_sem);
+	data->cad_result = -ETIMEDOUT;
+	data->cad_cb = NULL;
+
+	ret = lr20xx_do_cad(data);
+	k_mutex_unlock(&data->spi_mutex);
+
+	if (ret < 0) {
+		goto abort;
+	}
+
+	/* CAD_DONE still fires in CAD_LBT mode; it is how the host learns the
+	 * outcome.  Budget = the CAD window plus the transmit it may have
+	 * already started. */
+	ret = k_sem_take(&data->cad_sem,
+			 K_MSEC(lr20xx_cad_timeout_ms(data) + tx_timeout_ms));
+	if (ret == -EAGAIN) {
+		LOG_WRN("CAD_LBT: no CAD_DONE within budget — falling back");
+		data->cad_active = false;
+		ret = -EIO;
+		goto abort;
+	}
+
+	if (data->cad_result > 0) {
+		/* Busy: the chip is parked in the STDBY_RC fallback and never
+		 * transmitted.  Nothing raised tx_signal, so clear the TX state
+		 * and re-arm RX exactly as the classic busy path does. */
+		LOG_DBG("CAD_LBT: channel busy");
+		data->tx_active = false;
+		data->tx_signal = NULL;
+		if (was_in_rx || data->rx_duty_cycle_enabled) {
+			k_mutex_lock(&data->spi_mutex, K_FOREVER);
+			lr20xx_start_rx(data, cfg);
+			k_mutex_unlock(&data->spi_mutex);
+		}
+		return -EBUSY;
+	}
+
+	/* Clear: the chip is transmitting (or has already finished).  TX_DONE
+	 * drives the rest, same as the normal path. */
+	LOG_INF("CAD_LBT: chip took CAD->TX itself (tx_timeout=%u ms)",
+		tx_timeout_ms);
+	return 0;
+
+abort:
+	data->tx_active = false;
+	data->tx_signal = NULL;
+	data->cad_lbt_exit_tx = false;
+	data->cad_lbt_tx_timeout = 0;
+	if (was_in_rx || data->rx_duty_cycle_enabled) {
+		k_mutex_lock(&data->spi_mutex, K_FOREVER);
+		lr20xx_start_rx(data, cfg);
+		k_mutex_unlock(&data->spi_mutex);
+	}
+	return ret;
 }
 
 static int lr20xx_lora_send_async(const struct device *dev,
@@ -1395,6 +1815,23 @@ static int lr20xx_lora_send_async(const struct device *dev,
 	/* Own the chip for the whole transmit, LBT CAD included — the CAD below
 	 * commands it too, so this has to come first. */
 	lr20xx_dc_takeover(data);
+
+	/* BENCH EXPERIMENT: hand CAD->TX to the chip where the transmit fits
+	 * inside cad_timeout's 524 ms ceiling.  Above it, fall through to the
+	 * classic two-step path rather than truncate the packet. */
+	if (data->modem_cfg.cad.mode == LORA_CAD_MODE_LBT) {
+		uint32_t airtime_ms = lr20xx_lora_airtime(dev, data_len);
+		uint32_t tx_timeout_ms = airtime_ms + (airtime_ms / 4U) + 50U;
+
+		if ((uint64_t)tx_timeout_ms * LR20XX_CAD_LBT_STEPS_PER_MS <=
+		    LR20XX_CAD_LBT_MAX_TX_TIMEOUT_STEPS) {
+			return lr20xx_lora_send_cad_lbt(dev, buf, data_len,
+							async, tx_timeout_ms);
+		}
+		LOG_DBG("CAD_LBT: airtime %u ms needs %u ms Tx timeout, over the "
+			"524 ms cad_timeout ceiling — using host CAD->TX",
+			airtime_ms, tx_timeout_ms);
+	}
 
 	/* LBT: perform blocking CAD before transmitting.  On CAD-busy, restore
 	 * RX in-driver before returning -EBUSY so the C++ layer doesn't have
@@ -1431,8 +1868,18 @@ static int lr20xx_lora_send_async(const struct device *dev,
 
 	k_mutex_lock(&data->spi_mutex, K_FOREVER);
 
-	data->async_rx_cb = NULL;
+	/* async_rx_cb is deliberately NOT cleared here.  On TX_DONE the work
+	 * handler calls lr20xx_start_rx(), which puts the chip back on air
+	 * before the C++ TX-wait thread has re-registered the callback — with
+	 * the callback nulled, every packet arriving in that window (thread
+	 * wake-up latency plus a full apply_modem_config: milliseconds, and
+	 * exactly when neighbours answer a flood) was read out of the FIFO and
+	 * dropped without a counter or a log.  Clearing it buys nothing:
+	 * in_rx_mode = false and tx_active = true already gate the RX paths.
+	 * The cb == NULL cancel paths in lora_recv_async / recv_duty_cycle are
+	 * the legitimate places to clear it. */
 	data->in_rx_mode = false;
+	lr20xx_reset_rx_busy_signals(data);
 
 	lr20xx_hal_disable_dio1_irq(&data->hal_ctx);
 
@@ -1476,6 +1923,19 @@ static int lr20xx_lora_send_async(const struct device *dev,
 
 	data->tx_signal = async;
 	data->tx_active = true;
+
+	/* BENCH INSTRUMENTATION: CAD_DONE -> carrier-up, the gap CAD_LBT would
+	 * close.  Reported in microseconds; k_cycle_get_32() wraps, but the
+	 * unsigned subtraction is correct across one wrap and the interval is
+	 * milliseconds against a 32-bit counter, so a double wrap is not
+	 * reachable here. */
+	if (data->cad_done_cycles != 0U) {
+		uint32_t d = k_cycle_get_32() - data->cad_done_cycles;
+
+		LOG_INF("CAD->TX latency: %u us",
+			(unsigned)k_cyc_to_us_near32(d));
+		data->cad_done_cycles = 0U;
+	}
 
 	lr20xx_radio_common_set_tx(ctx, 5000);
 
@@ -1590,6 +2050,67 @@ int16_t lr20xx_get_rssi_inst(const struct device *dev)
 	return rssi;
 }
 
+/* Grace period for the PREAMBLE_DETECTED -> SYNC_WORD_HEADER_VALID gap,
+ * SF/BW-aware — same formula as the LR11xx and SX126x drivers:
+ * (preamble_len + 8) symbols covers worst-case preamble remainder + sync word
+ * + header decode with margin. */
+static uint32_t lr20xx_preamble_grace_ms(struct lr20xx_data *data)
+{
+	uint8_t sf = (uint8_t)data->modem_cfg.datarate;
+	uint32_t bw_hz = (uint32_t)(bw_enum_to_khz(data->modem_cfg.bandwidth) * 1000.0f);
+	uint16_t preamble = data->modem_cfg.preamble_len;
+
+	if (bw_hz == 0 || sf < 5 || sf > 12) {
+		return 1000;  /* safe default ~1 s if config is uninitialised */
+	}
+	uint64_t us = ((uint64_t)(preamble + 8U) << sf) * 1000000ULL / bw_hz;
+
+	return (uint32_t)((us + 999U) / 1000U);
+}
+
+/* Upper bound on the payload phase: airtime of a maximum-length (255 byte)
+ * explicit-header packet at the current SF/BW, worst-case coding rate 4/8,
+ * plus margin.  Bounds the lifetime of the SYNC_WORD_HEADER_VALID busy state.
+ *
+ * Why the header bit needs a deadline at all: it is cleared only by the
+ * terminal DIO1 event's bulk clear or an RX (re)start, and continuous RX
+ * (SetRx 0xFFFFFF) has no symbol timer, so neither is guaranteed to arrive.
+ * A header whose packet never completes would pin the TX gate true forever and
+ * silently mute the node until reboot.  Same reasoning and same formula as
+ * lr11xx_max_payload_ms() and sx126x_max_payload_ms() (patch 0013).
+ *
+ * Deliberately generous — this is a stuck-state safety net, not a timing
+ * mechanism, and releasing early would let TX start on top of a packet that is
+ * still arriving.  LDRO (DE) is pinned at 1 because that yields the larger
+ * symbol count, i.e. the safer bound. */
+static uint32_t lr20xx_max_payload_ms(struct lr20xx_data *data)
+{
+	uint8_t sf = (uint8_t)data->modem_cfg.datarate;
+	uint32_t bw_hz = (uint32_t)(bw_enum_to_khz(data->modem_cfg.bandwidth) * 1000.0f);
+
+	if (bw_hz == 0 || sf < 5 || sf > 12) {
+		return 30000;  /* safe default if config is uninitialised */
+	}
+
+	/* Semtech payload-symbol count with PL=255, CRC on, explicit header,
+	 * CR = 4/8 (coded_bits = 8), DE = 1:
+	 *   n = 8 + ceil((8*PL - 4*SF + 28 + 16) / (4*(SF - DE))) * 8
+	 * SF5/SF6 use SF-1 >= 4 so the divisor is always non-zero. */
+	uint32_t numer = 8U * 255U + 28U + 16U;
+	uint32_t denom = 4U * (uint32_t)(sf - 1U);
+
+	if (numer > 4U * (uint32_t)sf) {
+		numer -= 4U * (uint32_t)sf;
+	}
+	uint32_t n_sym = 8U + ((numer + denom - 1U) / denom) * 8U;
+
+	/* n_sym * 2^sf * 1000000 / bw_hz -> us, then +25% and +100 ms margin. */
+	uint64_t us = ((uint64_t)n_sym << sf) * 1000000ULL / bw_hz;
+	uint32_t ms = (uint32_t)((us + 999U) / 1000U);
+
+	return ms + (ms / 4U) + 100U;
+}
+
 bool lr20xx_is_receiving(const struct device *dev)
 {
 	struct lr20xx_data *data = dev->data;
@@ -1611,17 +2132,78 @@ bool lr20xx_is_receiving(const struct device *dev)
 	}
 
 	/* Use non-destructive get_status to check for preamble/header
-	 * without racing the DIO1 work handler. */
+	 * without racing the DIO1 work handler.  lr20xx_system_get_status()
+	 * goes through lr20xx_hal_direct_read and clears nothing — the poll
+	 * path MUST stay that way.  The only writes below are the two
+	 * deliberate releases. */
 	if (k_mutex_lock(&data->spi_mutex, K_NO_WAIT) != 0) {
 		return false;
 	}
 
 	lr20xx_system_irq_mask_t irq = 0;
 	lr20xx_system_get_status(&data->hal_ctx, NULL, NULL, &irq);
-	k_mutex_unlock(&data->spi_mutex);
 
-	return (irq & (LR20XX_SYSTEM_IRQ_PREAMBLE_DETECTED |
-		       LR20XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID)) != 0;
+	/* Header landed: payload phase in progress.  The bit stays latched
+	 * until the terminal DIO1 event bulk-clears it, so this covers the
+	 * whole packet — bounded by a payload deadline, because in continuous
+	 * RX that terminal event is not guaranteed to arrive and a header that
+	 * never completes would otherwise mute TX until reboot. */
+	if (irq & LR20XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID) {
+		uint32_t now = k_uptime_get_32();
+		uint32_t seen = data->header_seen_at_ms;
+
+		if (seen == 0) {
+			data->header_seen_at_ms = (now == 0) ? 1U : now;
+			k_mutex_unlock(&data->spi_mutex);
+			return true;
+		}
+		if ((now - seen) < lr20xx_max_payload_ms(data)) {
+			k_mutex_unlock(&data->spi_mutex);
+			return true;
+		}
+		LOG_WRN("RX header latched %u ms with no packet, releasing TX gate",
+			now - seen);
+		lr20xx_system_clear_irq_status(&data->hal_ctx,
+					       LR20XX_SYSTEM_IRQ_PREAMBLE_DETECTED |
+					       LR20XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID |
+					       LR20XX_SYSTEM_IRQ_LORA_HEADER_ERROR);
+		lr20xx_reset_rx_busy_signals(data);
+		k_mutex_unlock(&data->spi_mutex);
+		return false;
+	}
+
+	/* PREAMBLE_DETECTED with SF-aware grace.  Within grace, keep reporting
+	 * busy so a real packet has time to land its header; after grace with
+	 * no header, assume noise or a foreign sync word, clear the bit and
+	 * release TX.  (Unlike the LR11xx, CMD_ERROR is deliberately not in the
+	 * clear mask: that chip sets it on any ClearIrq whose mask excludes it,
+	 * a quirk with no LR20xx equivalent — this driver already issues
+	 * partial-mask clears elsewhere without provoking one, and folding it in
+	 * here would hide genuine command rejections.) */
+	if (irq & LR20XX_SYSTEM_IRQ_PREAMBLE_DETECTED) {
+		uint32_t now = k_uptime_get_32();
+		uint32_t seen = data->preamble_seen_at_ms;
+
+		if (seen == 0) {
+			data->preamble_seen_at_ms = (now == 0) ? 1U : now;
+			k_mutex_unlock(&data->spi_mutex);
+			return true;
+		}
+		if ((now - seen) < lr20xx_preamble_grace_ms(data)) {
+			k_mutex_unlock(&data->spi_mutex);
+			return true;
+		}
+		lr20xx_system_clear_irq_status(&data->hal_ctx,
+					       LR20XX_SYSTEM_IRQ_PREAMBLE_DETECTED);
+		lr20xx_reset_rx_busy_signals(data);
+		k_mutex_unlock(&data->spi_mutex);
+		return false;
+	}
+
+	/* No preamble, no header: nothing in flight. */
+	lr20xx_reset_rx_busy_signals(data);
+	k_mutex_unlock(&data->spi_mutex);
+	return false;
 }
 
 int lr20xx_configure_side_detectors(const struct device *dev,
@@ -1637,15 +2219,28 @@ int lr20xx_configure_side_detectors(const struct device *dev,
 		return -EINVAL;
 	}
 
-	/* Constraints are the datasheet's, via the vendor driver header:
+	/* Constraints are the datasheet's:
 	 *   - normal Rx: the main SF must be lower than every side SF
 	 *   - all SFs distinct
 	 *   - highest - lowest <= 4 (main SF counts, it is one of the set)
-	 *   - BW >= 500 kHz caps the count at 2, or 1 when main SF >= SF10
+	 *   - BW above 500 kHz caps the count at 2
+	 *   - main SF of 10, 11 or 12 caps the count at 1
 	 * They are checked here rather than at the CLI so the chip limits live
-	 * next to the chip. */
-	if (data->modem_cfg.bandwidth >= BW_500_KHZ) {
-		max_allowed = (main_sf >= 10) ? 1 : 2;
+	 * next to the chip.
+	 *
+	 * DS §9.9.6 states the last two as *independent* bullets; the vendor
+	 * header (lr20xx_radio_lora.h) makes the SF rule conditional on
+	 * BW >= 500, and this code used to follow the header — which accepted
+	 * SF10 @ BW125 with 3 side detectors, a set the chip answers with
+	 * CMD_FAIL and drops in its entirety.  Take the datasheet's stricter
+	 * reading and apply the lower of the two caps.  (Our `>=` against the
+	 * DS's "greater than" 500 kHz is also the stricter direction; left as
+	 * is for the same reason.) */
+	if (data->modem_cfg.bandwidth >= BW_500_KHZ && max_allowed > 2) {
+		max_allowed = 2;
+	}
+	if (main_sf >= 10 && max_allowed > 1) {
+		max_allowed = 1;
 	}
 	if (num > max_allowed) {
 		return -EINVAL;
@@ -1744,8 +2339,10 @@ void lr20xx_reset_agc(const struct device *dev)
 		.is_clk_32k_enabled       = false,
 		.is_ram_retention_enabled = true,
 	};
+	/* No delay after the sleep opcode — lr20xx_hal_write() already does a
+	 * k_busy_wait(1000) when it sees 0x0127, so this was a duplicate guard
+	 * (and k_sleep() with a sub-tick duration rounds up to a full tick). */
 	lr20xx_system_set_sleep_mode(ctx, &sleep_cfg, 0);
-	k_sleep(K_USEC(500));
 
 	lr20xx_system_set_standby_mode(ctx, LR20XX_SYSTEM_STANDBY_MODE_RC);
 
@@ -1767,26 +2364,38 @@ void lr20xx_reset_agc(const struct device *dev)
 
 /* ── Driver API: CAD ────────────────────────────────────────────────── */
 
-/* Datasheet Table 6-19, the 4-symbol row — LoRaRadioBase asks for
- * LORA_CAD_SYMB_4, so these are the values that go with the window we
- * actually use. The old table here was RadioLib's 2-symbol set, which is
- * systematically higher: a higher det_peak is a *less* sensitive CAD, so
- * pairing it with a 4-symbol window made LBT more willing to talk over
- * faint traffic. Adaptive CAD offsets from this base, so getting the base
+/* Datasheet Table 6-19 in full: rows = CAD symbol count 1..4, columns =
+ * SF5..SF12.  LoRaRadioBase asks for LORA_CAD_SYMB_4, so the bottom row is
+ * what we normally use — but cad_symb_nb is overridable from
+ * mc->cad.symbol_num, and a 1-D table indexed only by SF would silently keep
+ * handing out 4-symbol peaks for a 2-symbol window.
+ *
+ * A higher det_peak is a *less* sensitive CAD.  The table this replaced was
+ * RadioLib's 2-symbol set, which is systematically higher than the 4-symbol
+ * row, so pairing it with a 4-symbol window made LBT more willing to talk over
+ * faint traffic.  Adaptive CAD offsets from this base, so getting the base
  * right shifts the whole operating range. */
-static uint8_t lr20xx_cad_detect_peak(uint8_t sf)
+static const uint8_t lr20xx_cad_peak_table[4][8] = {
+	/*        SF5 SF6 SF7 SF8 SF9 SF10 SF11 SF12 */
+	/* 1 */ { 60, 60, 60, 64, 64, 66,  70,  74 },
+	/* 2 */ { 56, 56, 56, 58, 58, 60,  64,  68 },
+	/* 3 */ { 51, 51, 52, 54, 56, 60,  60,  65 },
+	/* 4 */ { 51, 51, 51, 54, 56, 60,  60,  64 },
+};
+
+static uint8_t lr20xx_cad_detect_peak(uint8_t sf, uint8_t symb_nb)
 {
-	switch (sf) {
-	case 5:  return 51;
-	case 6:  return 51;
-	case 7:  return 51;
-	case 8:  return 54;
-	case 9:  return 56;
-	case 10: return 60;
-	case 11: return 60;
-	case 12: return 64;
-	default: return 56;
+	if (sf < 5 || sf > 12) {
+		sf = 9;   /* mid-range fallback, matches the old default of 56 */
 	}
+	/* Counts above 4 are not tabulated; the 4-symbol row is the most
+	 * sensitive, and a longer window is never less sensitive than it. */
+	if (symb_nb < 1) {
+		symb_nb = 1;
+	} else if (symb_nb > 4) {
+		symb_nb = 4;
+	}
+	return lr20xx_cad_peak_table[symb_nb - 1][sf - 5];
 }
 
 static int lr20xx_do_cad(struct lr20xx_data *data)
@@ -1795,18 +2404,47 @@ static int lr20xx_do_cad(struct lr20xx_data *data)
 	struct lora_modem_config *mc = &data->modem_cfg;
 
 	uint8_t sf = (uint8_t)mc->datarate;
+	uint8_t symb_nb = lr20xx_cad_symb_nb(mc);
 	lr20xx_radio_lora_cad_params_t cad = {
-		.cad_symb_nb = 4,   /* overridden below from mc->cad.symbol_num */
-		.pnr_delta = 0,	/* exact symbol count, no best-effort */
-		.cad_exit_mode = LR20XX_RADIO_LORA_CAD_EXIT_MODE_STANDBYRC,
-		.cad_timeout_in_pll_step = 0,
-		.cad_detect_peak = lr20xx_cad_detect_peak(sf),
+		.cad_symb_nb = symb_nb,
+		/* BENCH EXPERIMENT — best-effort ("fast") CAD.  DS §6.3.11:
+		 * "CadDone time is shortened in case of early no detection";
+		 * the vendor header calls 8 the recommended best-effort value.
+		 * Most LBT CADs find nothing, so this shortens the common
+		 * pre-TX blocking path.
+		 *
+		 * NOT a fix — revert unless the bench A/B justifies it.  Judge
+		 * on `get cad`, per-level line (probes / busy / false-pos /
+		 * true-pos / fp-rate) over a comparable window.  A materially
+		 * LOWER busy rate is a RED FLAG, not a win: it more likely means
+		 * CAD stopped detecting than that the channel went quiet.
+		 * Side detectors are already off during CAD, so the DS's
+		 * multi-SF "main SF determines the not-detect condition" caveat
+		 * does not apply.
+		 *
+		 * Revert value: 0 (exact symbol count, no best-effort). */
+		.pnr_delta = 8,
+		/* BENCH EXPERIMENT: CAD_LBT hands the CAD->TX transition to the
+		 * chip.  Note the two CAD commands have different exit-mode
+		 * encodings — generic RSSI CAD (DS Table 6-22) is 0x01 for Tx,
+		 * LoRa CAD (Table 6-18) is 0x10.  Always the SDK enum, never
+		 * RadioLib's constants: RadioLib calls the *other* command. */
+		.cad_exit_mode = data->cad_lbt_exit_tx
+					 ? LR20XX_RADIO_LORA_CAD_EXIT_MODE_TX
+					 : LR20XX_RADIO_LORA_CAD_EXIT_MODE_STANDBYRC,
+		/* DS §6.3.11 (ds.txt:9435): "cad_timeout defines the timeout
+		 * duration after CAD for Rx (CAD_RX) or Tx (CAD_LBT), expressed
+		 * in periods of 32MHz crystal oscillator."  NOT the "PLL step of
+		 * 31.25us" the vendor header's doc comment claims, and not RTC
+		 * steps — getting this wrong truncates transmissions. */
+		.cad_timeout_in_pll_step = data->cad_lbt_exit_tx
+						   ? data->cad_lbt_tx_timeout
+						   : 0,
+		/* Peak is looked up for the window actually programmed, so the
+		 * two can never drift apart (DS Table 6-19 is 2-D). */
+		.cad_detect_peak = lr20xx_cad_detect_peak(sf, symb_nb),
 	};
 
-	/* Override from modem config if caller set non-zero values */
-	if (mc->cad.symbol_num != 0) {
-		cad.cad_symb_nb = (uint8_t)mc->cad.symbol_num;
-	}
 	if (mc->cad.detection_peak != 0) {
 		cad.cad_detect_peak = mc->cad.detection_peak;
 	} else if (data->cad_peak_offset != 0) {
@@ -1836,9 +2474,16 @@ static int lr20xx_do_cad(struct lr20xx_data *data)
 
 	/* Clear any pending IRQ flags, then start CAD */
 	lr20xx_system_clear_irq_status(ctx, LR20XX_SYSTEM_IRQ_ALL_MASK);
+	lr20xx_reset_rx_busy_signals(data);
 	data->cad_active = true;
 	lr20xx_radio_lora_set_cad(ctx);
 	CHECK_CMD(ctx, "set_cad");
+
+	/* One-shot: consumed here so no later CAD (an adaptive-CAD probe, or a
+	 * plain LBT with the payload no longer staged) can inherit exit-to-TX
+	 * and transmit whatever is left in the FIFO. */
+	data->cad_lbt_exit_tx = false;
+	data->cad_lbt_tx_timeout = 0;
 
 	return 0;
 }
@@ -1933,7 +2578,8 @@ uint8_t lr20xx_cad_base_peak(const struct device *dev)
 {
 	struct lr20xx_data *data = dev->data;
 
-	return lr20xx_cad_detect_peak((uint8_t)data->modem_cfg.datarate);
+	return lr20xx_cad_detect_peak((uint8_t)data->modem_cfg.datarate,
+				      lr20xx_cad_symb_nb(&data->modem_cfg));
 }
 
 int lr20xx_cad_probe(const struct device *dev, int8_t peak_offset)
@@ -2021,6 +2667,7 @@ static int lr20xx_lora_recv_duty_cycle(const struct device *dev,
 	lr20xx_system_clear_irq_status(ctx, LR20XX_SYSTEM_IRQ_ALL_MASK);
 	data->in_rx_mode = true;
 	data->tx_active = false;
+	lr20xx_reset_rx_busy_signals(data);
 
 	k_mutex_unlock(&data->spi_mutex);
 	return 0;
@@ -2133,21 +2780,14 @@ static int lr20xx_hw_init(struct lr20xx_data *data,
 	lr20xx_system_clear_errors(ctx);
 	lr20xx_system_clear_irq_status(ctx, LR20XX_SYSTEM_IRQ_ALL_MASK);
 
-	/* Calibrate all analog blocks: 0x6F = LF_RC|HF_RC|PLL|AAF|MU|PA_OFF */
+	/* Calibrate all analog blocks: 0x6F = LF_RC|HF_RC|PLL|AAF|MU|PA_OFF
+	 *
+	 * No BUSY poll after this.  lr20xx_system_calibrate() returns through
+	 * lr20xx_hal_write(), which already ends in the interrupt-driven
+	 * wait_on_busy() (3 s bound, logs on timeout) — a hand-rolled 1 ms
+	 * polling loop only re-implements it at worse granularity and would
+	 * essentially always find BUSY already low. */
 	st = lr20xx_system_calibrate(ctx, 0x6F);
-
-	/* RadioLib waits for BUSY to go LOW after calibrate.
-	 * We poll the BUSY pin (max 500ms timeout). */
-	{
-		int64_t cal_start = k_uptime_get();
-		while (gpio_pin_get_dt(&data->hal_ctx.busy)) {
-			k_msleep(1);
-			if ((k_uptime_get() - cal_start) > 500) {
-				LOG_ERR("BUSY stuck HIGH after calibrate!");
-				break;
-			}
-		}
-	}
 
 	DUMP_CHIP_STATE(data, "post-cal");
 
@@ -2168,11 +2808,15 @@ static int lr20xx_hw_init(struct lr20xx_data *data,
 		}
 	}
 
-	/* Front-end calibration at 868 MHz LF.
-	 * raw_value = ceil(868000000/4000000) = 217 = 0x00D9 */
-	st = lr20xx_calibrate_front_end(ctx, 868000000);
-
-	DUMP_CHIP_STATE(data, "post-FEcal");
+	/* No front-end calibration here — deliberately.  This function has one
+	 * caller, lr20xx_lora_config(), which calibrates at the operating
+	 * frequency the moment it returns; nothing in between touches RX, and
+	 * only set_rx is gated on the calibration (RXFREQ_NO_FRONT_END_CALIB).
+	 * A calibration here could only guess at the band, which is what the
+	 * hardcoded 868 MHz used to do — covering 848–888 MHz and leaving a US
+	 * node at ~906 MHz outside it.  That was the observation behind the
+	 * "calibrate on every RX/TX entry" workaround C5 removed; the cause was
+	 * calibrating for a frequency nobody had asked for yet. */
 
 	/* Verify: set packet type to LoRa and read it back */
 	st = lr20xx_radio_common_set_pkt_type(ctx, LR20XX_RADIO_COMMON_PKT_TYPE_LORA);

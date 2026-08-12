@@ -1033,9 +1033,12 @@ bool LoRaRadioBase::isReceiving()
 		return false;
 	}
 	/* Driver-side latch + non-destructive IRQ read covers the full
-	 * payload phase.  hwIsReceiving() never clears IRQ bits; foreign
-	 * preambles release via hardware (SymbNumTimeout on SX126x non-DC
-	 * or chip-internal sync timer on DC / LR11xx / LR20xx). */
+	 * payload phase.  hwIsReceiving() never clears IRQ bits on the poll
+	 * path itself; foreign preambles are released by the driver in
+	 * software, on an SF-aware grace plus a max-airtime header deadline
+	 * (SX126x patch 0013, LR11xx, LR20xx alike).  It is not a hardware
+	 * release — the chips latch these bits until ClearIrq, and continuous
+	 * RX has no timeout to do it for them. */
 	if (hwIsReceiving()) {
 		return true;
 	}

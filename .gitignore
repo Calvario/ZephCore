@@ -141,3 +141,6 @@ handover_thinknode_m9.md
 # Vendor reference docs (datasheets, errata). Local only — not ours to redistribute.
 /datasheets/
 LR2021_AUDIT_INDEX.md
+HANDOVER_lr2021_audit.md
+lr2021_bench/cad_lbt_fast.patch
+lr2021_bench/README.md
