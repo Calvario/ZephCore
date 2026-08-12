@@ -14,10 +14,43 @@ LOG_MODULE_REGISTER(zephcore_haptic, CONFIG_ZEPHCORE_SENSORS_LOG_LEVEL);
 
 #if DT_HAS_COMPAT_STATUS_OKAY(ti_drv2605)
 
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/haptics.h>
 #include <zephyr/drivers/haptics/drv2605.h>
 
 #define HAPTIC_NODE DT_COMPAT_GET_ANY_STATUS_OKAY(ti_drv2605)
+
+#if DT_PROP(HAPTIC_NODE, zephyr_deferred_init)
+/* Wake a deferred-init DRV2605 and run its init here, where the part's supply
+ * rail has been up since boot instead of microseconds.
+ *
+ * The enable pin is asserted *before* device_init() on purpose. Upstream's
+ * drv2605_init() spends its DRV2605_POWER_UP_DELAY_US before it configures the
+ * GPIOs, so EN rises and the very next thing it does is read the status
+ * register over I2C — no settling time at all between the two. Raising EN
+ * ourselves and waiting turns that race into a plain sequence; the driver's own
+ * gpio_pin_configure_dt() to OUTPUT_ACTIVE afterwards is then a no-op. */
+static void haptic_deferred_init(const struct device *dev)
+{
+	static const struct gpio_dt_spec en =
+		GPIO_DT_SPEC_GET_OR(HAPTIC_NODE, en_gpios, {0});
+	int rc;
+
+	if (en.port != NULL && gpio_is_ready_dt(&en)) {
+		if (gpio_pin_configure_dt(&en, GPIO_OUTPUT_ACTIVE) == 0) {
+			/* 250 us is the datasheet figure; 1 ms costs nothing on a
+			 * one-shot boot path and covers the rail as well. */
+			k_msleep(1);
+		}
+	}
+
+	rc = device_init(dev);
+	LOG_DBG("haptic deferred init: rc=%d ready=%d", rc,
+		(int)device_is_ready(dev));
+}
+#else
+static inline void haptic_deferred_init(const struct device *dev) { ARG_UNUSED(dev); }
+#endif
 
 static const struct device *haptic_dev;
 static bool haptic_enabled = true;
@@ -36,6 +69,9 @@ int haptic_init(void)
 	int rc;
 
 	haptic_dev = DEVICE_DT_GET(HAPTIC_NODE);
+	if (!device_is_ready(haptic_dev)) {
+		haptic_deferred_init(haptic_dev);
+	}
 	if (!device_is_ready(haptic_dev)) {
 		/* The DRV2605 driver logs its own reason at debug level, so say
 		 * enough here to tell "chip absent" from "bus down". */

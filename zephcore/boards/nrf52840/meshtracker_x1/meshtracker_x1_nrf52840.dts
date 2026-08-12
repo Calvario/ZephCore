@@ -291,11 +291,24 @@
 		reg = <0x77>;
 	};
 
+	/* Deferred-init so haptic_init() owns the power-up sequence.
+	 *
+	 * Upstream's drv2605_init() spends DRV2605_POWER_UP_DELAY_US *before*
+	 * drv2605_gpio_config() raises en-gpios, then reads the status register
+	 * over I2C immediately after — so the part gets no settling time at all
+	 * between EN rising and its first transaction, and NACKs. Deferring the
+	 * node is what lets us assert EN and wait first; without it the driver
+	 * has already run (and failed) by the time the app gets a say, and
+	 * device_init() would just answer -EALREADY.
+	 *
+	 * Not a rail problem: the SPA06 shares this bus, this rail and this init
+	 * priority and comes up fine. The enable pin is the only difference. */
 	haptic: drv2605@5a {
 		compatible = "ti,drv2605";
 		reg = <0x5a>;
 		actuator-mode = "LRA";
 		en-gpios = <&gpio1 5 GPIO_ACTIVE_HIGH>;
+		zephyr,deferred-init;
 	};
 };
 
