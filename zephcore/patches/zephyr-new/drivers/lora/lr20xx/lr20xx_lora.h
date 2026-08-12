@@ -27,6 +27,58 @@ extern "C" {
 int16_t lr20xx_get_rssi_inst(const struct device *dev);
 
 /**
+ * @brief Running carrier-frequency-error statistics
+ *
+ * Accumulated from every successfully received packet.  A single packet's
+ * offset is the sum of this node's reference error and the transmitter's, so
+ * only @c mean_hz over many packets from many peers says anything about our own
+ * XTAL/TCXO; @c min_hz / @c max_hz show the spread that mean is drawn from.
+ */
+struct lr20xx_freq_offset_stats {
+	int32_t last_hz;   /**< Most recent packet's offset */
+	int32_t mean_hz;   /**< Arithmetic mean over @c count packets */
+	int32_t min_hz;    /**< Most negative seen */
+	int32_t max_hz;    /**< Most positive seen */
+	uint32_t count;    /**< Packets accumulated (0 = nothing measured) */
+};
+
+/**
+ * @brief Read the carrier frequency error accumulated since boot or reset
+ *
+ * Driver v2.0.2 decodes this from three bytes GetLoraPacketStatus grew beyond
+ * what DS rev 2.1 Table 9-13 documents, so the driver is ahead of the datasheet
+ * here — sanity-check against a known-good transmitter before trusting it.
+ * Readings beyond +/-200 kHz are discarded as implausible for a packet that
+ * demodulated at all, and warn once.
+ *
+ * @param dev LoRa device
+ * @param out Filled in on return; must not be NULL
+ * @return number of packets accumulated (0 = nothing measured yet)
+ */
+uint32_t lr20xx_get_freq_offset(const struct device *dev,
+				struct lr20xx_freq_offset_stats *out);
+
+/**
+ * @brief Clear the accumulated frequency-error statistics
+ *
+ * @param dev LoRa device
+ */
+void lr20xx_reset_freq_offset(const struct device *dev);
+
+/**
+ * @brief Radio deaf time for one duty-cycle wake transition, in microseconds
+ *
+ * DS Table 3-23: warm start (Sleep with retention -> STDBY_RC) 1 ms, plus
+ * STDBY_RC -> Rx 115 us, plus the TCXO restart where one is fitted — duty-cycle
+ * sleep powers the VTCXO regulator down, so the oscillator restarts on every
+ * wake.  Counts against the adapter's preamble-catch budget.
+ *
+ * @param dev LoRa device
+ * @return deaf time in microseconds
+ */
+uint32_t lr20xx_get_wakeup_time_us(const struct device *dev);
+
+/**
  * @brief Check if radio is actively receiving a packet
  *
  * Checks IRQ status for preamble/sync word detection.

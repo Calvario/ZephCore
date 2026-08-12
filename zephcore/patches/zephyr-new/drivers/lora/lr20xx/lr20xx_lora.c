@@ -186,6 +186,24 @@ struct lr20xx_data {
 	uint8_t side_det_num;
 	bool side_det_applied;   /* currently programmed into the chip */
 
+	/* Per-packet carrier frequency error, decoded by the SDK from the three
+	 * bytes GetLoraPacketStatus grew in driver v2.0.2.  Accumulated rather
+	 * than just latched: a single packet's offset is the sum of our error
+	 * and the transmitter's, so only the mean over many packets from many
+	 * peers says anything about *our* reference.  That mean is the
+	 * instrument for the XTAL/TCXO questions on this board family — it is
+	 * what turns the duty-cycle wake budget and the TCXO trim from datasheet
+	 * estimates into measurements.
+	 *
+	 * Sum is int64 so it cannot overflow across a long soak, and all
+	 * accesses are from the DIO1 work handler under spi_mutex, except the
+	 * reader below which takes the same mutex. */
+	int32_t freq_off_last_hz;
+	int32_t freq_off_min_hz;
+	int32_t freq_off_max_hz;
+	int64_t freq_off_sum_hz;
+	uint32_t freq_off_count;
+
 	/* RX data buffer */
 	uint8_t rx_buf[256];
 };
@@ -1335,6 +1353,51 @@ static void lr20xx_log_chip_errors(void *ctx, const char *what)
 	}
 }
 
+/* Fold one packet's frequency error into the running stats.
+ *
+ * Sanity bound first: the SDK sign-extends a 24-bit field, so a garbage read
+ * would land anywhere in +/-8 MHz.  Anything past +/-200 kHz is not a receivable
+ * LoRa packet at the bandwidths this driver uses (the widest is 500 kHz, and
+ * the demodulator's own capture range is a fraction of that), so a value out
+ * there means the three extra GetLoraPacketStatus bytes are not what v2.0.2
+ * thinks they are on this firmware.  Drop it rather than poison the mean, and
+ * say so once. */
+#define LR20XX_FREQ_OFFSET_SANE_HZ 200000
+
+static void lr20xx_track_freq_offset(struct lr20xx_data *data, int32_t off_hz)
+{
+	if (off_hz > LR20XX_FREQ_OFFSET_SANE_HZ ||
+	    off_hz < -LR20XX_FREQ_OFFSET_SANE_HZ) {
+		static bool warned;
+
+		if (!warned) {
+			warned = true;
+			LOG_WRN("freq offset %d Hz is out of range — the extra "
+				"GetLoraPacketStatus bytes may not carry it on "
+				"this FW; ignoring further outliers", off_hz);
+		}
+		return;
+	}
+
+	data->freq_off_last_hz = off_hz;
+
+	if (data->freq_off_count == 0) {
+		data->freq_off_min_hz = off_hz;
+		data->freq_off_max_hz = off_hz;
+	} else if (off_hz < data->freq_off_min_hz) {
+		data->freq_off_min_hz = off_hz;
+	} else if (off_hz > data->freq_off_max_hz) {
+		data->freq_off_max_hz = off_hz;
+	}
+
+	data->freq_off_sum_hz += off_hz;
+	data->freq_off_count++;
+
+	LOG_DBG("freq offset: %d Hz (mean %d over %u)", off_hz,
+		(int)(data->freq_off_sum_hz / (int64_t)data->freq_off_count),
+		data->freq_off_count);
+}
+
 static void lr20xx_dio1_callback(void *user_data);
 
 static void lr20xx_dio1_work_handler(struct k_work *work)
@@ -1414,6 +1477,17 @@ static void lr20xx_dio1_work_handler(struct k_work *work)
 			    pkt_stat.rssi_signal_pkt_in_dbm > rssi) {
 				rssi = pkt_stat.rssi_signal_pkt_in_dbm;
 			}
+
+			/* Carrier frequency error for this packet.  Driver
+			 * v2.0.2 reads 9 bytes from GetLoraPacketStatus where DS
+			 * rev 2.1 Table 9-13 documents only 6 — this field comes
+			 * from the three extra bytes, so the driver is ahead of
+			 * the datasheet here.  RSSI/SNR/length decode from
+			 * rbuffer[0..5] and are unaffected either way; treat a
+			 * wildly implausible offset as evidence the extra bytes
+			 * are junk on this FW rather than as a real reading. */
+			lr20xx_track_freq_offset(data,
+						 pkt_stat.freq_offset_hz);
 
 			k_mutex_unlock(&data->spi_mutex);
 
@@ -2204,6 +2278,82 @@ bool lr20xx_is_receiving(const struct device *dev)
 	lr20xx_reset_rx_busy_signals(data);
 	k_mutex_unlock(&data->spi_mutex);
 	return false;
+}
+
+uint32_t lr20xx_get_freq_offset(const struct device *dev,
+				struct lr20xx_freq_offset_stats *out)
+{
+	struct lr20xx_data *data = dev->data;
+	uint32_t count;
+
+	if (out == NULL) {
+		return 0;
+	}
+
+	/* Blocking lock: this is a diagnostic reader on the CLI/telemetry path,
+	 * not the TX gate, so waiting is cheap and a torn read of a 64-bit sum
+	 * against the DIO1 work handler is not. */
+	k_mutex_lock(&data->spi_mutex, K_FOREVER);
+
+	count = data->freq_off_count;
+	out->count = count;
+	out->last_hz = data->freq_off_last_hz;
+	out->min_hz = count ? data->freq_off_min_hz : 0;
+	out->max_hz = count ? data->freq_off_max_hz : 0;
+	out->mean_hz = count
+			       ? (int32_t)(data->freq_off_sum_hz / (int64_t)count)
+			       : 0;
+
+	k_mutex_unlock(&data->spi_mutex);
+
+	return count;
+}
+
+void lr20xx_reset_freq_offset(const struct device *dev)
+{
+	struct lr20xx_data *data = dev->data;
+
+	k_mutex_lock(&data->spi_mutex, K_FOREVER);
+	data->freq_off_last_hz = 0;
+	data->freq_off_min_hz = 0;
+	data->freq_off_max_hz = 0;
+	data->freq_off_sum_hz = 0;
+	data->freq_off_count = 0;
+	k_mutex_unlock(&data->spi_mutex);
+}
+
+uint32_t lr20xx_get_wakeup_time_us(const struct device *dev)
+{
+	const struct lr20xx_config *cfg = dev->config;
+
+	/* Deaf time for one duty-cycle wake transition, per DS Table 3-23:
+	 *   TSPDRCW  Sleep -> STDBY_RC, warm start (with retention)  1 ms
+	 *   TSRCRX   STDBY_RC -> Rx                                  115 us
+	 * Duty-cycle sleep is retention sleep (DS §6.3.8: "the device goes into
+	 * Sleep mode with context saved"), so the warm-start figure is the right
+	 * one — 1115 us, rounded to 1200 for margin on a "typ" number with no
+	 * min/max given.
+	 *
+	 * The TCXO is the term that actually matters here.  Retention sleep
+	 * powers the VTCXO regulator down, so the oscillator restarts on every
+	 * wake and the chip will not leave STDBY_RC until it has, bounded by the
+	 * SetTcxoMode start_time deadline.  On the MeshTracker X1 that deadline
+	 * is 5 ms (tcxo-startup-delay-ms in its DTS), which dwarfs the 1.1 ms of
+	 * mode transition.
+	 *
+	 * Without this override LR2021Radio inherited LoRaRadioBase's flat
+	 * 1500 us, so the X1's real deaf time was under-counted by ~4.6 ms, the
+	 * computed sleep_us came out correspondingly too long, and preambles
+	 * arriving at a window edge were missed — strength-independent
+	 * duty-cycle loss that looks exactly like poor sensitivity but is not.
+	 * promicro_lr2021 is XTAL-only and lands on 1200 us, near the datasheet
+	 * figure rather than the old unsourced 1500. */
+	uint32_t us = 1200;
+
+	if (cfg->tcxo_voltage_mv > 0) {
+		us += cfg->tcxo_startup_delay_ms * 1000U;
+	}
+	return us;
 }
 
 int lr20xx_configure_side_detectors(const struct device *dev,

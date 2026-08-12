@@ -142,5 +142,10 @@ handover_thinknode_m9.md
 /datasheets/
 LR2021_AUDIT_INDEX.md
 HANDOVER_lr2021_audit.md
-lr2021_bench/cad_lbt_fast.patch
-lr2021_bench/README.md
+
+# LR2021 bring-up scratch: the CAD_LBT revert patch and its measurement notes.
+# Local only, like the audit index and handover above.  Ignore the whole
+# directory — per-file rules were tried and could not work, because .gitignore
+# does not apply to paths already in the index (three of these went into
+# b839c2c for exactly that reason; untrack with `git rm -r --cached`).
+lr2021_bench/

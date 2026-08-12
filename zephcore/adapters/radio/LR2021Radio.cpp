@@ -117,4 +117,15 @@ uint8_t LR2021Radio::hwCadBasePeak()
 	return lr20xx_cad_base_peak(_dev);
 }
 
+uint32_t LR2021Radio::hwWakeupTimeUs()
+{
+	/* Per-device, because the TCXO term dominates and is board-specific:
+	 * meshtracker_x1 declares tcxo-startup-delay-ms = <5>, promicro_lr2021
+	 * is XTAL-only.  Inheriting the base class's flat 1500 us under-counted
+	 * the X1's real deaf time by ~4.6 ms, which oversized the duty-cycle
+	 * sleep and dropped window-edge preambles regardless of signal strength.
+	 * Same shape as the SX126x and LR11xx overrides. */
+	return lr20xx_get_wakeup_time_us(_dev);
+}
+
 } /* namespace mesh */

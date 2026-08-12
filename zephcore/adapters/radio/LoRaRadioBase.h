@@ -154,7 +154,15 @@ protected:
 	 *  PLL lock + TCXO startup where fitted), in microseconds.  Counts
 	 *  against the duty-cycle preamble-catch budget: per SX126x DS rev 2.2
 	 *  §13.1.7 the TCXO startup delay is inserted between the sleep and RX
-	 *  periods, outside both.  Default suits XTAL parts (LR2021). */
+	 *  periods, outside both.
+	 *
+	 *  This default is a fallback for backends that expose no per-device
+	 *  figure; it suits XTAL parts only.  SX126x, LR11xx and LR2021 all
+	 *  override it, because a board with a TCXO powers the regulator down
+	 *  during duty-cycle sleep and pays the oscillator restart on every
+	 *  wake — several milliseconds, dwarfing this number.  Leaving a TCXO
+	 *  board on the default oversizes the sleep window and drops
+	 *  window-edge preambles regardless of signal strength. */
 	virtual uint32_t hwWakeupTimeUs() { return 1500; }
 
 	/* Set to true by subclasses using the loramac-node driver backend.
