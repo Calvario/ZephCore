@@ -123,6 +123,14 @@ public:
 	void cadMaintenance() override;
 	uint32_t msUntilNextMaintenance() override;
 	int8_t getCadOffset() const override { return _cad_offset; }
+
+	/* Offset bounds the controller may actually use: the static
+	 * [CAD_LEVEL_MIN, CAD_LEVEL_MAX] window narrowed to whatever the
+	 * hardware clamp leaves distinguishable at the current base.  Every
+	 * range decision goes through these; the raw constants stay in use only
+	 * for indexing _cad_stats[], which is sized to the static window. */
+	int8_t cadLevelMinEff();
+	int8_t cadLevelMaxEff();
 	void resetCadStats() override;
 	int formatCadStatus(char *buf, int cap) override;
 
@@ -153,6 +161,19 @@ protected:
 	virtual void hwCadSetPeakOffset(int8_t offset) { (void)offset; }
 	/** Per-SF base detPeak for the current config (0 = unsupported). */
 	virtual uint8_t hwCadBasePeak() { return 0; }
+
+	/** Absolute detPeak range the driver will actually program, inclusive.
+	 *  0/0 means "no known limit" and the offset range stays as-is.
+	 *
+	 *  This exists because the offset window and the hardware clamp are two
+	 *  different things, and when they disagree the controller explores
+	 *  levels that are physically identical: on the LR2021 at SF7 the base is
+	 *  51 and the driver clamps to 48, so offsets -3 through -8 all programmed
+	 *  the same peak.  The staircase then compared three rungs of the same
+	 *  configuration, found only sampling noise between them, and random-walked
+	 *  into the floor with nothing to climb back out on. */
+	virtual uint8_t hwCadPeakMin() { return 0; }
+	virtual uint8_t hwCadPeakMax() { return 0; }
 
 	/** Radio deaf time per duty-cycle wake transition (context restore +
 	 *  PLL lock + TCXO startup where fitted), in microseconds.  Counts

@@ -957,6 +957,9 @@ static bool handle_vcontact_cli(const char *line, char *reply)
 			companion_mesh.vcontactPushAdvert();
 		} else if (!en && was) {
 			companion_mesh.vcontactPushDeleted();
+			/* The app drops the contact, so its flags (favourite / telemetry
+			 * permissions) go with it — same as the app-side delete path. */
+			companion_mesh.prefs.v_contact_flags = 0;
 		}
 		snprintf(reply, CLI_REPLY_SIZE, "OK - v.contact %s", en ? "on" : "off");
 		return true;

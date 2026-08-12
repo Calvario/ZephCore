@@ -1078,11 +1078,44 @@ bool LoRaRadioBase::isChannelActive(int threshold)
 
 /* ── Adaptive CAD (LBT detPeak calibration) ───────────────────────────── */
 
+/* The offset window is [CAD_LEVEL_MIN, CAD_LEVEL_MAX], but an offset is only
+ * meaningful while base+offset still lands somewhere the driver will actually
+ * program.  Past the hardware clamp several offsets collapse onto one peak, and
+ * the staircase cannot tell them apart — it reads sampling noise as curvature.
+ * Narrow the window so every level it can reach is a distinct configuration.
+ *
+ * Radios that report no clamp (hwCadPeakMin/Max == 0) keep the static window,
+ * which is also what a radio with no adaptive CAD at all gets. */
+int8_t LoRaRadioBase::cadLevelMinEff()
+{
+	uint8_t base = hwCadBasePeak();
+	uint8_t pmin = hwCadPeakMin();
+
+	if (base == 0 || pmin == 0 || pmin <= base - CAD_LEVEL_MIN) {
+		return CAD_LEVEL_MIN;
+	}
+	return (int8_t)((int)pmin - (int)base);
+}
+
+int8_t LoRaRadioBase::cadLevelMaxEff()
+{
+	uint8_t base = hwCadBasePeak();
+	uint8_t pmax = hwCadPeakMax();
+
+	if (base == 0 || pmax == 0 || (int)pmax - (int)base >= CAD_LEVEL_MAX) {
+		return CAD_LEVEL_MAX;
+	}
+	return (int8_t)((int)pmax - (int)base);
+}
+
 void LoRaRadioBase::setCadParams(bool auto_enabled, int8_t offset,
 				 uint16_t probe_interval_s, uint8_t busycap_pct)
 {
-	if (offset < CAD_LEVEL_MIN) offset = CAD_LEVEL_MIN;
-	if (offset > CAD_LEVEL_MAX) offset = CAD_LEVEL_MAX;
+	const int8_t lo = cadLevelMinEff();
+	const int8_t hi = cadLevelMaxEff();
+
+	if (offset < lo) offset = lo;
+	if (offset > hi) offset = hi;
 
 	_cad_auto = auto_enabled;
 	_cad_offset = offset;
@@ -1146,7 +1179,7 @@ int8_t LoRaRadioBase::pickCadProbeLevel()
 	case 3:  lvl = (int8_t)(_cad_offset + 1); break;  /* less sensitive */
 	default: lvl = _cad_offset; break;                /* operating (0, 2) */
 	}
-	if (lvl < CAD_LEVEL_MIN || lvl > CAD_LEVEL_MAX) {
+	if (lvl < cadLevelMinEff() || lvl > cadLevelMaxEff()) {
 		lvl = _cad_offset;
 	}
 	return lvl;
@@ -1196,7 +1229,7 @@ void LoRaRadioBase::cadStaircaseStep()
 	 * just starves our own airtime.  Cap is `set cad.busycap` percent (0 =
 	 * off); only binds on genuinely busy channels. */
 	int cap_permille = (int)_cad_busycap_pct * 10;
-	if (cap_permille && _cad_offset < CAD_LEVEL_MAX && b_op > cap_permille) {
+	if (cap_permille && _cad_offset < cadLevelMaxEff() && b_op > cap_permille) {
 		_cad_offset++;
 		hwCadSetPeakOffset(_cad_offset);
 		LOG_INF("cad: step up -> offset %d (airtime, busy %d cap %d)",
@@ -1206,7 +1239,7 @@ void LoRaRadioBase::cadStaircaseStep()
 
 	/* Step UP (less sensitive) when the level above is markedly cleaner —
 	 * we're on the steep part of the curve, below the knee. */
-	if (_cad_offset < CAD_LEVEL_MAX && r_up >= 0 &&
+	if (_cad_offset < cadLevelMaxEff() && r_up >= 0 &&
 	    r_op - r_up >= CAD_KNEE_SLOPE_PERMILLE) {
 		_cad_offset++;
 		hwCadSetPeakOffset(_cad_offset);
@@ -1224,7 +1257,7 @@ void LoRaRadioBase::cadStaircaseStep()
 	int b_dn = busy_rate(oi - 1);
 	bool busy_ok = (cap_permille == 0) ||
 		       (b_dn <= cap_permille - CAD_BUSY_DEFER_HYST_PERMILLE);
-	if (_cad_offset > CAD_LEVEL_MIN && r_dn >= 0 &&
+	if (_cad_offset > cadLevelMinEff() && r_dn >= 0 &&
 	    r_dn - r_op < CAD_KNEE_SLOPE_PERMILLE &&
 	    r_op <= CAD_PLATEAU_CLEAN_PERMILLE && busy_ok) {
 		_cad_offset--;
@@ -1477,15 +1510,25 @@ int LoRaRadioBase::formatCadStatus(char *buf, int cap)
 		      (unsigned)_cad_busycap_pct);
 
 	/* Only the 3 rungs around the operating offset — the far rungs are mildly
-	 * irrelevant; what matters is where we sit on the ladder. The window is
-	 * clamped to stay inside [CAD_LEVEL_MIN, CAD_LEVEL_MAX] while still showing
-	 * 3 rungs, so at either end it slides inward rather than dropping a line. */
+	 * irrelevant; what matters is where we sit on the ladder.  The window is
+	 * clamped to the EFFECTIVE range while still showing 3 rungs, so at either
+	 * end it slides inward rather than dropping a line.
+	 *
+	 * Effective, not the static constants: past the hardware detPeak clamp
+	 * several offsets program the same peak, and showing them as separate
+	 * rungs invited exactly the wrong reading — three lines of distinct
+	 * statistics for one physical configuration.  With the range narrowed,
+	 * every rung printed is a real one and `pk` below is what the chip got. */
+	const int lmin = cadLevelMinEff();
+	const int lmax = cadLevelMaxEff();
 	int cur = _cad_offset;
-	if (cur < CAD_LEVEL_MIN) cur = CAD_LEVEL_MIN;
-	if (cur > CAD_LEVEL_MAX) cur = CAD_LEVEL_MAX;
+	if (cur < lmin) cur = lmin;
+	if (cur > lmax) cur = lmax;
 	int lo = cur - 1, hi = cur + 1;
-	if (lo < CAD_LEVEL_MIN) { lo = CAD_LEVEL_MIN; hi = lo + 2; }
-	if (hi > CAD_LEVEL_MAX) { hi = CAD_LEVEL_MAX; lo = hi - 2; }
+	if (lo < lmin) { lo = lmin; hi = lo + 2; }
+	if (hi > lmax) { hi = lmax; lo = hi - 2; }
+	if (lo < CAD_LEVEL_MIN) lo = CAD_LEVEL_MIN;
+	if (hi > CAD_LEVEL_MAX) hi = CAD_LEVEL_MAX;
 
 	for (int lvl = lo; lvl <= hi; lvl++) {
 		CadLevelStats &s = _cad_stats[lvl - CAD_LEVEL_MIN];

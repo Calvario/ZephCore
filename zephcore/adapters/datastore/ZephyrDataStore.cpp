@@ -834,6 +834,13 @@ void ZephyrDataStore::loadPrefs(NodePrefs &prefs)
 	for (int i = 0; i < EXTRA_SF_MAX && off < len; i++) {
 		prefs.extra_sf[i] = buf[off++];
 	}
+
+	/* Offset 166: v_contact_flags (ZephCore extension).  Absent in pre-existing
+	 * files → stays 0, which is exactly the old behaviour (no favourite, no
+	 * telemetry permissions). */
+	if (off < len) {
+		prefs.v_contact_flags = buf[off++];
+	}
 }
 
 void ZephyrDataStore::savePrefs(const NodePrefs &prefs)
@@ -931,7 +938,9 @@ void ZephyrDataStore::savePrefs(const NodePrefs &prefs)
 	/* Offset 163-165: extra_sf (ZephCore extension, LR2021 side detectors) */
 	memcpy(&buf[off], prefs.extra_sf, EXTRA_SF_MAX);
 	off += EXTRA_SF_MAX;
-	/* Total: 166 bytes */
+	/* Offset 166: v_contact_flags (ZephCore extension) */
+	buf[off++] = prefs.v_contact_flags;
+	/* Total: 167 bytes */
 
 	bool ok = atomicReplaceFile(PREFS_FILE, buf, off);
 	LOG_DBG("savePrefs: wrote %s, ok=%d (%d bytes), name='%.16s'",

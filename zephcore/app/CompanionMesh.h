@@ -506,8 +506,18 @@ private:
 	 * guard and truncates the sync. Held from CMD_APP_START until the first
 	 * PACKET_NO_MORE_MSGS (end of the contacts+messages initial sync). */
 	bool _vcontact_hold_msgwait;
+	/* App-side delete (CMD_REMOVE_CONTACT for the loopback key) hides the
+	 * v-contact for the rest of the session only — it deliberately does NOT
+	 * touch prefs.v_contact_enabled. The v-contact is an ordinary entry in the
+	 * app's contact list, so a "purge all contacts" walks it like any other and
+	 * used to permanently disable a firmware feature with no way back except
+	 * the USB CLI. The pref is node-side state: `set v.contact off` is the only
+	 * durable disable. Cleared at CMD_APP_START (the session reset). */
+	bool _vcontact_app_hidden;
 	bool vcontactClockValid();
-	bool vcontactReady() { return isVContactEnabled() && _vcontact_lastmod != 0; }
+	bool vcontactReady() {
+		return isVContactEnabled() && !_vcontact_app_hidden && _vcontact_lastmod != 0;
+	}
 	void buildVContact(ContactInfo &c) const;
 	bool isVContactKey(const uint8_t *key, int prefix_len) const;
 	/** (Re)derive _vcontact_pubkey from the current identity. Call on boot and

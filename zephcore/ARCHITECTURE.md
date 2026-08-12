@@ -32,7 +32,7 @@ ZephCore is a LoRa mesh networking firmware running on Zephyr RTOS. It supports 
 - **Room Server**: Headless store-and-forward shared message room (BBS). Reuses the repeater's ACL/region/CLI; pushes new posts to logged-in clients (per-client sync cursor + ACK).
 - **Observer** (ESP32): Listen-only node that publishes received LoRa packets to MQTT over WiFi.
 
-Supported hardware: nRF52840, nRF54L15, ESP32 (classic PICO-D4 and C3/C6/S3), EFR32MG24, and STM32WL (LoRa-E5). Radios: SX126x family (SX1261/62/68, LLCC68, STM32WL sub-GHz), LR1110, SX127x (SX1272/76/78, loramac-node backend), and LR2021 (experimental bring-up). A native Linux port runs the full stack on SBCs (Femtofox, Raspberry Pi) via Zephyr `native_sim` — see `LINUX_NATIVE.md`.
+Supported hardware: nRF52840, nRF54L15, ESP32 (classic PICO-D4 and C3/C6/S3), EFR32MG24, and STM32WL (LoRa-E5). Radios: SX126x family (SX1261/62/68, LLCC68, STM32WL sub-GHz), LR1110, SX127x (SX1272/76/78, loramac-node backend), and LR2021 (validated on the MeshTracker X1). A native Linux port runs the full stack on SBCs (Femtofox, Raspberry Pi) via Zephyr `native_sim` — see `LINUX_NATIVE.md`.
 
 ### Upstream Relationship
 
@@ -73,7 +73,7 @@ zephcore/
 │   │   ├── SX126xRadio.cpp/h      # SX126x adapter (native Zephyr driver, patched)
 │   │   ├── SX127xRadio.cpp/h      # SX127x adapter (loramac-node backend)
 │   │   ├── LR1110Radio.cpp/h      # LR1110 adapter (custom Zephyr driver)
-│   │   ├── LR2021Radio.cpp/h      # LR2021 adapter (custom driver, experimental)
+│   │   ├── LR2021Radio.cpp/h      # LR2021 adapter (custom driver)
 │   │   ├── radio_common.h         # Shared radio types and constants
 │   │   ├── lr11xx/                # LR11xx low-level HAL (SPI, GPIO, Semtech SDK)
 │   │   └── lr20xx/                # LR20xx low-level HAL (Semtech SDK)
@@ -363,7 +363,7 @@ mesh::Radio (abstract interface)
         ├── SX126xRadio → Zephyr native SX126x driver + sx126x_ext.h
         ├── SX127xRadio → Zephyr loramac-node backend (SX1272/76/78)
         ├── LR1110Radio → Custom lr11xx_lora.c driver + Semtech HAL
-        └── LR2021Radio → Custom lr20xx_lora.c driver + Semtech HAL (experimental)
+        └── LR2021Radio → Custom lr20xx_lora.c driver + Semtech HAL
 ```
 
 Compile-time selection via the `CONFIG_ZEPHCORE_RADIO_NATIVE` / `_LR1110` / `_LR2021` / `_SX127X` Kconfig options, resolved in `RadioIncludes.h`. The native SX126x path is the default and covers SX1261/62/68, LLCC68, and the STM32WL integrated sub-GHz radio.
@@ -449,10 +449,20 @@ independent of a site's FP floor. Highest-priority override: **airtime / faint
 cap** — step up when the operating busy rate exceeds `cad_busycap` (percent,
 `set cad.busycap`, default 25, 0=off); self-targeting since only busy nodes
 reach it, and effectively a faint-tolerance dial (lower = reject faint harder).
-Each step needs ≥`CAD_STEP_MIN_PROBES` (120); offset clamped **−8…+12**,
-persisted via `Dispatcher::onCadOffsetChanged()`. Driver absolute clamp (SX126x
-15–40, LR 48–90) is a guardrail; AN1200.48 recommends 21–29 for SX126x (base
-`SF+13`), tuned to catch faint — LBT may deliberately sit above it. Probe +
+Each step needs ≥`CAD_STEP_MIN_PROBES` (120); offset clamped to **−8…+12**
+*narrowed by the driver's own detPeak clamp* (SX126x 15–40, LR 48–90), persisted
+via `Dispatcher::onCadOffsetChanged()`. The narrowing is not cosmetic: where
+`base + offset` falls outside the hardware clamp, several offsets program the
+**same** peak, and the staircase then compares rungs that are physically
+identical and reads sampling noise as curvature. `hwCadPeakMin/Max()` report the
+driver clamp and `cadLevelMinEff()/MaxEff()` derive the usable window, so every
+level the controller can reach is a distinct configuration and the `pk` shown by
+`get cad` is what the chip was actually given. It binds on the LR2021, whose
+4-symbol base is 51 at SF5–7 (effective −3…+12) and 54 at SF8 (−6…+12); the
+LR11xx's lowest base of 56 already lands exactly on the 48 floor at −8, so its
+full window is usable and it keeps the static range. AN1200.48 recommends 21–29
+for SX126x (base `SF+13`), tuned to catch faint — LBT may deliberately sit above
+it. Probe +
 offset plumbing is per-driver extension API (`*_cad_probe`,
 `*_cad_set_peak_offset`, `*_cad_base_peak`); LBT CAD runs 4 symbols (set in
 `buildModemConfig`), drivers scale their blocking-CAD timeout to
@@ -472,7 +482,12 @@ The custom `lr11xx_lora.c` driver handles several LR1110 firmware bugs:
 ### 5.5 SX127x and LR2021 Paths
 
 - **SX127x** (`CONFIG_ZEPHCORE_RADIO_SX127X`): uses Zephyr's loramac-node LoRa backend instead of the native driver (`CONFIG_LORA_MODULE_BACKEND_LORAMAC_NODE`). Patch `0004-lora-sx127x-62k5-bandwidth` adds the 62.5 kHz bandwidth MeshCore defaults to. No RX duty cycle and no RX gain boost on this path. Reference board: TTGO LoRa32 (SX1276).
-- **LR2021** (`CONFIG_ZEPHCORE_RADIO_LR2021`): custom driver in `patches/zephyr-new/drivers/lora/lr20xx/` (copied into the Zephyr tree at configure time, like LR11xx). Experimental — bring-up on the ProMicro LR2021 is still in progress; not listed as a supported board.
+- **LR2021** (`CONFIG_ZEPHCORE_RADIO_LR2021`): custom driver in `patches/zephyr-new/drivers/lora/lr20xx/` (copied into the Zephyr tree at configure time, like LR11xx). **Validated on the SenseCAP MeshTracker X1** — RX, TX, LBT and RX duty cycle all confirmed on hardware after a full driver audit (2026-08-12). `promicro_lr2021` builds but is untested; its module was destroyed by overvoltage during bring-up. Notable properties that differ from the SX126x/LR11xx paths:
+  - **Firmware Patch RAM.** DS §22.3 calls the PRAM "highly recommended"; without it the chip runs unpatched. `lr20xx_load_pram()` writes the 560-word image from `0x801000`, activates it with opcode `0x012D`, and verifies the magic word at `0x800FF8` — so the `PRAM loaded:` log line is proof the chip took it, not merely that the writes were accepted. Volatile: reloaded from both reset paths, survives every sleep this driver issues (all with retention).
+  - **Hardware CAD→TX (`CadExitMode = 0x10`).** The chip runs the LBT CAD and, on a clear channel, transmits itself with no host round-trip. Payload and packet params are staged *before* `SetLoraCAD` and DIO1 stays enabled across it. Bounded by `cad_timeout`, which is 24 bits of 32 MHz periods = **524 ms max Tx timeout** — transmits whose airtime exceeds that take the classic CAD→host→`SetTx` route rather than being truncated (at SF7/BW62.5 the crossover is ~96 bytes).
+  - **Front-end calibration is a point calibration, not a band.** `CalibFE` takes up to three individual frequencies (4 MHz steps, bit 15 = LF/HF), unlike the SX126x/LR11xx `CalibrateImage` freq1/freq2 band with datasheet-prescribed edges. It is issued only at config, after a hardware reset, and on AGC reset — never on the Tx/Rx path (DS §6.4.2 keeps the values on chip across retention sleep). Both 4 MHz neighbours of the operating frequency are calibrated, nearest first, because the SDK rounds the argument up where the chip's own default truncates down.
+  - **Side detectors** (multi-SF receive) are LR2021-only; see `lr20xx_configure_side_detectors()`. Mutually exclusive with CAD, whose SF ordering constraint is the inverse.
+  - **Per-packet frequency error** is decoded and accumulated (`get freqerr`) — diagnostic only, nothing acts on it.
 
 ### 5.6 Default Radio Parameters
 
@@ -531,7 +546,8 @@ key exists anywhere.
    and the reply is written straight into the offline queue. **No packet
    object is ever created**, so nothing can reach the dispatcher or radio.
 2. The v-contact never enters the real contacts table (`CMD_ADD_UPDATE_CONTACT`
-   for its key is intercepted to a no-op OK), so it is never in the RF RX
+   for its key is intercepted — it keeps only the app-owned `flags` byte, in
+   `prefs.v_contact_flags`, and replies OK), so it is never in the RF RX
    matching path. Every other pubkey-addressed opcode (login, telemetry,
    binary req, path discovery…) misses `lookupContactByPubKey()` and fails
    `ERR_NOT_FOUND` before a packet exists.
@@ -540,10 +556,26 @@ key exists anywhere.
 
 **App plumbing**: appears as a virtual tail entry in the `CMD_GET_CONTACTS`
 iteration (and `+1` in the CONTACT_START total); pushed as `NEW_ADVERT` on
-runtime enable and rename, `CONTACT_DELETED` on disable. App-side contact
-delete (`CMD_REMOVE_CONTACT`) turns the feature off. Send/ack choreography is
-synthesized (SENT + immediate SEND_CONFIRMED, trip time 0). CLI replies are
+runtime enable and rename, `CONTACT_DELETED` on disable. Send/ack choreography
+is synthesized (SENT + immediate SEND_CONFIRMED, trip time 0). CLI replies are
 chunked at ≤150 chars on line breaks (offline-queue frames cap at 172 bytes).
+
+`_vcontact_lastmod` is re-stamped once per app session at `CMD_APP_START`,
+before the `CMD_GET_CONTACTS` that follows it. Without that the timestamp only
+moved on boot/rename/identity-import, so the app showed an ever-growing "last
+seen" age *and* — because the sync gate is `_vcontact_lastmod >
+_contact_iter_since` — the v-contact was streamed exactly once ever, leaving
+the app holding a contact the node no longer mentioned.
+
+**App-side delete is session-scoped** (`_vcontact_app_hidden`): the v-contact is
+withheld from sync and adverts for the rest of that session, and returns at the
+next `CMD_APP_START`. It deliberately does **not** touch
+`prefs.v_contact_enabled` — the v-contact is an ordinary entry in the app's
+contact list, so a "purge all contacts" walks it like any other, and the old
+behaviour (delete ⇒ pref off) let a routine purge silently disable a firmware
+feature with no way back except the USB CLI. Durable disable is node-side only:
+`set v.contact off`. Notices queued while hidden stay in the offline queue and
+drain on the next connect; only their `MSG_WAITING` prompt is suppressed.
 
 **Clock gating (no 1970 timestamps)**: while the RTC has never been synced
 (time < firmware build epoch) the v-contact is *deferred* — withheld from
@@ -570,8 +602,10 @@ are delivered on the first app connect/sync. RAM-backed: lost on reboot (the
 restart-reason message partially compensates) and bounded by
 `CONFIG_ZEPHCORE_OFFLINE_QUEUE_SIZE`.
 
-**Settings** (companion `v.*` CLI namespace, prefs offsets 152–154):
-- `set/get v.contact on|off` — default on.
+**Settings** (companion `v.*` CLI namespace, prefs offsets 152–154 plus
+`v_contact_flags` at 166):
+- `set/get v.contact on|off` — default on. The only durable disable; turning it
+  off also clears `v_contact_flags`, since the app drops the contact.
 - `set/get v.batteryalert <mV>|0|default` — default = board auto-shutdown
   threshold + 200 mV (so the alert wins the race against the 90 s shutdown
   confirm window), 3500 mV on boards without auto-shutdown. Alert latches

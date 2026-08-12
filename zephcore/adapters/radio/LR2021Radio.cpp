@@ -142,6 +142,21 @@ uint8_t LR2021Radio::hwCadBasePeak()
 	return lr20xx_cad_base_peak(_dev);
 }
 
+/* The detPeak range lr20xx_do_cad() will actually program.  Must match the
+ * driver's clamp exactly: if the adapter thinks the range is wider, the
+ * staircase explores offsets that collapse onto one peak and reads the noise
+ * between them as curvature — which is how it random-walked to -8 at SF7,
+ * where base 51 puts everything from -3 down onto peak 48. */
+uint8_t LR2021Radio::hwCadPeakMin()
+{
+	return lr20xx_cad_peak_min();
+}
+
+uint8_t LR2021Radio::hwCadPeakMax()
+{
+	return lr20xx_cad_peak_max();
+}
+
 uint32_t LR2021Radio::hwWakeupTimeUs()
 {
 	/* Per-device, because the TCXO term dominates and is board-specific:

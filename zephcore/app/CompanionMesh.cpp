@@ -218,6 +218,7 @@ CompanionMesh::CompanionMesh(mesh::Radio &radio, mesh::MillisecondClock &ms, mes
 	memset(_vcontact_pending, 0, sizeof(_vcontact_pending));
 	_vcontact_pending_count = 0;
 	_vcontact_hold_msgwait = false;
+	_vcontact_app_hidden = false;
 	memset(&prefs, 0, sizeof(prefs));
 	prefs.node_lat = 0;
 	prefs.node_lon = 0;
@@ -864,7 +865,12 @@ void CompanionMesh::buildVContact(ContactInfo &c) const
 {
 	memcpy(c.id.pub_key, _vcontact_pubkey, PUB_KEY_SIZE);
 	c.type = ADV_TYPE_CHAT;
-	c.flags = 0;
+	/* App-owned flags (bit 0 = favourite, upper bits = telemetry permissions).
+	 * The v-contact has no contacts-table record to hold them, so they live in
+	 * prefs — see the CMD_ADD_UPDATE_CONTACT interception below. Echoing a
+	 * hardcoded 0 here is what used to clear the favourite star on every
+	 * contact sync. */
+	c.flags = prefs.v_contact_flags;
 	c.out_path_len = 0;  /* zero-hop direct — renders as "0 hops" in the app */
 	c.shared_secret_valid = false;
 	memset(c.out_path, 0, sizeof(c.out_path));
@@ -950,8 +956,13 @@ void CompanionMesh::vcontactQueueText(const char *text)
 	 * makes the app interleave message-sync into the contact stream and
 	 * truncate it. The message is already safe in the offline queue and the
 	 * app's own initial message-sync drains it — so no prompt is needed inside
-	 * the window. Outside it, the prompt goes out immediately. */
-	if (!_vcontact_hold_msgwait) {
+	 * the window. Outside it, the prompt goes out immediately.
+	 *
+	 * Also suppressed while the app has deleted the v-contact this session:
+	 * prompting for messages from a contact the app just dropped is noise. The
+	 * messages stay in the offline queue and drain on the next connect, when
+	 * the contact is back. */
+	if (!_vcontact_hold_msgwait && !_vcontact_app_hidden) {
 		sendPush(PUSH_CODE_MSG_WAITING);
 	}
 }
@@ -993,6 +1004,9 @@ void CompanionMesh::deriveVContactKey()
 void CompanionMesh::vcontactPushAdvert()
 {
 	if (!isVContactEnabled()) return;
+	/* The app deleted it this session — don't push it straight back at them.
+	 * It returns on its own at the next CMD_APP_START. */
+	if (_vcontact_app_hidden) return;
 	if (!vcontactClockValid()) {
 		/* Defer — an advert stamped now would carry a 1970 timestamp.
 		 * vcontactClockSynced() re-runs this once a time source arrives. */
@@ -1148,10 +1162,29 @@ bool CompanionMesh::vcontactHandleFrame(const uint8_t *data, size_t len)
 		return false;
 
 	case CMD_ADD_UPDATE_CONTACT:
+		/* Never let the v-contact into the real contacts table (it must stay out
+		 * of the RF RX matching path) — but do keep the one field the app owns
+		 * and expects back: the flags byte (bit 0 = favourite, upper bits =
+		 * telemetry permissions). Everything else in the frame (name, path,
+		 * lat/lon, advert timestamp) is ours to generate in buildVContact().
+		 * Frame layout matches the real handler: [cmd][32-byte pubkey][type]
+		 * [flags][...]. Reply OK so app-side flows don't surface errors. */
+		if (len >= 1 + PUB_KEY_SIZE && isVContactKey(&data[1], PUB_KEY_SIZE)) {
+			if (len >= 1 + PUB_KEY_SIZE + 2) {
+				uint8_t flags = data[1 + PUB_KEY_SIZE + 1];
+				if (flags != prefs.v_contact_flags) {
+					prefs.v_contact_flags = flags;
+					_store->savePrefs(prefs);
+				}
+			}
+			sendPacketOk();
+			return true;
+		}
+		return false;
+
 	case CMD_RESET_PATH:
-		/* Never let the v-contact into the real contacts table (it must stay
-		 * out of the RF RX matching path); path resets are meaningless for a
-		 * loopback contact. Reply OK so app-side flows don't surface errors. */
+		/* Path resets are meaningless for a loopback contact — accept and drop
+		 * so app-side flows don't surface errors. */
 		if (len >= 1 + PUB_KEY_SIZE && isVContactKey(&data[1], PUB_KEY_SIZE)) {
 			sendPacketOk();
 			return true;
@@ -1159,11 +1192,19 @@ bool CompanionMesh::vcontactHandleFrame(const uint8_t *data, size_t len)
 		return false;
 
 	case CMD_REMOVE_CONTACT:
-		/* App-side delete turns the feature off (mirrors user intent);
-		 * `set v.contact on` (USB CLI) brings it back. */
+		/* App-side delete hides the v-contact for the rest of this session and
+		 * nothing more — see _vcontact_app_hidden. It used to set
+		 * prefs.v_contact_enabled = 0, which made a routine "purge all
+		 * contacts" in the app silently disable the feature for good: the
+		 * v-contact is an ordinary list entry, so a purge removes it like any
+		 * other, and only the USB CLI could turn it back on. Durable disable
+		 * stays with the node-side pref (`set v.contact off`).
+		 *
+		 * Flags are deliberately kept: the same contact returns on the next
+		 * connect, so its favourite star should return with it. */
 		if (len >= 1 + PUB_KEY_SIZE && isVContactKey(&data[1], PUB_KEY_SIZE)) {
-			prefs.v_contact_enabled = 0;
-			_store->savePrefs(prefs);
+			_vcontact_app_hidden = true;
+			LOG_INF("vcontact: hidden by app delete (this session only)");
 			sendPacketOk();
 			return true;
 		}
@@ -2075,10 +2116,28 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 		/* New session: suppress v-contact notice MSG_WAITING until the initial
 		 * sync (contacts + messages) completes at PACKET_NO_MORE_MSGS. */
 		_vcontact_hold_msgwait = true;
+		/* An app-side delete only hides the v-contact for the session it
+		 * happened in — this is that session boundary, so it comes back. */
+		_vcontact_app_hidden = false;
 
 		/* If a time source already ran (hardware RTC, GPS), activate the
 		 * deferred v-contact and flush buffered notices for this session. */
 		vcontactClockSynced();
+
+		/* Re-stamp the v-contact once per app session so it stays "fresh".
+		 * _vcontact_lastmod feeds both lastmod and last_advert_timestamp, and
+		 * it used to move only on boot / rename / identity import: the app
+		 * showed an ever-growing "last seen" age, and — worse — the contact
+		 * sync gate is `_vcontact_lastmod > _contact_iter_since`, so after the
+		 * first sync the v-contact was never streamed again and app-side state
+		 * (flags, name) could never be corrected. Bumping here, before the
+		 * CMD_GET_CONTACTS that follows APP_START, means every session's sync
+		 * carries a current timestamp; deferring it to the end of sync would
+		 * always land one session late. Silent on purpose — no NEW_ADVERT push
+		 * mid-handshake; the sync itself delivers it. */
+		if (vcontactReady() && vcontactClockValid()) {
+			_vcontact_lastmod = (uint32_t)getRTCClock()->getCurrentTime();
+		}
 
 		// Return SELF_INFO
 		uint8_t rsp[90];  // 58 fixed + up to 32 bytes name
@@ -2950,6 +3009,13 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 					 * and vcontactClockSynced() (the lastmod==0 path) emits at the
 					 * next time-sync instead of only after a reboot. */
 					_vcontact_lastmod = 0;
+					/* Different key → different contact in the app; the old
+					 * favourite/telemetry flags don't carry over. Persist
+					 * before the push so a reboot can't resurrect them. */
+					if (prefs.v_contact_flags != 0) {
+						prefs.v_contact_flags = 0;
+						_store->savePrefs(prefs);
+					}
 					if (vc_was_enabled) vcontactPushAdvert();
 					/* Reload contacts to invalidate ECDH shared secrets */
 					resetContacts();

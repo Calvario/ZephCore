@@ -174,6 +174,19 @@ void lr20xx_cad_set_peak_offset(const struct device *dev, int8_t offset);
 uint8_t lr20xx_cad_base_peak(const struct device *dev);
 
 /**
+ * @brief Absolute detPeak range this driver will program, inclusive
+ *
+ * The adaptive-CAD controller needs these to keep its offset window inside the
+ * range where every level is a distinct configuration.  Outside it the clamp
+ * folds several offsets onto one peak, and the staircase compares rungs that
+ * are physically identical.
+ *
+ * @return lowest / highest detPeak the driver will ever send
+ */
+uint8_t lr20xx_cad_peak_min(void);
+uint8_t lr20xx_cad_peak_max(void);
+
+/**
  * @brief Run one blocking calibration CAD at base detPeak + peak_offset
  *
  * Uses the operating modem config (SF/BW/symbol count).  Leaves the chip

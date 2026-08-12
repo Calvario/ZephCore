@@ -140,6 +140,12 @@ struct NodePrefs {
 	uint16_t auto_shutdown_mv;      // low-batt auto-shutdown threshold; 0 = off, else 2900–4200
 	uint8_t v_contact_enabled;      // v-contact (loopback admin chat via BLE/USB); 1 = on (default)
 	uint16_t v_battery_alert_mv;    // 0 = alert off; 0xFFFF = board default (auto_shutdown+200); else mV
+	/* App-owned ContactInfo.flags byte for the v-contact.  The v-contact never
+	 * enters the contacts table, so it has no record to hold the flags the app
+	 * sets via CMD_ADD_UPDATE_CONTACT -- bit 0 is the 'favourite' star, the
+	 * upper bits are telemetry permissions.  Kept here so a toggle survives
+	 * reconnects and reboots instead of being echoed back as 0. */
+	uint8_t v_contact_flags;
 };
 
 /* Default prefs -- must match LoRaConfig.h defaults for radio interop. */

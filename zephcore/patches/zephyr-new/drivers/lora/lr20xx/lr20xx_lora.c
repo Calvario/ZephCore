@@ -2557,6 +2557,28 @@ static const uint8_t lr20xx_cad_peak_table[4][8] = {
 	/* 4 */ { 51, 51, 51, 54, 56, 60,  60,  64 },
 };
 
+/* The detPeak range this driver will actually program.  Exported through
+ * lr20xx_cad_peak_min/max() so the C++ adaptive-CAD controller can narrow its
+ * offset window to match: where base+offset falls outside this, several offsets
+ * collapse onto one peak and the staircase reads sampling noise between
+ * identical configurations as curvature.
+ *
+ * 48 sits three steps below the lowest value DS Table 6-19 documents anywhere
+ * (51, at SF5-7 with 3-4 symbols), so the range already allows more sensitivity
+ * than the datasheet tabulates; the datasheet gives no absolute bound. */
+#define LR20XX_CAD_PEAK_MIN 48
+#define LR20XX_CAD_PEAK_MAX 90
+
+uint8_t lr20xx_cad_peak_min(void)
+{
+	return LR20XX_CAD_PEAK_MIN;
+}
+
+uint8_t lr20xx_cad_peak_max(void)
+{
+	return LR20XX_CAD_PEAK_MAX;
+}
+
 static uint8_t lr20xx_cad_detect_peak(uint8_t sf, uint8_t symb_nb)
 {
 	if (sf < 5 || sf > 12) {
@@ -2624,10 +2646,10 @@ static int lr20xx_do_cad(struct lr20xx_data *data)
 		 * LR20xx detPeak scale matches LR11xx (~48-90). */
 		int peak = (int)cad.cad_detect_peak + data->cad_peak_offset;
 
-		if (peak < 48) {
-			peak = 48;
-		} else if (peak > 90) {
-			peak = 90;
+		if (peak < LR20XX_CAD_PEAK_MIN) {
+			peak = LR20XX_CAD_PEAK_MIN;
+		} else if (peak > LR20XX_CAD_PEAK_MAX) {
+			peak = LR20XX_CAD_PEAK_MAX;
 		}
 		cad.cad_detect_peak = (uint8_t)peak;
 	}
@@ -2761,10 +2783,10 @@ int lr20xx_cad_probe(const struct device *dev, int8_t peak_offset)
 	int peak = base + peak_offset;
 	int ret;
 
-	if (peak < 48) {
-		peak = 48;
-	} else if (peak > 90) {
-		peak = 90;
+	if (peak < LR20XX_CAD_PEAK_MIN) {
+		peak = LR20XX_CAD_PEAK_MIN;
+	} else if (peak > LR20XX_CAD_PEAK_MAX) {
+		peak = LR20XX_CAD_PEAK_MAX;
 	}
 
 	/* One-shot absolute override consumed by lr20xx_do_cad().  Probes and
