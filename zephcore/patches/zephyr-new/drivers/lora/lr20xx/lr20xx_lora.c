@@ -1303,6 +1303,31 @@ static void lr20xx_restart_rx(struct lr20xx_data *data)
 	data->in_rx_mode = true;
 }
 
+/* "Is the receiver still live?" — used by the DIO1 safety path to decide
+ * whether an error-only wake actually cost us RX.  Conservative: answers true
+ * (leave it alone) whenever it cannot tell.
+ *
+ * Caller must hold spi_mutex.  GetStatus goes through lr20xx_hal_direct_read
+ * and clears nothing. */
+static bool lr20xx_rx_confirmed_live(struct lr20xx_data *data)
+{
+	lr20xx_system_stat2_t s2 = {0};
+
+	/* Never probe an armed duty cycle.  GetStatus asserts NSS and an NSS
+	 * falling edge terminates the cycle (DS §6.3.8) — that is precisely the
+	 * damage this path exists to avoid causing.  A duty cycle also re-arms
+	 * itself from every terminal event, so it needs no help here. */
+	if (data->rx_duty_cycle_enabled) {
+		return true;
+	}
+
+	if (lr20xx_system_get_status(&data->hal_ctx, NULL, &s2, NULL) !=
+	    LR20XX_STATUS_OK) {
+		return false;
+	}
+	return s2.chip_mode == LR20XX_SYSTEM_CHIP_MODE_RX;
+}
+
 /* ── DIO1 IRQ handler (work queue, thread context) ──────────────────── */
 
 /* IRQ bit 16 means "call get_errors" per the datasheet; bit 17 is a rejected
@@ -1619,6 +1644,36 @@ safety_check:
 	 * re-submit, or the restart path cleared it. Nothing failed, so do not
 	 * tear RX down and do not count it toward the stuck-DIO1 reset. */
 	if (irq == 0) {
+		goto edge_recheck;
+	}
+
+	/* Error-only wake.  The chip is telling us a command WE sent was
+	 * rejected, or reporting a hardware error — both already logged and
+	 * cleared above.  Restarting RX is not a response to either, and when
+	 * the rejected command IS the restart's own SetRx / SetRxDutyCycle the
+	 * restart is what regenerates the error.  That is the loop observed on
+	 * the X1: one noise header error -> refused duty-cycle re-arm ->
+	 * CMD_ERROR -> DIO1 high -> "no IRQ handled" -> restart -> refused
+	 * again, five laps and a hardware reset, ~88 ms deaf.
+	 *
+	 * So restart only when the receiver demonstrably did stop: a rejected
+	 * command CAN leave the chip out of RX, and continuous RX has no re-arm
+	 * timer, so nothing else would notice until the dispatcher's 4 s CAD
+	 * timeout on the next transmit.
+	 *
+	 * This is not "ignore errors": the errors were cleared, so DIO1 drops
+	 * and edge_recheck ends the cycle.  If something keeps re-raising them
+	 * DIO1 stays high, dio1_stuck_count (deliberately never reset for
+	 * error-only IRQs) still climbs, and the hardware-reset escape hatch
+	 * still fires — it just is no longer reached by our own doing. */
+	if ((irq & ~(LR20XX_SYSTEM_IRQ_ERROR |
+		     LR20XX_SYSTEM_IRQ_CMD_ERROR)) == 0) {
+		if (!rx_restarted && data->in_rx_mode && !data->tx_active &&
+		    !lr20xx_rx_confirmed_live(data)) {
+			LOG_WRN("DIO1: error-only IRQ (0x%08x) left the chip "
+				"out of RX — restarting", irq);
+			lr20xx_restart_rx(data);
+		}
 		goto edge_recheck;
 	}
 
