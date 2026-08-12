@@ -82,6 +82,9 @@ public:
 
     // Adaptive CAD (LBT detPeak calibration)
     virtual int formatCadStatus(char* buf, int cap) { (void)buf; (void)cap; return 0; }
+    /* Carrier frequency error accumulated from received packets; 0 = this
+     * radio cannot measure it (only the LR2021 does today). */
+    virtual int formatFreqErrorStatus(char* buf, int cap) { (void)buf; (void)cap; return 0; }
     virtual void applyCadPrefs() {}
     virtual void resetCadStats() {}
 

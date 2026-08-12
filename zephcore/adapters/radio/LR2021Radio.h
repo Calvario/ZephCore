@@ -21,6 +21,15 @@ public:
 	/* LoRa side detectors — LR2021-only multi-SF receive. */
 	bool configSideDetectors(const uint8_t *sfs, uint8_t num) override;
 
+	/* Carrier frequency error accumulated from received packets.  LR2021
+	 * only: driver v2.0.2 decodes it per packet, no other radio here
+	 * reports it. */
+	int formatFreqErrorStatus(char *buf, int cap) override;
+
+	/* Also clears the frequency-error accumulator, so `clear stats` gives a
+	 * clean baseline after changing frequency or swapping a module. */
+	void resetStats() override;
+
 protected:
 	/* Hardware primitives */
 	bool hwConfigure(const struct lora_modem_config &cfg) override;

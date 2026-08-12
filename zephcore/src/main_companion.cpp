@@ -737,6 +737,9 @@ public:
 	}
 
 	/* Adaptive CAD */
+	int formatFreqErrorStatus(char* buf, int cap) override {
+		return lora_radio.formatFreqErrorStatus(buf, cap);
+	}
 	int formatCadStatus(char* buf, int cap) override {
 		return lora_radio.formatCadStatus(buf, cap);
 	}

@@ -174,6 +174,9 @@ protected:
     }
 
     /* Adaptive CAD */
+    int formatFreqErrorStatus(char* buf, int cap) override {
+        return _radio->formatFreqErrorStatus(buf, cap);
+    }
     int formatCadStatus(char* buf, int cap) override {
         return _radio->formatCadStatus(buf, cap);
     }

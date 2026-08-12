@@ -115,24 +115,23 @@ struct lr20xx_data {
 	int8_t cad_peak_offset;
 	uint8_t cad_probe_peak;
 
-	/* BENCH INSTRUMENTATION — CAD_DONE -> carrier-up latency.
+	/* CAD_DONE -> carrier-up latency, in k_cycle_get_32() units.
 	 *
-	 * k_cycle_get_32() stamped where the DIO1 work handler observes
-	 * CAD_DONE, read again immediately before SetTx.  The delta is the
-	 * whole host round-trip the chip's CAD_LBT exit mode would remove:
-	 * IRQ -> work queue -> semaphore -> mesh thread -> apply_modem_config
-	 * -> SetTx.  0 = no CAD preceded this transmit (nothing to report).
+	 * Stamped where the DIO1 work handler observes CAD_DONE, read again
+	 * immediately before SetTx.  The delta is the host round-trip that
+	 * CAD_LBT removes: IRQ -> work queue -> semaphore -> mesh thread ->
+	 * apply_modem_config -> SetTx.  0 = no CAD preceded this transmit.
 	 *
-	 * This is measurement only, no behaviour change — flash it FIRST and
-	 * record the baseline, because a CAD_LBT number is meaningless without
-	 * one.  Remove with the experiment. */
+	 * Only reached on the fallback path now that the chip does CAD->TX
+	 * itself, so it measures what the host route still costs for transmits
+	 * too long for CAD_LBT's 524 ms Tx-timeout ceiling. */
 	uint32_t cad_done_cycles;
 
-	/* BENCH EXPERIMENT — CAD_LBT.  When set, the next lr20xx_do_cad() asks
-	 * the chip for CadExitMode = TX (0x10, DS Table 6-18: "The chip performs
-	 * a CAD operation and if no activity is detected, it goes to Tx mode and
-	 * takes cad_timeout as Tx timeout") instead of the STANDBY_RC fallback,
-	 * and passes cad_lbt_tx_timeout as that Tx timeout.  Both are cleared by
+	/* CAD_LBT arming.  When set, the next lr20xx_do_cad() asks the chip for
+	 * CadExitMode = TX (0x10, DS Table 6-18: "The chip performs a CAD
+	 * operation and if no activity is detected, it goes to Tx mode and takes
+	 * cad_timeout as Tx timeout") instead of the STANDBY_RC fallback, and
+	 * passes cad_lbt_tx_timeout as that Tx timeout.  Both are cleared by
 	 * do_cad once consumed, so an ordinary adaptive-CAD probe can never
 	 * inherit them and accidentally transmit. */
 	bool cad_lbt_exit_tx;
@@ -1390,12 +1389,36 @@ static void lr20xx_track_freq_offset(struct lr20xx_data *data, int32_t off_hz)
 		data->freq_off_max_hz = off_hz;
 	}
 
+	/* Saturate rather than wrap.  The sum is nowhere near trouble — bounded
+	 * to +/-200 kHz per packet by the gate above, int64_t needs ~4.6e13
+	 * packets — but the uint32_t count wraps at 4.29e9 (~14 years at
+	 * 10 pkt/s), and it wraps to *zero*, which the summary below would then
+	 * divide by.  Unreachable in practice; undefined if reached.  Freezing
+	 * leaves the mean valid and stale, which is a defensible answer; the
+	 * per-packet last/min/max above keep updating either way. */
+	if (data->freq_off_count == UINT32_MAX) {
+		return;
+	}
 	data->freq_off_sum_hz += off_hz;
 	data->freq_off_count++;
 
-	LOG_DBG("freq offset: %d Hz (mean %d over %u)", off_hz,
-		(int)(data->freq_off_sum_hz / (int64_t)data->freq_off_count),
-		data->freq_off_count);
+	LOG_DBG("freq offset: %d Hz", off_hz);
+
+	/* Periodic summary at INFO.  The per-packet value above is only visible
+	 * with CONFIG_LORA_LOG_LEVEL_DBG=y, which makes this whole driver a
+	 * firehose (six lines per apply_modem_config alone) and starts dropping
+	 * messages on a soak long enough to matter.  The mean is the number
+	 * worth watching anyway — one packet's offset is our reference error
+	 * plus the transmitter's, so only the average over many peers says
+	 * anything about ours.  Every 16 packets keeps it readable in an
+	 * ordinary debug.conf build. */
+	if ((data->freq_off_count & 0x0F) == 0) {
+		LOG_INF("freq offset: mean %d Hz (min %d, max %d, %u pkts)",
+			(int)(data->freq_off_sum_hz /
+			      (int64_t)data->freq_off_count),
+			data->freq_off_min_hz, data->freq_off_max_hz,
+			data->freq_off_count);
+	}
 }
 
 static void lr20xx_dio1_callback(void *user_data);
@@ -1509,7 +1532,7 @@ static void lr20xx_dio1_work_handler(struct k_work *work)
 	if (irq & LR20XX_SYSTEM_IRQ_CAD_DONE) {
 		bool detected = (irq & LR20XX_SYSTEM_IRQ_CAD_DETECTED) != 0;
 
-		/* BENCH INSTRUMENTATION: stamp as early as possible in the
+		/* Stamp as early as possible in the
 		 * handler — everything after this point is the host round-trip
 		 * being measured.  Only a free channel leads to a transmit, so
 		 * only that case is worth stamping. */
@@ -1729,22 +1752,19 @@ static uint32_t lr20xx_cad_timeout_ms(struct lr20xx_data *data)
 	return MAX(ms, 200U);
 }
 
-/* ── BENCH EXPERIMENT: hardware CAD_LBT ─────────────────────────────────
+/* ── Hardware CAD_LBT ───────────────────────────────────────────────────
  *
  * DS Table 6-18, CadExitMode = 0x10: the chip runs the CAD and, if the channel
  * is clear, goes straight to Tx with no host round-trip — removing the
  * IRQ -> work queue -> semaphore -> mesh thread -> apply_modem_config -> SetTx
- * path between "channel measured free" and "carrier up".  Bench 2a measures
- * exactly that gap; this is the thing that closes it.
+ * path between "channel measured free" and "carrier up".
  *
- * Judge on latency only (A7).  Post-CAD collisions are not separable from any
- * other loss with CoreScope, so make no collision-rate claim either way.
- *
- * Nobody has this working on an LR2021: USP #125 reported its RAL path
- * non-functional (that entry is absent from the current KNOWN_LIMITATIONS.md,
- * which is the removal of a warning, not a fix), and RadioLib never implemented
- * LoRa CAD at all.  FAILURE IS AN ACCEPTABLE OUTCOME — revert and report rather
- * than sink time into it.
+ * Verified working on a MeshTracker X1, 2026-08-12, which is worth recording
+ * because there was no prior art either way: USP #125 reported the RAL_LORA_CAD_LBT
+ * path non-functional (that entry is absent from the current
+ * KNOWN_LIMITATIONS.md, which is the removal of a warning rather than a fix),
+ * and RadioLib never implemented LoRa CAD on this chip at all — its
+ * scanChannel() uses the generic RSSI CAD.
  *
  * Requirements the restructure exists to satisfy: the payload must be in the Tx
  * FIFO and the packet params set BEFORE SetLoraCAD, since the chip transmits
@@ -1754,9 +1774,13 @@ static uint32_t lr20xx_cad_timeout_ms(struct lr20xx_data *data)
  *
  * HARD CEILING: cad_timeout is 24 bits of 32 MHz periods = 0x00FFFFFF / 32e6 =
  * 524 ms of Tx timeout, against the 5000 ms the normal path uses.  Anything
- * whose airtime does not fit is transmitted the old way instead of being
- * silently truncated mid-packet.  At SF7/BW250 a 100-byte frame is ~80 us*1000
- * and fits easily; SF10/BW250 at the same length is ~720 ms and does not.
+ * whose airtime does not fit takes the host CAD->TX route instead of being
+ * silently truncated mid-packet.  At SF7/BW62.5 the crossover is around a
+ * 96-byte payload, so short frames go the fast way and long ones do not.
+ *
+ * The gain is latency only.  Post-CAD collisions are not separable from any
+ * other loss with the monitoring available, so no collision-rate claim is made
+ * in either direction.
  */
 #define LR20XX_CAD_LBT_MAX_TX_TIMEOUT_STEPS 0x00FFFFFFU
 #define LR20XX_CAD_LBT_STEPS_PER_MS         32000U
@@ -1890,7 +1914,7 @@ static int lr20xx_lora_send_async(const struct device *dev,
 	 * commands it too, so this has to come first. */
 	lr20xx_dc_takeover(data);
 
-	/* BENCH EXPERIMENT: hand CAD->TX to the chip where the transmit fits
+	/* Hand CAD->TX to the chip where the transmit fits
 	 * inside cad_timeout's 524 ms ceiling.  Above it, fall through to the
 	 * classic two-step path rather than truncate the packet. */
 	if (data->modem_cfg.cad.mode == LORA_CAD_MODE_LBT) {
@@ -1998,7 +2022,7 @@ static int lr20xx_lora_send_async(const struct device *dev,
 	data->tx_signal = async;
 	data->tx_active = true;
 
-	/* BENCH INSTRUMENTATION: CAD_DONE -> carrier-up, the gap CAD_LBT would
+	/* CAD_DONE -> carrier-up, the gap CAD_LBT would
 	 * close.  Reported in microseconds; k_cycle_get_32() wraps, but the
 	 * unsigned subtraction is correct across one wrap and the interval is
 	 * milliseconds against a 32-bit counter, so a double wrap is not
@@ -2557,24 +2581,22 @@ static int lr20xx_do_cad(struct lr20xx_data *data)
 	uint8_t symb_nb = lr20xx_cad_symb_nb(mc);
 	lr20xx_radio_lora_cad_params_t cad = {
 		.cad_symb_nb = symb_nb,
-		/* BENCH EXPERIMENT — best-effort ("fast") CAD.  DS §6.3.11:
-		 * "CadDone time is shortened in case of early no detection";
-		 * the vendor header calls 8 the recommended best-effort value.
-		 * Most LBT CADs find nothing, so this shortens the common
-		 * pre-TX blocking path.
+		/* Best-effort ("fast") CAD.  DS §6.3.11: "CadDone time is
+		 * shortened in case of early no detection", and the vendor
+		 * header calls 8 the recommended best-effort value.  Most LBT
+		 * CADs find nothing, so this shortens the common pre-TX
+		 * blocking path.  0 would mean the exact symbol count.
 		 *
-		 * NOT a fix — revert unless the bench A/B justifies it.  Judge
-		 * on `get cad`, per-level line (probes / busy / false-pos /
-		 * true-pos / fp-rate) over a comparable window.  A materially
-		 * LOWER busy rate is a RED FLAG, not a win: it more likely means
-		 * CAD stopped detecting than that the channel went quiet.
-		 * Side detectors are already off during CAD, so the DS's
-		 * multi-SF "main SF determines the not-detect condition" caveat
-		 * does not apply.
+		 * Side detectors are already off during CAD, so the datasheet's
+		 * multi-SF caveat ("the main SF determines the not-detect
+		 * condition") does not apply.
 		 *
-		 * Revert value: 0 (exact symbol count, no best-effort). */
+		 * If CAD behaviour is ever suspect, `get cad`'s per-level line
+		 * is the instrument: a materially LOWER busy rate is a red flag
+		 * rather than a win, since it more likely means CAD stopped
+		 * detecting than that the channel got quieter. */
 		.pnr_delta = 8,
-		/* BENCH EXPERIMENT: CAD_LBT hands the CAD->TX transition to the
+		/* CAD_LBT hands the CAD->TX transition to the
 		 * chip.  Note the two CAD commands have different exit-mode
 		 * encodings — generic RSSI CAD (DS Table 6-22) is 0x01 for Tx,
 		 * LoRa CAD (Table 6-18) is 0x10.  Always the SDK enum, never

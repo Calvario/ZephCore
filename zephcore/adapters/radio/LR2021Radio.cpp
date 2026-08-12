@@ -45,6 +45,31 @@ bool LR2021Radio::configSideDetectors(const uint8_t *sfs, uint8_t num)
 	return true;
 }
 
+void LR2021Radio::resetStats()
+{
+	LoRaRadioBase::resetStats();
+	lr20xx_reset_freq_offset(_dev);
+}
+
+int LR2021Radio::formatFreqErrorStatus(char *buf, int cap)
+{
+	struct lr20xx_freq_offset_stats st;
+
+	if (lr20xx_get_freq_offset(_dev, &st) == 0) {
+		return snprintf(buf, cap, "no packets measured yet");
+	}
+
+	/* Spread and count matter as much as the mean: the mean only
+	 * approximates THIS node's reference error once it is averaged over
+	 * many different peers, because their individual errors cancel and ours
+	 * does not.  A tight spread over a handful of packets is one neighbour,
+	 * not a population. */
+	return snprintf(buf, cap,
+			"mean %d Hz, min %d, max %d, %u pkts",
+			st.mean_hz, st.min_hz, st.max_hz,
+			(unsigned)st.count);
+}
+
 /* ── Hardware primitives ──────────────────────────────────────────────── */
 
 bool LR2021Radio::hwConfigure(const struct lora_modem_config &cfg)

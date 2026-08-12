@@ -62,6 +62,14 @@ public:
 		(void)buf; (void)cap; return 0;
 	}
 
+	/* Writes accumulated carrier-frequency-error statistics; returns chars
+	 * written (0 = this radio cannot measure it).  Diagnostic only — no
+	 * radio acts on the number, and correcting it is board-dependent: XTAL
+	 * parts have SetXoscCpTrim, TCXO parts have no chip-side trim at all. */
+	virtual int formatFreqErrorStatus(char *buf, int cap) {
+		(void)buf; (void)cap; return 0;
+	}
+
 	/* Packet statistics */
 	virtual uint32_t getPacketsRecv() const { return 0; }
 	virtual uint32_t getPacketsSent() const { return 0; }

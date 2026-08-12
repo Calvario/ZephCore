@@ -59,7 +59,11 @@ public:
 	uint32_t getPacketsRecv() const override { return (uint32_t)atomic_get(&_packets_recv); }
 	uint32_t getPacketsSent() const override { return (uint32_t)atomic_get(&_packets_sent); }
 	uint32_t getPacketsRecvErrors() const override { return (uint32_t)atomic_get(&_packets_recv_errors); }
-	void resetStats() {
+	/* Virtual so radios with extra accumulators can clear them on the same
+	 * `clear stats`.  Reached through a LoRaRadioBase& from
+	 * RepeaterMesh::clearStats() via getRadioDriver(), so a shadowing
+	 * non-virtual override would silently never run. */
+	virtual void resetStats() {
 		atomic_set(&_packets_recv, 0);
 		atomic_set(&_packets_sent, 0);
 		atomic_set(&_packets_recv_errors, 0);

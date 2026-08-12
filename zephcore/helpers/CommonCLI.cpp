@@ -553,6 +553,20 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         } else if (strcmp(config, "tx") == 0) {
             /* Plain number, matching upstream Arduino MeshCore's "> %d". */
             snprintf(reply, CLI_REPLY_SIZE, "> %d", (int)_prefs->tx_power_dbm);
+        } else if (memcmp(config, "freqerr", 7) == 0) {
+            /* MUST stay above "freq" — that is a 4-char prefix match and
+             * would swallow this one.
+             *
+             * Carrier frequency error measured on received packets, LR2021
+             * only.  Diagnostic: nothing acts on it.  The mean approximates
+             * THIS node's reference error only once averaged over many
+             * different peers (theirs cancel, ours does not), which is why
+             * the spread and packet count are shown alongside it. */
+            int n = snprintf(reply, CLI_REPLY_SIZE, "> ");
+            if (_callbacks->formatFreqErrorStatus(reply + n,
+                                                  CLI_REPLY_SIZE - n) == 0) {
+                strcpy(reply, "not available");
+            }
         } else if (memcmp(config, "freq", 4) == 0) {
             snprintf(reply, CLI_REPLY_SIZE, "> %.3f", (double)_prefs->freq);
         } else if (memcmp(config, "public.key", 10) == 0) {
