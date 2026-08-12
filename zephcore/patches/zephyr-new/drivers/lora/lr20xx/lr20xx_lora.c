@@ -63,9 +63,6 @@ struct lr20xx_config {
 	uint8_t rfswitch_rx;
 	uint8_t rfswitch_tx;
 	uint8_t rfswitch_tx_hp;
-	/* PA config */
-	uint8_t pa_hp_sel;    /* maps to pa_lf_slices in LR20xx */
-	uint8_t pa_duty_cycle; /* maps to pa_lf_duty_cycle in LR20xx */
 };
 
 struct lr20xx_data {
@@ -3193,8 +3190,6 @@ static DEVICE_API(lora, lr20xx_lora_api) = {
 		.rfswitch_rx      = DT_INST_PROP_OR(n, rfswitch_rx, 0),     \
 		.rfswitch_tx      = DT_INST_PROP_OR(n, rfswitch_tx, 0),     \
 		.rfswitch_tx_hp   = DT_INST_PROP_OR(n, rfswitch_tx_hp, 0),  \
-		.pa_hp_sel        = DT_INST_PROP_OR(n, pa_hp_sel, 7),       \
-		.pa_duty_cycle    = DT_INST_PROP_OR(n, pa_duty_cycle, 4),   \
 	};                                                                   \
 	static struct lr20xx_data lr20xx_data_##n;                           \
 	DEVICE_DT_INST_DEFINE(n, lr20xx_lora_init, NULL,                     \

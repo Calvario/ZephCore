@@ -90,17 +90,3 @@ properties:
     description: |
       Bitmask of RF switch DIOs that are HIGH in 2.4 GHz / high-power TX mode (HF PA).
       Bit mapping matches rfswitch-enable.
-
-  pa-hp-sel:
-    type: int
-    default: 7
-    description: |
-      LF PA number of slices (0-7). Maps to pa_lf_slices in the SDK.
-      Higher = more PA output slices active = more power. Default 7 = maximum.
-
-  pa-duty-cycle:
-    type: int
-    default: 4
-    description: |
-      LF PA duty cycle (0-7). Maps to pa_lf_duty_cycle in the SDK.
-      Default 4 is suitable for most sub-GHz applications.

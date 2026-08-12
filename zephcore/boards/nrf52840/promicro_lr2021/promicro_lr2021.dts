@@ -158,9 +158,6 @@
 		rfswitch-rx      = <0x03>;
 		rfswitch-tx      = <0x02>;
 		rfswitch-tx-hp   = <0x03>;
-
-		pa-hp-sel    = <7>;
-		pa-duty-cycle = <4>;
 	};
 };
 
