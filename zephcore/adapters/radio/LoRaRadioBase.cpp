@@ -1091,7 +1091,13 @@ int8_t LoRaRadioBase::cadLevelMinEff()
 	uint8_t base = hwCadBasePeak();
 	uint8_t pmin = hwCadPeakMin();
 
-	if (base == 0 || pmin == 0 || pmin <= base - CAD_LEVEL_MIN) {
+	/* The clamp only binds when the lowest peak the static window can reach,
+	 * base + CAD_LEVEL_MIN, would land below it.  Note the sign: this was
+	 * written `base - CAD_LEVEL_MIN` once, which with CAD_LEVEL_MIN negative
+	 * evaluates to base + 8 — always above pmin, so the narrowing never
+	 * happened and the whole function was inert. */
+	if (base == 0 || pmin == 0 ||
+	    (int)base + CAD_LEVEL_MIN >= (int)pmin) {
 		return CAD_LEVEL_MIN;
 	}
 	return (int8_t)((int)pmin - (int)base);

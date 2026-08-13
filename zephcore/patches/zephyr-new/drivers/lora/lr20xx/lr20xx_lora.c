@@ -37,8 +37,22 @@
 LOG_MODULE_REGISTER(lr20xx_lora, CONFIG_LORA_LOG_LEVEL);
 
 /* Dedicated DIO1 work queue — keeps LoRa interrupt processing off the
- * system work queue so USB/BLE/timer work items cannot delay packet RX. */
-#define LR20XX_DIO1_WQ_STACK_SIZE 2560
+ * system work queue so USB/BLE/timer work items cannot delay packet RX.
+ *
+ * 4 KB, where the SX126x and LR11xx both use 2560 and are stable on that.  This
+ * is NOT "the others got it wrong" — it is one path those two do not have:
+ * lr20xx_hardware_reset() runs *from this work handler*, and since the PRAM
+ * landed it carries lr20xx_load_pram() → lr20xx_patch_load_pram() → 18 block
+ * writes through the SDK's regmem layer.  Neither sibling has a firmware patch
+ * to load, so neither reaches that depth from work-queue context.  The ordinary
+ * path (apply_modem_config / restart_rx, plus a LOG_DBG and a CHECK_CMD
+ * get_status per command in CONFIG_LOG builds) is comparable across all three.
+ *
+ * Cheap insurance rather than a diagnosed fix: 1,536 bytes, funded several
+ * times over by dropping SEGGER RTT from debug.conf.  If the thread analyzer
+ * shows this queue's high-water mark nowhere near 2560, put it back — the
+ * number should come from a measurement, not from this comment. */
+#define LR20XX_DIO1_WQ_STACK_SIZE 4096
 K_THREAD_STACK_DEFINE(lr20xx_dio1_wq_stack, LR20XX_DIO1_WQ_STACK_SIZE);
 
 /* Hardware limit on concurrent LoRa side detectors (ConfigureSideDetectors
@@ -1469,6 +1483,34 @@ static void lr20xx_dio1_work_handler(struct k_work *work)
 					    ? "cmd rejected" : "hardware");
 		/* Latched until cleared, or every later poll re-reports it */
 		lr20xx_system_clear_errors(ctx);
+	}
+
+	/* Supply faults, observed passively.
+	 *
+	 * Bit 10 LOW_BATTERY ("power supply level dropped below the threshold")
+	 * and bit 11 PA_OVP_OCP ("power amplifier over-current protection has
+	 * triggered") are deliberately NOT in the DIO1 mask set by
+	 * apply_modem_config: routing them would make them assert the pin and
+	 * land in this handler with no branch to handle them, i.e. straight into
+	 * the "no IRQ handled" safety restart — a behaviour change nobody asked
+	 * for.  But they latch in the status register regardless of routing, and
+	 * get_and_clear_irq_status above already read the whole word, so noticing
+	 * them here is free and changes nothing.
+	 *
+	 * Worth noticing because a rail that sags under PA load is invisible
+	 * otherwise, and the chip's own GetVbat is only sampled once at init with
+	 * the radio idle.  Coverage is partial by nature — this only fires when
+	 * some other IRQ brings us into the handler — so absence is not proof. */
+	if (irq & (LR20XX_SYSTEM_IRQ_LOW_BATTERY |
+		   LR20XX_SYSTEM_IRQ_PA_OVP_OCP)) {
+		uint16_t vbat_mv = 0;
+
+		lr20xx_system_get_vbat(ctx, LR20XX_SYSTEM_VALUE_FORMAT_UNIT,
+				       LR20XX_SYSTEM_MEAS_RES_12_BITS, &vbat_mv);
+		LOG_ERR("SUPPLY FAULT: %s%s (chip VBAT now %u mV)",
+			(irq & LR20XX_SYSTEM_IRQ_LOW_BATTERY) ? "LOW_BATTERY " : "",
+			(irq & LR20XX_SYSTEM_IRQ_PA_OVP_OCP) ? "PA_OVP/OCP" : "",
+			vbat_mv);
 	}
 
 	/* Error-only IRQs are not progress. Resetting the counter on them let
