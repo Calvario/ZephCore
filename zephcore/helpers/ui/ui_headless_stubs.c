@@ -117,7 +117,7 @@ WEAK void ui_set_ble_enabled(bool enabled)
 
 WEAK void ui_set_buzzer_mode(uint8_t mode)
 {
-	ARG_UNUSED(quiet);
+	ARG_UNUSED(mode);
 }
 
 /* Not a no-op: a headless build still has the LoRa TX LED, and the gate that
