@@ -20,6 +20,7 @@
 #include <helpers/CommonCLI.h>
 #include <helpers/MeshTimeSync.h>
 #include <helpers/RegionMap.h>
+#include <helpers/RoutingPolicy.h>
 #include <helpers/TransportKeyStore.h>
 #include <helpers/RateLimiter.h>
 #include <helpers/StatsFormatHelper.h>
@@ -98,6 +99,11 @@ class RepeaterMesh : public mesh::Mesh, public CommonCLICallbacks {
     RegionMap region_map, temp_map;
     RegionEntry* load_stack[8];
     RegionEntry* recv_pkt_region;
+    /* A null recv_pkt_region has two meanings — a DIRECT request (no transport
+     * codes at all) and an un-scoped flood our wildcard Region denies — and
+     * sendFloodReply() must treat them differently, so record the route type
+     * rather than inferring it from the pointer. */
+    bool recv_pkt_unscoped_flood;
     TransportKey default_scope;
     RateLimiter discover_limiter, anon_limiter, login_fail_limiter;
     uint32_t pending_discover_tag;

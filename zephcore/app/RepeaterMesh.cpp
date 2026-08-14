@@ -563,26 +563,32 @@ void RepeaterMesh::sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt,
 }
 
 void RepeaterMesh::sendFloodReply(mesh::Packet* packet, unsigned long delay_millis, uint8_t path_hash_size) {
-    if (recv_pkt_region && !recv_pkt_region->isWildcard()) {  // if _request_ packet scope is known, send reply with same scope
-        TransportKey scope;
-        if (region_map.getTransportKeysFor(*recv_pkt_region, &scope, 1) > 0) {
-            sendFloodScoped(scope, packet, delay_millis, path_hash_size);
-        } else {
-            sendFlood(packet, delay_millis, path_hash_size);  // send un-scoped
-        }
-    } else {
+    TransportKey req_scope;
+    bool req_scope_known = recv_pkt_region != nullptr && !recv_pkt_region->isWildcard()
+                        && region_map.getTransportKeysFor(*recv_pkt_region, &req_scope, 1) > 0;
+
+    switch (mesh::chooseReplyScope(req_scope_known, recv_pkt_unscoped_flood, !default_scope.isNull())) {
+    case mesh::REPLY_SCOPE_REQUEST:
+        sendFloodScoped(req_scope, packet, delay_millis, path_hash_size);  // same scope as the request
+        break;
+    case mesh::REPLY_SCOPE_DEFAULT:
+        // requester's scope is unknown: a DIRECT request (no transport codes), or a
+        // code that matched no Region. Un-scoped would be dropped at hop 0 by every
+        // repeater running flood.max.unscoped=0.
+        sendFloodScoped(default_scope, packet, delay_millis, path_hash_size);
+        break;
+    case mesh::REPLY_SCOPE_NONE:
         sendFlood(packet, delay_millis, path_hash_size);  // send un-scoped
+        break;
     }
 }
 
 bool RepeaterMesh::allowPacketForward(const mesh::Packet* packet) {
     if (_prefs.disable_fwd) return false;
-    if (packet->isRouteFlood()) {
-        if (packet->getPathHashCount() >= _prefs.flood_max) return false;
-        // un-scoped floods can be clamped to a lower hop limit than scoped (transport) floods
-        if (packet->getRouteType() == ROUTE_TYPE_FLOOD && packet->getPathHashCount() >= _prefs.flood_max_unscoped) return false;
-        // ADVERT floods get their own (typically tighter) hop ceiling to curb advert churn
-        if (packet->getPayloadType() == PAYLOAD_TYPE_ADVERT && packet->getPathHashCount() >= _prefs.flood_max_advert) return false;
+    if (packet->isRouteFlood()
+        && mesh::isFloodHopLimitExceeded(packet, _prefs.flood_max, _prefs.flood_max_unscoped,
+                                         _prefs.flood_max_advert)) {
+        return false;
     }
     if (packet->isRouteFlood() && recv_pkt_region == nullptr) return false;
     if (packet->isRouteFlood() && _prefs.loop_detect != LOOP_DETECT_OFF) {
@@ -676,6 +682,7 @@ mesh::DispatcherAction RepeaterMesh::onRecvPacket(mesh::Packet* pkt) {
     // Determine the request packet's region so sendFloodReply() can echo the same
     // scope. Runs for every packet (not just floods) so recv_pkt_region is cleared
     // for direct packets instead of inheriting the last flood's region.
+    recv_pkt_unscoped_flood = (pkt->getRouteType() == ROUTE_TYPE_FLOOD);
     if (pkt->getRouteType() == ROUTE_TYPE_TRANSPORT_FLOOD) {
         recv_pkt_region = region_map.findMatch(pkt, REGION_DENY_FLOOD);
     } else if (pkt->getRouteType() == ROUTE_TYPE_FLOOD) {
@@ -713,16 +720,37 @@ void RepeaterMesh::onAnonDataRecv(mesh::Packet* packet, const uint8_t* secret, c
 
         if (reply_len == 0) return;
 
-        if (packet->isRouteFlood()) {
+        /* A DIRECT request that supplied no reply path can still be answered
+         * along the out_path already stored for this client, as
+         * onPeerDataRecv() does for REQ. Flooding it instead is both wasteful
+         * and — under flood.max.unscoped=0 — silently undeliverable. */
+        ClientInfo* client = acl.getClient(sender.pub_key, PUB_KEY_SIZE);
+        bool have_out_path = client != nullptr && client->out_path_len != OUT_PATH_UNKNOWN;
+
+        switch (mesh::chooseReplyRoute(packet->isRouteFlood(),
+                                       reply_path_len != OUT_PATH_UNKNOWN, have_out_path)) {
+        case mesh::REPLY_ROUTE_PATH_RETURN: {
+            // let this sender know the path TO here, so they can use sendDirect() later
             mesh::Packet* path = createPathReturn(sender, secret, packet->path, packet->path_len,
                                                   PAYLOAD_TYPE_RESPONSE, reply_data, reply_len);
             if (path) sendFloodReply(path, SERVER_RESPONSE_DELAY, packet->getPathHashSize());
-        } else if (reply_path_len == OUT_PATH_UNKNOWN) {
-            mesh::Packet* reply = createDatagram(PAYLOAD_TYPE_RESPONSE, sender, secret, reply_data, reply_len);
-            if (reply) sendFloodReply(reply, SERVER_RESPONSE_DELAY, packet->getPathHashSize());
-        } else {
+            break;
+        }
+        case mesh::REPLY_ROUTE_DIRECT_SUPPLIED: {
             mesh::Packet* reply = createDatagram(PAYLOAD_TYPE_RESPONSE, sender, secret, reply_data, reply_len);
             if (reply) sendDirect(reply, reply_path, reply_path_len, SERVER_RESPONSE_DELAY);
+            break;
+        }
+        case mesh::REPLY_ROUTE_DIRECT_OUT_PATH: {
+            mesh::Packet* reply = createDatagram(PAYLOAD_TYPE_RESPONSE, sender, secret, reply_data, reply_len);
+            if (reply) sendDirect(reply, client->out_path, client->out_path_len, SERVER_RESPONSE_DELAY);
+            break;
+        }
+        case mesh::REPLY_ROUTE_FLOOD: {
+            mesh::Packet* reply = createDatagram(PAYLOAD_TYPE_RESPONSE, sender, secret, reply_data, reply_len);
+            if (reply) sendFloodReply(reply, SERVER_RESPONSE_DELAY, packet->getPathHashSize());
+            break;
+        }
         }
     }
 }
@@ -969,6 +997,7 @@ RepeaterMesh::RepeaterMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Mil
     _logging = false;
     region_load_active = false;
     recv_pkt_region = nullptr;
+    recv_pkt_unscoped_flood = false;
     memset(default_scope.key, 0, sizeof(default_scope.key));
     pending_discover_tag = 0;
     pending_discover_until = 0;

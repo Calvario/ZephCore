@@ -1,8 +1,12 @@
-# ZephCore 1.17.0-zephcore
+# ZephCore 1.17.1-zephcore
 
 A **hardware release**. A new tracker board lands — the Seeed SenseCAP MeshTracker X1 — and with it the
 LR2021 radio becomes a real, on-air-validated option instead of bring-up code. Plus GPS diagnostics, an
-LED master switch, and a batch of receive-path hardening.
+LED master switch, and a batch of receive- and transmit-path hardening.
+
+> [!NOTE]
+> **1.17.0 was never published**, so this release carries everything that was written up for it. If you
+> are coming from 1.16.8, everything below is new to you.
 
 ---
 
@@ -34,6 +38,41 @@ LED master switch, and a batch of receive-path hardening.
 > boot; reconnect the terminal to get another window. Rebuild with `-DCONFIG_PM=n` to remove it.
 
 ---
+
+## Slow presets no longer lose long packets
+
+The biggest fix in this release, and it is invisible until you run a narrow bandwidth. Transmission was
+bounded by two fixed deadlines that are shorter than the airtime of many perfectly legal presets:
+
+- The **chip's own transmit timer** was pinned at 10 s. The SX126x datasheet is explicit that when this
+  timer fires the transmission is *stopped* — so on slow presets it was not a safeguard, it was a
+  truncation. A full-size packet is 17.7 s at SF10/BW31.25 and 28.6 s at SF12/BW62.5; those presets
+  were cutting every packet from ~136 bytes and ~76 bytes up, mid-air.
+- The **host's wait for "transmit finished"** was a fixed 5 s, after which the radio was yanked back
+  into receive — killing a transmission that was going perfectly well.
+
+Both now scale from the driver's own airtime calculation, floored at the old values so nothing that
+works today gets a tighter deadline. Only slow presets move. There was nothing in the log connecting
+the loss to either line, so if you have ever run SF10–SF12 at 31.25 or 62.5 kHz and seen packets simply
+not arrive, this is likely why.
+
+Alongside it: a driver that **reports a failed transmit** is now believed. Previously such a packet was
+counted as sent, so the statistics disagreed with reality.
+
+## Replies no longer dropped when `flood.max.unscoped` is low
+
+Only affects operators who have lowered `flood.max.unscoped` from its default of 64 — but on those
+meshes it looked like repeaters and room servers were ignoring requests. Two separate causes:
+
+- A reply to a **DIRECT** request went out **un-scoped**, because a direct request carries no transport
+  codes and there was no fallback. Any repeater on the return path running `flood.max.unscoped=0` then
+  dropped it at hop 0. Replies now fall back to the node's own default region scope.
+- A repeater answering a **direct login** flooded the reply even when it already had a return path
+  stored for that client. It now replies directly along that path.
+
+Ported from upstream MeshCore, with one local difference: ZephCore can tell "the request arrived
+un-scoped" apart from "the request was direct", so a requester who reached you un-scoped still gets an
+un-scoped reply rather than a scoped one they might not hear.
 
 ## New board — Seeed SenseCAP MeshTracker X1
 
@@ -106,14 +145,6 @@ it ever fires. The SX126x got the same fix in 1.16.x.
 Related: an error-only interrupt on the LR2021 no longer triggers a receive restart that regenerates
 the same error, which on the X1 could cost ~88 ms of deafness and a hardware reset.
 
-## Adaptive CAD now uses only levels the chip can distinguish
-
-The auto-tuning channel-detection threshold walks a range of levels, but where those levels fell
-outside the radio's own hardware limits, several of them programmed the *identical* setting — so the
-tuner was comparing physically identical rungs and reading noise as a trend. The usable window is now
-derived per-driver, so every level is a distinct configuration and the `pk` value in `get cad` is what
-the chip actually got. This mattered most on the LR2021.
-
 ## Virtual-contact fixes (companion)
 
 The built-in admin chat contact got three fixes worth knowing about:
@@ -124,6 +155,14 @@ The built-in admin chat contact got three fixes worth knowing about:
 - **Favourite star and telemetry permissions stick** across reconnects and reboots.
 - **"Last seen" no longer grows forever**, and the contact re-syncs to the app properly instead of
   being sent exactly once ever.
+
+## Adaptive CAD now uses only levels the chip can distinguish
+
+The auto-tuning channel-detection threshold walks a range of levels, but where those levels fell
+outside the radio's own hardware limits, several of them programmed the *identical* setting — so the
+tuner was comparing physically identical rungs and reading noise as a trend. The usable window is now
+derived per-driver, so every level is a distinct configuration and the `pk` value in `get cad` is what
+the chip actually got. This mattered most on the LR2021.
 
 ## GPS: dynamic model and a diagnostics readout
 
@@ -156,7 +195,13 @@ generally.
 
 ## Other changes
 
-- **Zephyr pinned to 4.4.2 final.**
+- **Zephyr pin advanced** past 4.4.2, and **Monocypher updated to 4.0.3**.
+- **Sensors behind a switched power rail now come up.** A part on a rail that is powered late cannot be
+  probed during early boot, and the rail's declared startup delay never actually runs. Such sensors are
+  now initialised on first use instead, once the rail has had the whole boot to settle. This is what
+  the X1's barometer and RTC needed; the same handling is now in place for every environment sensor.
+- **`get dc.restarts` works on companions.** It reported 0 forever regardless of what the radio was
+  doing — and the companion is the role RX duty cycle actually runs in. `clear stats` resets it.
 - **ESP32: the user button now wakes the node from light sleep** on boards using the shared PM overlay
   — previously only an incoming packet would.
 - **`get freqerr`** (LR2021 only) reports carrier frequency error measured on received packets. Purely
@@ -179,3 +224,5 @@ generally.
   which goes high-impedance on reset, so the chip raises its power-loss flag and the clock is re-set
   from the next GPS/app/CLI sync. Time is still correct in normal operation; it just isn't preserved
   across a restart.
+- **The scoped-reply and transmit-deadline fixes are not on-air validated** — both are build-verified
+  and reasoned from the datasheet, not measured on a live mesh.

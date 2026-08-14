@@ -346,15 +346,23 @@ void RoomServerMesh::sendFloodScoped(const TransportKey& scope, mesh::Packet* pk
 }
 
 void RoomServerMesh::sendFloodReply(mesh::Packet* packet, unsigned long delay_millis, uint8_t path_hash_size) {
-    if (recv_pkt_region && !recv_pkt_region->isWildcard()) {  // if _request_ packet scope is known, send reply with same scope
-        TransportKey scope;
-        if (region_map.getTransportKeysFor(*recv_pkt_region, &scope, 1) > 0) {
-            sendFloodScoped(scope, packet, delay_millis, path_hash_size);
-        } else {
-            sendFlood(packet, delay_millis, path_hash_size);  // send un-scoped
-        }
-    } else {
+    TransportKey req_scope;
+    bool req_scope_known = recv_pkt_region != nullptr && !recv_pkt_region->isWildcard()
+                        && region_map.getTransportKeysFor(*recv_pkt_region, &req_scope, 1) > 0;
+
+    switch (mesh::chooseReplyScope(req_scope_known, recv_pkt_unscoped_flood, !default_scope.isNull())) {
+    case mesh::REPLY_SCOPE_REQUEST:
+        sendFloodScoped(req_scope, packet, delay_millis, path_hash_size);  // same scope as the request
+        break;
+    case mesh::REPLY_SCOPE_DEFAULT:
+        // requester's scope is unknown: a DIRECT request (no transport codes), or a
+        // code that matched no Region. Un-scoped would be dropped at hop 0 by every
+        // repeater running flood.max.unscoped=0.
+        sendFloodScoped(default_scope, packet, delay_millis, path_hash_size);
+        break;
+    case mesh::REPLY_SCOPE_NONE:
         sendFlood(packet, delay_millis, path_hash_size);  // send un-scoped
+        break;
     }
 }
 
@@ -432,6 +440,7 @@ mesh::DispatcherAction RoomServerMesh::onRecvPacket(mesh::Packet* pkt) {
     // Determine the request packet's region so sendFloodReply() can echo the same
     // scope. Runs for every packet (not just floods) so recv_pkt_region is cleared
     // for direct packets instead of inheriting the last flood's region.
+    recv_pkt_unscoped_flood = (pkt->getRouteType() == ROUTE_TYPE_FLOOD);
     if (pkt->getRouteType() == ROUTE_TYPE_TRANSPORT_FLOOD) {
         recv_pkt_region = region_map.findMatch(pkt, REGION_DENY_FLOOD);
     } else if (pkt->getRouteType() == ROUTE_TYPE_FLOOD) {
@@ -759,6 +768,7 @@ RoomServerMesh::RoomServerMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh:
     _logging = false;
     region_load_active = false;
     recv_pkt_region = nullptr;
+    recv_pkt_unscoped_flood = false;
     memset(default_scope.key, 0, sizeof(default_scope.key));
 
     initNodePrefs(&_prefs);
