@@ -83,10 +83,10 @@ index 822d0f5..00faca6 100644
 +
 +	/* Semtech payload-symbol count with PL=255, CRC on, explicit header,
 +	 * CR = 4/8 (coded_bits = 8), DE = 1:
-+	 *   n = 8 + ceil((8*PL - 4*SF + 28 + 16) / (4*(SF - DE))) * 8
-+	 * SF5/SF6 use SF-1 >= 4 so the divisor is always non-zero. */
++	 *   n = 8 + ceil((8*PL - 4*SF + 28 + 16) / (4*(SF - 2*DE))) * 8
++	 * DE=1 so the divisor is 4*(SF-2); at SF5 that is 12, never zero. */
 +	uint32_t numer = 8U * 255U + 28U + 16U;
-+	uint32_t denom = 4U * (uint32_t)(sf - 1U);
++	uint32_t denom = 4U * (uint32_t)(sf - 2U);
 +
 +	if (numer > 4U * (uint32_t)sf) {
 +		numer -= 4U * (uint32_t)sf;

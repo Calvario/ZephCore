@@ -159,3 +159,4 @@ HANDOVER_lr2021_audit.md
 # does not apply to paths already in the index (three of these went into
 # b839c2c for exactly that reason; untrack with `git rm -r --cached`).
 lr2021_bench/
+LR2021_MATH_AUDIT.md

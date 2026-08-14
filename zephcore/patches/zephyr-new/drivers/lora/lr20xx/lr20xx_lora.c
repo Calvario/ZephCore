@@ -107,7 +107,12 @@ struct lr20xx_data {
 	void *cad_user_data;
 	struct k_sem cad_sem;
 	int cad_result;	/* 0=free, 1=busy, <0=error */
-	bool cad_active;
+	/* No cad_active flag: there was one, written at five sites and read at
+	 * none.  It read like a concurrent-CAD guard and guarded nothing — the
+	 * real exclusion is that every CAD entry point (LBT from startSendRaw,
+	 * probes from cadMaintenance) runs on the mesh loop thread, so two CADs
+	 * cannot overlap by construction.  A flag nothing tests is worse than no
+	 * flag: it invites the next reader to assume the invariant is enforced. */
 	/* Adaptive-CAD: signed offset applied to the per-SF base detPeak on
 	 * every LBT CAD; cad_probe_peak overrides for one calibration probe. */
 	int8_t cad_peak_offset;
@@ -658,12 +663,39 @@ static lr20xx_status_t lr20xx_calibrate_front_end(void *ctx, uint32_t freq_hz)
 
 	for (int i = 0; i < LR20XX_MAX_CAL_ATTEMPTS; i++) {
 		lr20xx_system_errors_t errs = 0;
+		lr20xx_system_stat1_t s1 = { 0 };
+		bool rejected = false;
 		lr20xx_status_t rc;
 
 		lr20xx_system_clear_errors(ctx);
 
 		rc = lr20xx_radio_common_calibrate_front_end_helper(ctx, fe_cal, 3);
+
+		/* The SDK return code reflects the SPI write, not whether the chip
+		 * executed the command.  A CalibFE issued from Rx or Tx answers
+		 * CMD_FAIL (DS §6.4.2) while rc stays OK and no error bit is set,
+		 * so without this check the caller is told the front end was
+		 * calibrated when it was not — and the first symptom is degraded
+		 * RX with a RxFreqNoCalErr nobody connects to this call.  Must be
+		 * read BEFORE get_errors(): Stat reports the previous command.
+		 * DS Table 6-38: 0x2 CMD_OK, 0x3 CMD_DAT, anything else rejected. */
+		if (lr20xx_system_get_status(ctx, &s1, NULL, NULL) ==
+		    LR20XX_STATUS_OK) {
+			rejected = (s1.command_status != 2 &&
+				    s1.command_status != 3);
+		}
+
 		lr20xx_system_get_errors(ctx, &errs);
+
+		if (rejected) {
+			/* Not retried: the chip refused on mode grounds, and
+			 * repeating the command from the same mode cannot help. */
+			LOG_ERR("FE cal(%u Hz) REJECTED (cmd_status=%d) — CalibFE "
+				"needs STDBY_RC/XOSC/FS, not Rx or Tx (DS §6.4.2); "
+				"front end left uncalibrated",
+				freq_hz, s1.command_status);
+			return LR20XX_STATUS_ERROR;
+		}
 
 		if (rc == LR20XX_STATUS_OK &&
 		    !(errs & LR20XX_SYSTEM_ERRORS_SRC_SATURATION_CALIB_MASK)) {
@@ -1390,7 +1422,6 @@ static void lr20xx_dio1_work_handler(struct k_work *work)
 		}
 
 		LOG_DBG("CAD done: %s", detected ? "activity" : "free");
-		data->cad_active = false;
 
 		if (data->cad_cb) {
 			lora_cad_cb cb = data->cad_cb;
@@ -1423,8 +1454,27 @@ static void lr20xx_dio1_work_handler(struct k_work *work)
 
 	/* ── Timeout ── */
 	if (irq & LR20XX_SYSTEM_IRQ_TIMEOUT) {
-		LOG_DBG("Timeout IRQ — restarting RX");
-		if (!data->tx_active) {
+		if (data->tx_active) {
+			/* The chip's Tx safeguard fired.  DS §6.3.6: "the
+			 * transmission is stopped prematurely" — the packet is
+			 * gone and TX_DONE will never arrive.  Leaving tx_active
+			 * set here (as this branch used to) made the whole event
+			 * invisible: no branch ran, nothing was logged above DBG,
+			 * and the radio sat in the post-TX state until the host's
+			 * own wait expired.  Say it and put the receiver back on
+			 * air, same as the TX_DONE path.
+			 *
+			 * tx_signal is deliberately NOT raised: the C++ wait
+			 * thread counts a raised signal as a completed send and
+			 * would increment packets_sent for a packet that never
+			 * left.  Its own timeout owns the accounting. */
+			LOG_ERR("TX timeout — chip stopped the transmission, "
+				"packet lost");
+			data->tx_active = false;
+			lr20xx_start_rx(data, cfg);
+			rx_restarted = true;
+		} else {
+			LOG_DBG("Timeout IRQ — restarting RX");
 			lr20xx_restart_rx(data);
 			rx_restarted = true;
 		}
@@ -1549,6 +1599,17 @@ static int lr20xx_lora_config(const struct device *dev,
 	 * ral_lr20xx_init() calibrates at init and never on the Tx/Rx path. */
 	k_mutex_lock(&data->spi_mutex, K_FOREVER);
 
+	/* Standby first — CalibFE "does not work if device is in Rx or Tx mode"
+	 * (DS §6.4.2).  On the reconfigure path the chip IS still in Rx: the C++
+	 * layer's hwCancelReceive() lowers lora_recv_async(NULL)'s bookkeeping
+	 * without commanding the chip, and continuous RX only ends when the host
+	 * changes the mode (DS §6.3.5).  Without this the calibration is refused
+	 * for every `set freq/sf/bw/cr`, tempradio set and tempradio clear, and
+	 * refused invisibly — see the note in lr20xx_calibrate_front_end().
+	 * Free at boot, where hw_init() has already left the chip in STDBY_RC. */
+	lr20xx_system_set_standby_mode(&data->hal_ctx,
+				       LR20XX_SYSTEM_STANDBY_MODE_RC);
+
 	lr20xx_calibrate_front_end(&data->hal_ctx, config->frequency);
 
 	DUMP_CHIP_STATE(data, "config-FEcal");
@@ -1631,6 +1692,16 @@ static uint32_t lr20xx_cad_timeout_ms(struct lr20xx_data *data)
 #define LR20XX_CAD_LBT_MAX_TX_TIMEOUT_STEPS 0x00FFFFFFU
 #define LR20XX_CAD_LBT_STEPS_PER_MS         32000U
 
+/* The OTHER time base on this chip.  SetTx/SetRx/SetRxDutyCycle timeouts are
+ * counted in 32.768 kHz RTC periods (DS §6.3.17: "expressed in periods of the
+ * 32.768kHz RTC"), not the 32 MHz periods cad_timeout uses above — the two sit
+ * three lines apart here precisely so nobody reaches for the wrong one.  Both
+ * fields are 24 bits, so the RTC one tops out at 16777215/32768 = 512 s. */
+#define LR20XX_RTC_FREQ_HZ                  32768U
+#define LR20XX_RTC_STEP_MAX                 0x00FFFFFFU
+/* Never shorten the Tx safeguard below what shipped before it was scaled. */
+#define LR20XX_TX_TIMEOUT_FLOOR_MS          5000U
+
 static int lr20xx_do_cad(struct lr20xx_data *data);
 
 static int lr20xx_lora_send_cad_lbt(const struct device *dev,
@@ -1705,7 +1776,6 @@ static int lr20xx_lora_send_cad_lbt(const struct device *dev,
 			 K_MSEC(lr20xx_cad_timeout_ms(data) + tx_timeout_ms));
 	if (ret == -EAGAIN) {
 		LOG_WRN("CAD_LBT: no CAD_DONE within budget — falling back");
-		data->cad_active = false;
 		ret = -EIO;
 		goto abort;
 	}
@@ -1785,8 +1855,19 @@ static int lr20xx_lora_send_async(const struct device *dev,
 	 * to re-arm. */
 	if (data->modem_cfg.cad.mode == LORA_CAD_MODE_LBT) {
 		bool was_in_rx = data->in_rx_mode;
-		int cad_ret = lr20xx_lora_cad(dev,
-					      K_MSEC(lr20xx_cad_timeout_ms(data)));
+		int cad_ret;
+
+		/* Discard any stamp left by a CAD that was not this transmit's.
+		 * The CAD_DONE handler stamps cad_done_cycles on every free CAD
+		 * — adaptive-CAD probes every ~15 s, and CAD_LBT, neither of
+		 * which consumes it — but the only reader is the latency log
+		 * below.  Without this the reported CAD->TX gap can be measured
+		 * from a probe that ran seconds earlier, which is worse than not
+		 * reporting it: it is a plausible number that is simply wrong. */
+		data->cad_done_cycles = 0U;
+
+		cad_ret = lr20xx_lora_cad(dev,
+					  K_MSEC(lr20xx_cad_timeout_ms(data)));
 		if (cad_ret > 0) {
 			LOG_DBG("LBT: channel busy");
 			/* Re-arm whenever there was anything to re-arm.  The
@@ -1828,7 +1909,6 @@ static int lr20xx_lora_send_async(const struct device *dev,
 		LOG_ERR("TX standby failed — HW reset");
 		lr20xx_hardware_reset(data, cfg);
 	}
-
 
 	/* Clear errors before modem config */
 	lr20xx_system_clear_errors(ctx);
@@ -1875,7 +1955,38 @@ static int lr20xx_lora_send_async(const struct device *dev,
 		data->cad_done_cycles = 0U;
 	}
 
-	lr20xx_radio_common_set_tx(ctx, 5000);
+	/* Chip-side Tx safeguard — DS §6.3.6: "Tx timeout can be used as a
+	 * safeguard in case transmission fails and TxDone interrupt never
+	 * occurs", and when it fires "the transmission is stopped prematurely".
+	 * So it has to exceed real airtime, and a fixed budget cannot: at
+	 * SF12/BW62.5 a 31-byte packet already needs more than 5 s, and at
+	 * SF12/BW31.25 so does a 6-byte one.  Scaled from the same airtime the
+	 * CAD_LBT path uses, floored at the previous 5000 ms so no preset that
+	 * works today gets a tighter deadline.
+	 *
+	 * Programmed in RTC steps rather than through the SDK's millisecond
+	 * wrapper: that wrapper computes `ms * 32768` in uint32 and overflows
+	 * above 131 071 ms, which is reachable here (SF12/BW7.81 at 255 bytes is
+	 * ~229 s of airtime).  Saturating at the 24-bit field maximum is 512 s,
+	 * comfortably past any airtime this chip can produce. */
+	{
+		uint32_t tx_air_ms = lr20xx_lora_airtime(dev, data_len);
+		uint32_t tx_tmo_ms = tx_air_ms + (tx_air_ms / 4U) + 500U;
+		uint64_t tx_tmo_steps;
+
+		if (tx_tmo_ms < LR20XX_TX_TIMEOUT_FLOOR_MS) {
+			tx_tmo_ms = LR20XX_TX_TIMEOUT_FLOOR_MS;
+		}
+		tx_tmo_steps = ((uint64_t)tx_tmo_ms * LR20XX_RTC_FREQ_HZ) / 1000U;
+		if (tx_tmo_steps > LR20XX_RTC_STEP_MAX) {
+			tx_tmo_steps = LR20XX_RTC_STEP_MAX;
+		}
+
+		LOG_DBG("SET_TX: airtime=%u ms, timeout=%u ms (%u steps)",
+			tx_air_ms, tx_tmo_ms, (uint32_t)tx_tmo_steps);
+		lr20xx_radio_common_set_tx_with_timeout_in_rtc_step(
+			ctx, (uint32_t)tx_tmo_steps);
+	}
 
 	/* Command status here is SET_TX's own (2=accepted, 1=rejected,
 	 * 0=not executed) and the mode should have left standby. */
@@ -2022,10 +2133,17 @@ static uint32_t lr20xx_max_payload_ms(struct lr20xx_data *data)
 
 	/* Semtech payload-symbol count with PL=255, CRC on, explicit header,
 	 * CR = 4/8 (coded_bits = 8), DE = 1:
-	 *   n = 8 + ceil((8*PL - 4*SF + 28 + 16) / (4*(SF - DE))) * 8
-	 * SF5/SF6 use SF-1 >= 4 so the divisor is always non-zero. */
+	 *   n = 8 + ceil((8*PL - 4*SF + 28 + 16) / (4*(SF - 2*DE))) * 8
+	 * The divisor is 4*(SF - 2*DE), not 4*(SF - DE) — same form
+	 * lr20xx_lora_airtime() uses.  With DE hard-coded to 1 that is 4*(SF-2),
+	 * which at SF5 is 12, so the divisor is always non-zero.
+	 *
+	 * DE = 1 unconditionally because this is a ceiling, and LDRO on yields
+	 * the larger symbol count: at SF12/BW62.5 it is 416 symbols against 384
+	 * with the wrong divisor, i.e. 27.3 s of real payload airtime that the
+	 * bound has to clear. */
 	uint32_t numer = 8U * 255U + 28U + 16U;
-	uint32_t denom = 4U * (uint32_t)(sf - 1U);
+	uint32_t denom = 4U * (uint32_t)(sf - 2U);
 
 	if (numer > 4U * (uint32_t)sf) {
 		numer -= 4U * (uint32_t)sf;
@@ -2468,7 +2586,6 @@ static int lr20xx_do_cad(struct lr20xx_data *data)
 	/* Clear any pending IRQ flags, then start CAD */
 	lr20xx_system_clear_irq_status(ctx, LR20XX_SYSTEM_IRQ_ALL_MASK);
 	lr20xx_reset_rx_busy_signals(data);
-	data->cad_active = true;
 	lr20xx_radio_lora_set_cad(ctx);
 	CHECK_CMD(ctx, "set_cad");
 
@@ -2481,6 +2598,14 @@ static int lr20xx_do_cad(struct lr20xx_data *data)
 	return 0;
 }
 
+/* Blocking CAD.  Leaves the chip in STANDBY on every exit — success, busy,
+ * timeout and error alike — and deliberately does NOT restore RX: the caller
+ * knows whether it is about to transmit (in which case re-entering RX would be
+ * undone immediately) or must go back on air.  Both current callers honour
+ * that: lr20xx_lora_send_async()'s LBT branch re-arms on the busy path, and
+ * LoRaRadioBase::cadMaintenance() calls startReceive() after every probe.  A
+ * third caller that forgets leaves the node deaf with nothing scheduled to
+ * recover it, so the contract is stated here rather than left to be inferred. */
 static int lr20xx_lora_cad(const struct device *dev, k_timeout_t timeout)
 {
 	struct lr20xx_data *data = dev->data;
@@ -2515,7 +2640,6 @@ static int lr20xx_lora_cad(const struct device *dev, k_timeout_t timeout)
 	/* Wait for DIO1 handler to signal CAD_DONE */
 	ret = k_sem_take(&data->cad_sem, timeout);
 	if (ret == -EAGAIN) {
-		data->cad_active = false;
 		return -ETIMEDOUT;
 	}
 
@@ -2528,10 +2652,16 @@ static int lr20xx_lora_cad_async(const struct device *dev,
 	struct lr20xx_data *data = dev->data;
 
 	if (cb == NULL) {
-		/* Cancel pending CAD */
+		/* Cancel pending CAD.  Under spi_mutex like every other write to
+		 * the CAD state: the DIO1 handler reads cad_cb to decide whether
+		 * to dispatch a callback, and this used to race it.  Dead today
+		 * (nothing in the tree calls lora_cad_async), which is exactly
+		 * why it is worth fixing now rather than when someone wires it
+		 * up and inherits an invisible race. */
+		k_mutex_lock(&data->spi_mutex, K_FOREVER);
 		data->cad_cb = NULL;
 		data->cad_user_data = NULL;
-		data->cad_active = false;
+		k_mutex_unlock(&data->spi_mutex);
 		return 0;
 	}
 

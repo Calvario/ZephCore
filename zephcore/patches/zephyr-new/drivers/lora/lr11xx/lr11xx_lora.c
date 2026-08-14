@@ -104,7 +104,14 @@ struct lr11xx_data {
 	void *cad_user_data;
 	struct k_sem cad_sem;
 	int cad_result;
-	bool cad_active;
+	/* No cad_active flag: there was one, written at four sites and read at
+	 * none.  The SX126x driver's copy IS read (sx126x_handle_irq_timeout()
+	 * returns early on it), so this one was inherited without the read that
+	 * gave it a purpose.  Not needed here: the TIMEOUT branch below is only
+	 * reachable during a CAD when the chip took the CAD->TX exit, and that
+	 * path sets tx_active first.  Exclusion between CADs comes from both
+	 * entry points (LBT from startSendRaw, probes from cadMaintenance)
+	 * running on the mesh loop thread. */
 	/* Adaptive-CAD: signed offset applied to the per-SF base detPeak on
 	 * every LBT CAD; cad_probe_peak overrides for one calibration probe. */
 	int8_t cad_peak_offset;
@@ -596,8 +603,6 @@ static void lr11xx_dio1_work_handler(struct k_work *work)
 	if (irq & LR11XX_SYSTEM_IRQ_CAD_DONE) {
 		bool detected = (irq & LR11XX_SYSTEM_IRQ_CAD_DETECTED) != 0;
 
-		data->cad_active = false;
-
 		if (data->cad_cb) {
 			lora_cad_cb cb = data->cad_cb;
 			void *ud = data->cad_user_data;
@@ -630,7 +635,23 @@ static void lr11xx_dio1_work_handler(struct k_work *work)
 
 	/* ── Timeout ── */
 	if (irq & LR11XX_SYSTEM_IRQ_TIMEOUT) {
-		if (!data->tx_active) {
+		if (data->tx_active) {
+			/* The chip's Tx timeout fired, so the transmission was
+			 * stopped and TX_DONE will never arrive.  This branch
+			 * used to do nothing at all here: no log, no recovery,
+			 * no signal — the radio simply sat in the post-TX state
+			 * until the host wait expired.  Mirror the TX_DONE path
+			 * so the receiver goes back on air, and say what
+			 * happened.  tx_signal is deliberately NOT raised: the
+			 * C++ wait thread treats a raised signal as a completed
+			 * send, so raising it here would book a packet that
+			 * never left.  Its own timeout owns the accounting. */
+			LOG_ERR("TX timeout — chip stopped the transmission, "
+				"packet lost");
+			data->tx_active = false;
+			lr11xx_start_rx(data, cfg);
+			rx_restarted = true;
+		} else {
 			lr11xx_restart_rx(data);
 			rx_restarted = true;
 		}
@@ -1114,10 +1135,10 @@ static uint32_t lr11xx_max_payload_ms(struct lr11xx_data *data)
 
 	/* Semtech payload-symbol count with PL=255, CRC on, explicit header,
 	 * CR = 4/8 (coded_bits = 8), DE = 1:
-	 *   n = 8 + ceil((8*PL - 4*SF + 28 + 16) / (4*(SF - DE))) * 8
-	 * SF5/SF6 use SF-1 >= 4 so the divisor is always non-zero. */
+	 *   n = 8 + ceil((8*PL - 4*SF + 28 + 16) / (4*(SF - 2*DE))) * 8
+	 * DE=1 so the divisor is 4*(SF-2); at SF5 that is 12, never zero. */
 	uint32_t numer = 8U * 255U + 28U + 16U;
-	uint32_t denom = 4U * (uint32_t)(sf - 1U);
+	uint32_t denom = 4U * (uint32_t)(sf - 2U);
 
 	if (numer > 4U * (uint32_t)sf) {
 		numer -= 4U * (uint32_t)sf;
@@ -1376,7 +1397,6 @@ static int lr11xx_do_cad(struct lr11xx_data *data)
 
 	lr11xx_system_clear_irq_status(ctx, LR11XX_SYSTEM_IRQ_ALL_MASK);
 	lr11xx_reset_rx_busy_signals(data);
-	data->cad_active = true;
 	lr11xx_radio_set_cad(ctx);
 
 	return 0;
@@ -1414,7 +1434,6 @@ static int lr11xx_lora_cad(const struct device *dev, k_timeout_t timeout)
 
 	ret = k_sem_take(&data->cad_sem, timeout);
 	if (ret == -EAGAIN) {
-		data->cad_active = false;
 		return -ETIMEDOUT;
 	}
 
@@ -1429,7 +1448,6 @@ static int lr11xx_lora_cad_async(const struct device *dev,
 	if (cb == NULL) {
 		data->cad_cb = NULL;
 		data->cad_user_data = NULL;
-		data->cad_active = false;
 		return 0;
 	}
 

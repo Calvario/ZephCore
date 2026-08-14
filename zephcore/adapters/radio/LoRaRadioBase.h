@@ -329,9 +329,15 @@ private:
 
 	/* TX completion thread */
 	static void txWaitThreadFn(void *p1, void *p2, void *p3);
+	uint32_t txWaitBudgetMs() const;
 	struct k_thread _tx_wait_thread;
 	struct k_sem _tx_start_sem;
 	bool _tx_thread_running;
+	/* Length of the transmit in flight, for txWaitBudgetMs().  Written by
+	 * startSendRaw() before it releases _tx_start_sem, read by the wait
+	 * thread after it takes that sem — the sem is the handoff, so no
+	 * additional synchronisation is needed. */
+	uint16_t _tx_len;
 
 	/* Packet statistics */
 	atomic_t _packets_recv;

@@ -65,7 +65,7 @@ LoRaRadioBase::LoRaRadioBase(const struct device *lora_dev, MainBoard &board,
 	  _override_sf(0), _override_cr(0),
 	  _rx_cb(nullptr), _rx_cb_user_data(nullptr),
 	  _tx_done_cb(nullptr), _tx_done_cb_user_data(nullptr),
-	  _tx_thread_running(false),
+	  _tx_thread_running(false), _tx_len(0),
 	  _packets_recv(0), _packets_sent(0), _packets_recv_errors(0)
 {
 	k_poll_signal_init(&_tx_signal);
@@ -75,6 +75,42 @@ LoRaRadioBase::LoRaRadioBase(const struct device *lora_dev, MainBoard &board,
 }
 
 /* ── TX wait thread ──────────────────────────────────────────── */
+
+/* How long to wait for TX_DONE before declaring the transmit lost.
+ *
+ * TX_TIMEOUT_MS alone is a fixed 5 s, which is shorter than the airtime of a
+ * great many legal presets — a 255-byte packet is 28.6 s at SF12/BW62.5 and
+ * 10.2 s at SF9/BW31.25 — so the wait would expire mid-transmission and
+ * startReceive() would yank the radio out of TX, losing a packet that was
+ * transmitting perfectly well.  Scale from the driver's own airtime instead,
+ * with the same doubling the drivers' internal sync-send waits use.
+ *
+ * MAX(), never a bare replacement: on fast presets the scaled value is smaller
+ * than 5 s (SF7/BW62.5, 64 bytes: ~1.4 s), and shortening this deadline on the
+ * presets every radio in the fleet is running today would be a regression for
+ * no gain.  The floor keeps existing behaviour exactly; only slow presets move.
+ *
+ * lora_airtime() is a pure calculation on the cached modem config, so calling
+ * it from this thread costs no SPI and cannot race the radio. */
+uint32_t LoRaRadioBase::txWaitBudgetMs() const
+{
+	uint32_t air = lora_airtime(_dev, _tx_len ? _tx_len : 255);
+
+	/* All four drivers behind this class implement .airtime (native sx126x,
+	 * lr11xx, lr20xx, loramac-node sx127x), and lora_airtime() dereferences
+	 * the op without a NULL check, so there is no missing-op case to handle.
+	 * A zero can still come back from a degenerate modem config; fall back
+	 * to the flat budget rather than to no wait at all. */
+	if (air == 0) {
+		return TX_TIMEOUT_MS;
+	}
+	/* Cap the doubling before adding, so a pathological airtime cannot wrap
+	 * the 32-bit budget on its way into K_MSEC(). */
+	if (air > (UINT32_MAX - 1000U) / 2U) {
+		return UINT32_MAX - 1000U;
+	}
+	return MAX(TX_TIMEOUT_MS, 2U * air + 1000U);
+}
 
 void LoRaRadioBase::txWaitThreadFn(void *p1, void *p2, void *p3)
 {
@@ -103,21 +139,43 @@ void LoRaRadioBase::txWaitThreadFn(void *p1, void *p2, void *p3)
 		int result;
 		k_poll_signal_check(&self->_tx_signal, &signaled, &result);
 		if (signaled) {
-			LOG_DBG("TX wait: signal already raised (result=%d)", result);
+			/* The result carries the driver's verdict, and it has to
+			 * be honoured: a driver that reports a failed transmit
+			 * by raising the signal with a negative result (the
+			 * SX126x does exactly this on a chip Tx timeout,
+			 * -ETIMEDOUT) was previously counted here as a
+			 * successful send.  Latent rather than live — that
+			 * SX126x path is unreachable while an RX callback is
+			 * registered, which it always is — but it is the reason
+			 * the LR11xx and LR20xx timeout handlers deliberately do
+			 * NOT raise the signal.  With the result honoured, a
+			 * driver reporting failure is now the correct thing to
+			 * do on all three. */
+			if (result < 0) {
+				LOG_ERR("TX wait: driver reported failure (%d) — packet lost",
+					result);
+			} else {
+				LOG_DBG("TX wait: signal already raised (result=%d)", result);
+			}
 			k_poll_signal_reset(&self->_tx_signal);
 			self->_board->onAfterTransmit();
 			self->startReceive();
 			atomic_set(&self->_tx_active, 0);
-			atomic_inc(&self->_packets_sent);
+			if (result >= 0) {
+				atomic_inc(&self->_packets_sent);
+			}
 			if (self->_tx_done_cb) {
 				self->_tx_done_cb(self->_tx_done_cb_user_data);
 			}
 			continue;
 		}
 
-		int ret = k_poll(events, 1, K_MSEC(TX_TIMEOUT_MS));
+		uint32_t budget_ms = self->txWaitBudgetMs();
+
+		int ret = k_poll(events, 1, K_MSEC(budget_ms));
 		if (ret == -EAGAIN) {
-			LOG_ERR("TX wait: TIMEOUT!");
+			LOG_ERR("TX wait: TIMEOUT after %u ms (len=%u) — packet lost",
+				budget_ms, (unsigned)self->_tx_len);
 			self->_board->onAfterTransmit();
 			self->startReceive();
 			atomic_set(&self->_tx_active, 0);
@@ -128,12 +186,25 @@ void LoRaRadioBase::txWaitThreadFn(void *p1, void *p2, void *p3)
 		}
 
 		if (ret == 0 && events[0].state == K_POLL_STATE_SIGNALED) {
+			/* Same rule as the already-raised path above: a negative
+			 * result is the driver reporting a lost transmit, not a
+			 * completed one. */
+			int sig_result = 0;
+			unsigned int sig_state = 0;
+
+			k_poll_signal_check(&self->_tx_signal, &sig_state,
+					    &sig_result);
 			k_poll_signal_reset(&self->_tx_signal);
 			self->_board->onAfterTransmit();
 			self->startReceive();
 			atomic_set(&self->_tx_active, 0);
-			atomic_inc(&self->_packets_sent);
-			LOG_INF("TX complete, RX restarted");
+			if (sig_result < 0) {
+				LOG_ERR("TX failed: driver reported %d — packet lost",
+					sig_result);
+			} else {
+				atomic_inc(&self->_packets_sent);
+				LOG_INF("TX complete, RX restarted");
+			}
 
 			if (self->_tx_done_cb) {
 				self->_tx_done_cb(self->_tx_done_cb_user_data);
@@ -693,6 +764,9 @@ bool LoRaRadioBase::startSendRaw(const uint8_t *bytes, int len)
 	configureTx();
 
 	memcpy(_tx_buf, bytes, len);
+	/* Published before the _tx_start_sem handoff below so txWaitBudgetMs()
+	 * sizes the wait for this packet, not the previous one. */
+	_tx_len = (uint16_t)len;
 	k_poll_signal_reset(&_tx_signal);
 
 	int ret = hwSendAsync(_tx_buf, (uint32_t)len, &_tx_signal);
