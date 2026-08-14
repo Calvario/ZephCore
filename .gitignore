@@ -105,6 +105,16 @@ WEST_UPDATE.md
 /doom/
 THINKNODE_M1_HANDOVER.md
 CLAUDE.md
+# Working docs at the workspace root are local-only: per-topic audit indexes,
+# handovers and handoffs.  These were listed one file at a time, which meant
+# every new one had to be remembered — and one was not, so it went into a commit
+# before anybody noticed.  Match by shape instead; the individual lines below are
+# now redundant but harmless.
+[Hh][Aa][Nn][Dd][Oo][Vv][Ee][Rr]_*.md
+*_AUDIT_INDEX.md
+*_AUDIT_HANDOFF.md
+*_HANDOFF.md
+
 zephcore/apc_checklist.md
 RADIO_AUDIT_INDEX.md
 RX_BUSY_LATCH_PLAN.md

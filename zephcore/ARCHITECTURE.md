@@ -489,6 +489,69 @@ The custom `lr11xx_lora.c` driver handles several LR1110 firmware bugs:
   - **Side detectors** (multi-SF receive) are LR2021-only; see `lr20xx_configure_side_detectors()`. Mutually exclusive with CAD, whose SF ordering constraint is the inverse.
   - **Per-packet frequency error** is decoded and accumulated (`get freqerr`) — diagnostic only, nothing acts on it.
 
+#### 5.5.1 LR2021 driver design notes
+
+Why the driver is shaped the way it is. Kept here rather than in comments; the
+code carries only units, datasheet references, and the constraints that would
+break something if violated.
+
+**PA power.** `pa_lf_table[]` is Semtech's `LR20XX_PA_LF_CFG_TABLE`
+(`examples/radio_hal/lr20xx_pa_pwr_cfg.h`, Clear BSD), indexed −10…+22 dBm, and
+`lr20xx_get_pa_cfg_for_power()` mirrors `lr20xx_get_tx_cfg()` from
+`ral_lr20xx_bsp.c`. `half_power`, `pa_duty_cycle` and `pa_lf_slices` are a
+**matched triple per target power** — not independent knobs, which is why the
+board-level `pa-hp-sel`/`pa-duty-cycle` devicetree properties were removed. The
+register is half-dBm (DS Table 7-20, the SDK's `power_half_dbm` parameter name,
+DS Table 7-16, and the BSP field name all agree); an earlier table modelled it as
+an opaque calibration value and transmitted +22 dBm requests at 17.5 dBm. Values
+are chip-level for Semtech's reference design: Semtech applies a per-board
+matching-network correction separately via
+`radio_utilities_get_tx_power_offset()`, which ZephCore does not yet have, so
+absolute radiated power is uncalibrated.
+
+**Front-end calibration.** DS §6.4.2 stores calibration on chip, and it survives
+every sleep this driver issues (all with retention), so it does **not** belong on
+the Tx/Rx path — Semtech's `ral_lr20xx_init()` calibrates once at init and never
+during operation. It runs only at `lora_config()`, after `lr20xx_hardware_reset()`
+(a chip reset discards it) and in `reset_agc()`. `CalibFE` takes up to three
+**point** frequencies in 4 MHz steps, unlike the SX126x/LR11xx `CalibrateImage`
+band pair with datasheet-prescribed edges, so the operating frequency can be used
+directly. The argument is quantised and the SDK rounds **up** where the chip's
+own no-argument default truncates **down**, so both 4 MHz neighbours are
+calibrated, nearest first — sidestepping an undocumented reuse rule. (The
+"±20 MHz" tolerance comes from a BSP comment, not the datasheet.)
+
+**LBT and CAD_LBT.** `lr20xx_do_cad()` uses **LoRa CAD** (`SetLoraCadParams` /
+`SetLoraCAD`) with the per-SF `det_peak` of DS Table 6-19 — not the generic
+RSSI-threshold CAD, which cannot see a LoRa signal below the noise floor. The two
+commands have **different exit-mode encodings**; always use
+`lr20xx_radio_lora_cad_exit_mode_t`. With `CadExitMode = 0x10` the chip performs
+CAD→Tx itself, removing ~3.9 ms of host round-trip (measured). Its `cad_timeout`
+doubles as the Tx timeout and is 24 bits of 32 MHz periods = **524 ms maximum**,
+so transmits whose airtime exceeds that take the classic host path instead — at
+SF7/BW62.5 the crossover is roughly a 96-byte payload. Without that guard the
+timeout wraps and truncates the packet on air.
+
+**RX duty cycle.** An NSS falling edge terminates the cycle (DS §6.3.8), so
+incidental pollers must not issue SPI into a sleep window, and TX stands the
+cycle down deliberately via `lr20xx_dc_takeover()`. `restart_rx()` issues
+`SetStandby` before re-arming, because a header or CRC error does **not**
+terminate the loop (§6.3.8 ends it on packet *reception*) and re-arming a live
+cycle is refused — a refusal that latches CMD_ERROR, holds DIO1 high and used to
+drive the safety path into a five-strike hardware reset.
+
+**Wake budget.** `hwWakeupTimeUs()` is per-device because the TCXO dominates:
+DS Table 3-23 gives 1 ms warm start plus 115 µs STDBY_RC→Rx, and duty-cycle sleep
+powers the VTCXO regulator down so the oscillator restarts on every wake. A board
+declaring `tcxo-startup-delay-ms` that inherits the base class's flat 1500 µs
+oversizes its sleep window and drops window-edge preambles regardless of signal
+strength.
+
+**Firmware Patch RAM.** Loaded from both reset paths and verified by the magic
+word at `0x800FF8`, so the `PRAM loaded:` line is proof the chip took the patch
+rather than that the writes were accepted. Lost on reset, preserved by retention
+sleep.
+
 ### 5.6 Default Radio Parameters
 
 | Parameter | Default | Notes |
