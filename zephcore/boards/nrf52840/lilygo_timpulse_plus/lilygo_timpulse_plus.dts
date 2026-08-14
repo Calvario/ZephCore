@@ -125,6 +125,14 @@
 		regulator-name = "pwr-enable";
 		enable-gpios = <&gpio0 14 GPIO_ACTIVE_HIGH>;
 		regulator-boot-on;
+		/* Documents the LDO's requirement, but do not rely on it:
+		 * regulator-boot-on sends regulator_common_init() down the
+		 * refcount-only branch, so regulator_delay() never runs and this
+		 * value is inert. What actually gives this rail time to settle is the
+		 * priority-30 pin above — every consumer here (QSPI 41, OLED 85,
+		 * SX1262 90) has real boot work between it and the rail, and the
+		 * SX1262 and SSD1315 both reset-then-wait besides. The GPS, which
+		 * does neither, is zephyr,deferred-init for that reason. */
 		startup-delay-us = <10000>;
 	};
 

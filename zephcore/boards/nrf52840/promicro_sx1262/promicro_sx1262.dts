@@ -63,6 +63,14 @@
 		regulator-name = "vcc3v3-enable";
 		enable-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
 		regulator-boot-on;
+		/* Documents the module's requirement, but do not rely on it:
+		 * regulator-boot-on sends regulator_common_init() down the
+		 * refcount-only branch, so regulator_delay() never runs and this
+		 * value is inert. The real settle time comes from the SX126x driver's
+		 * own reset (5 ms NRESET pulse + 5 ms wait + BUSY poll) before any
+		 * SPI traffic, at LORA_INIT_PRIORITY 90 against this rail's 75.
+		 * Anything put behind this rail that does NOT reset-then-wait needs
+		 * zephyr,deferred-init instead; see meshtracker_x1's i2c0. */
 		startup-delay-us = <5000>;
 	};
 

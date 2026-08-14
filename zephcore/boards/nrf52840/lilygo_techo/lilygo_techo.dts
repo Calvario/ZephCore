@@ -144,7 +144,17 @@
 	 *   3. tcxo_enable (P0.21) — external TCXO for SX1262
 	 *
 	 * These are all regulator-fixed with regulator-boot-on so Zephyr's
-	 * regulator framework brings them up before the SX1262 driver init. */
+	 * regulator framework brings them up before the SX1262 driver init —
+	 * REGULATOR_FIXED_INIT_PRIORITY 75 against LORA_INIT_PRIORITY 90.
+	 *
+	 * Ordering is all that guarantee covers. It does NOT mean a rail has
+	 * settled: regulator-boot-on sends regulator_common_init() down the
+	 * refcount-only branch, so regulator_delay() never runs and the
+	 * startup-delay-us below is inert. The SX1262 is safe because its driver
+	 * resets the part (5 ms NRESET pulse + 5 ms wait + BUSY poll) before any
+	 * SPI traffic. Anything put behind these rails that does NOT
+	 * reset-then-wait needs zephyr,deferred-init instead; see
+	 * meshtracker_x1's i2c0 for what that failure looks like. */
 
 	pwr_enable: pwr-enable {
 		compatible = "regulator-fixed";

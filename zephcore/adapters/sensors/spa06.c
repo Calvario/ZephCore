@@ -171,11 +171,17 @@ static int spa06_init(const struct device *dev)
 	int rc;
 
 	if (!i2c_is_ready_dt(&cfg->bus)) {
+		LOG_ERR("I2C bus %s not ready", cfg->bus.bus->name);
 		return -ENODEV;
 	}
 
+	/* Probe failures stay at debug level: a board may declare the part at both
+	 * of its possible addresses and let the absent one fail here. Everything
+	 * past this point is a part that answered and then went wrong, so those
+	 * are errors. */
 	rc = i2c_reg_read_byte_dt(&cfg->bus, SPA06_REG_ID, &id);
 	if (rc < 0) {
+		LOG_DBG("no answer at 0x%02x (id read: %d)", cfg->bus.addr, rc);
 		return -ENODEV;
 	}
 	if (id != SPA06_CHIP_ID) {
@@ -185,6 +191,7 @@ static int spa06_init(const struct device *dev)
 
 	rc = i2c_reg_write_byte_dt(&cfg->bus, SPA06_REG_RESET, SPA06_SOFT_RESET);
 	if (rc < 0) {
+		LOG_ERR("SPA06 soft reset failed: %d", rc);
 		return rc;
 	}
 	k_msleep(15);
@@ -204,6 +211,7 @@ static int spa06_init(const struct device *dev)
 ready:
 	rc = spa06_read_coefficients(dev);
 	if (rc < 0) {
+		LOG_ERR("SPA06 coefficient read failed: %d", rc);
 		return rc;
 	}
 
@@ -222,6 +230,7 @@ ready:
 					   SPA06_MEAS_CONT_BOTH);
 	}
 	if (rc < 0) {
+		LOG_ERR("SPA06 configuration failed: %d", rc);
 		return rc;
 	}
 

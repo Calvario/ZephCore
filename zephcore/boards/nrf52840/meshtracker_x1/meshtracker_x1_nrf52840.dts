@@ -285,24 +285,42 @@
 	pinctrl-1 = <&i2c0_sleep>;
 	pinctrl-names = "default", "sleep";
 
-	/* Sealed enclosure — only these two parts are ever on this bus */
+	/* Sealed enclosure — only these two parts are ever on this bus, and both
+	 * sit behind the sensor_power switch. NEITHER can be probed at POST_KERNEL.
+	 *
+	 * sensor_power comes up at CONFIG_REGULATOR_FIXED_INIT_PRIORITY (75) and
+	 * both drivers run at 90 — microseconds later, with nothing scheduled in
+	 * between on this board. The node's startup-delay-us does not save them:
+	 * with regulator-boot-on, regulator_common_init() takes the refcount-only
+	 * branch and regulator_delay() never runs. Same trap as flash_power below.
+	 * (vin-supply + regulator_enable() would not help either — that applies
+	 * off-on-delay-us, and only on the 0->1 refcount transition.)
+	 *
+	 * So both nodes are deferred and the app owns their bring-up, by which
+	 * time the rail has been up for seconds:
+	 *   SPA06   -> env_sensors_init()  (adapters/sensors/ZephyrEnvSensors.cpp)
+	 *   DRV2605 -> haptic_init()       (helpers/ui/haptic.c)
+	 *
+	 * Do not "simplify" one of these back to a normal probe. An earlier
+	 * revision deferred only the DRV2605, and the SPA06 — which sorts after it
+	 * within POST_KERNEL priority 90, since equal-priority devices order by DT
+	 * dependency ordinal and drv2605@5a sorts before spa06@77 — silently lost
+	 * the settling time it had been borrowing from the DRV2605's failing probe.
+	 * The barometer had "worked" only by that accident, and went dead the day
+	 * the haptic was fixed. */
 	spa06: spa06@77 {
 		compatible = "goertek,spa06";
 		reg = <0x77>;
+		zephyr,deferred-init;
 	};
 
-	/* Deferred-init so haptic_init() owns the power-up sequence.
-	 *
-	 * Upstream's drv2605_init() spends DRV2605_POWER_UP_DELAY_US *before*
-	 * drv2605_gpio_config() raises en-gpios, then reads the status register
-	 * over I2C immediately after — so the part gets no settling time at all
-	 * between EN rising and its first transaction, and NACKs. Deferring the
-	 * node is what lets us assert EN and wait first; without it the driver
-	 * has already run (and failed) by the time the app gets a say, and
-	 * device_init() would just answer -EALREADY.
-	 *
-	 * Not a rail problem: the SPA06 shares this bus, this rail and this init
-	 * priority and comes up fine. The enable pin is the only difference. */
+	/* Deferring this one also lets haptic_init() assert EN and wait before the
+	 * first transaction. Upstream's drv2605_init() spends its
+	 * DRV2605_POWER_UP_DELAY_US *before* drv2605_gpio_config() raises en-gpios,
+	 * then reads the status register over I2C immediately after — so the part
+	 * gets no settling time at all between EN rising and being addressed, and
+	 * NACKs. Without the deferral the driver has already run (and failed) by
+	 * the time the app gets a say, and device_init() would answer -EALREADY. */
 	haptic: drv2605@5a {
 		compatible = "ti,drv2605";
 		reg = <0x5a>;

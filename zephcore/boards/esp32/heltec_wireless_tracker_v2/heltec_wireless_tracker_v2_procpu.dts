@@ -85,6 +85,14 @@
 		enable-gpios = <&gpio0 3 GPIO_ACTIVE_HIGH>;
 		regulator-boot-on;
 		regulator-always-on;
+		/* Documents the rail's requirement, but do not rely on it. It is
+		 * inert twice over: regulator-boot-on sends regulator_common_init()
+		 * down the refcount-only branch so regulator_delay() never runs, and
+		 * regulator-always-on makes regulator_enable() return at its first
+		 * line. The real settle time comes from the ST7735R driver's own
+		 * mipi_dbi_reset() + exit-sleep delay at DISPLAY_INIT_PRIORITY 85;
+		 * the GNSS side is safe because gnss-nmea-generic never probes the
+		 * receiver, it just parses whatever the UART delivers. */
 		startup-delay-us = <10000>;
 	};
 
@@ -112,6 +120,9 @@
 		enable-gpios = <&gpio0 7 GPIO_ACTIVE_HIGH>;
 		regulator-boot-on;
 		regulator-always-on;
+		/* Documents the FEM's requirement, but do not rely on it — inert for
+		 * the same two reasons as vext above. Harmless because the FEM is a
+		 * passive gain block with no bus to probe. */
 		startup-delay-us = <1000>;
 	};
 

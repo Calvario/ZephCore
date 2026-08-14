@@ -87,6 +87,14 @@
 		regulator-name = "gps-power";
 		enable-gpios = <&gpio0 6 GPIO_ACTIVE_LOW>;
 		regulator-boot-on;
+		/* Documents the module's requirement, but do not rely on it:
+		 * regulator-boot-on sends regulator_common_init() down the
+		 * refcount-only branch, so regulator_delay() never runs and this
+		 * value is inert. Harmless here because gnss-nmea-generic never
+		 * probes the receiver — it attaches a UART and parses whatever
+		 * arrives, so an unpowered module means no sentences yet, not a
+		 * failed init. ZephyrGPSManager owns the rail at runtime via
+		 * chosen { zephcore,gps-power }. */
 		startup-delay-us = <10000>;
 	};
 
@@ -105,6 +113,11 @@
 		regulator-name = "vfem-enable";
 		enable-gpios = <&gpio0 30 GPIO_ACTIVE_HIGH>;
 		regulator-boot-on;
+		/* Documents the FEM's requirement, but do not rely on it:
+		 * regulator-boot-on sends regulator_common_init() down the
+		 * refcount-only branch, so regulator_delay() never runs and this
+		 * value is inert. Harmless here because the FEM is a passive
+		 * gain block with no bus to probe — nothing addresses it at init. */
 		startup-delay-us = <1000>;
 	};
 
@@ -124,6 +137,12 @@
 		regulator-name = "tft-pwr-enable";
 		enable-gpios = <&gpio0 26 GPIO_ACTIVE_HIGH>;
 		regulator-boot-on;
+		/* Documents the panel's requirement, but do not rely on it:
+		 * regulator-boot-on sends regulator_common_init() down the
+		 * refcount-only branch, so regulator_delay() never runs and this
+		 * value is inert. The real settle time comes from the ST7735R
+		 * driver's own mipi_dbi_reset() + exit-sleep delay, at
+		 * DISPLAY_INIT_PRIORITY 85 against this rail's 75. */
 		startup-delay-us = <10000>;
 	};
 
