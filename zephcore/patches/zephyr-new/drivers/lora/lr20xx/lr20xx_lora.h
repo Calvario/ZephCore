@@ -66,6 +66,28 @@ uint32_t lr20xx_get_freq_offset(const struct device *dev,
 void lr20xx_reset_freq_offset(const struct device *dev);
 
 /**
+ * @brief Duty-cycle re-arms caused by a timeout since boot or reset
+ *
+ * Counts the false-preamble case: the preamble-restarted rx_max_time +
+ * cycle_time window expired with no packet, the chip left the duty-cycle loop,
+ * and the driver put it back.  A climbing rate means the RX window is catching
+ * noise rather than packets, which is the signal for retuning it.  Backs
+ * `get dc.restarts`, which reported a hardcoded 0 on this radio before anything
+ * counted them.
+ *
+ * @param dev LoRa device
+ * @return re-arm count
+ */
+uint32_t lr20xx_get_dc_timeout_restarts(const struct device *dev);
+
+/**
+ * @brief Clear the duty-cycle timeout re-arm counter
+ *
+ * @param dev LoRa device
+ */
+void lr20xx_reset_dc_timeout_restarts(const struct device *dev);
+
+/**
  * @brief Radio deaf time for one duty-cycle wake transition, in microseconds
  *
  * DS Table 3-23: warm start (Sleep with retention -> STDBY_RC) 1 ms, plus

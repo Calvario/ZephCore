@@ -51,6 +51,16 @@ void LR2021Radio::resetStats()
 	lr20xx_reset_freq_offset(_dev);
 }
 
+uint32_t LR2021Radio::getDutyCycleTimeoutRestarts() const
+{
+	return lr20xx_get_dc_timeout_restarts(_dev);
+}
+
+void LR2021Radio::resetDutyCycleTimeoutRestarts()
+{
+	lr20xx_reset_dc_timeout_restarts(_dev);
+}
+
 int LR2021Radio::formatFreqErrorStatus(char *buf, int cap)
 {
 	struct lr20xx_freq_offset_stats st;

@@ -95,6 +95,15 @@ struct lr20xx_data {
 	bool rx_boost_enabled;
 	bool rx_boost_applied;
 
+	/* Duty-cycle re-arms triggered by a timeout, i.e. the false-preamble
+	 * case: the preamble-restarted rx_max_time + cycle_time window expired
+	 * with no packet, so the chip left the loop and the host put it back.
+	 * The rate is the instrument for duty-cycle tuning — a climbing count
+	 * means the window is catching noise, not packets.  Exposed as
+	 * `get dc.restarts`, which reported a hardcoded 0 on this radio until
+	 * nothing counted them. */
+	atomic_t dc_timeout_restarts;
+
 	/* Stored duty-cycle timing from recv_duty_cycle() — re-arm paths
 	 * must reuse these exact values, never recompute: the window sizing
 	 * (detection budget, datasheet completion rule, wake transition) is
@@ -108,11 +117,18 @@ struct lr20xx_data {
 	struct k_sem cad_sem;
 	int cad_result;	/* 0=free, 1=busy, <0=error */
 	/* No cad_active flag: there was one, written at five sites and read at
-	 * none.  It read like a concurrent-CAD guard and guarded nothing — the
-	 * real exclusion is that every CAD entry point (LBT from startSendRaw,
-	 * probes from cadMaintenance) runs on the mesh loop thread, so two CADs
-	 * cannot overlap by construction.  A flag nothing tests is worse than no
-	 * flag: it invites the next reader to assume the invariant is enforced. */
+	 * none.  The SX126x driver's copy IS read — sx126x_handle_irq_timeout()
+	 * returns early on it — so this was inherited without the read that gave
+	 * it a purpose.
+	 *
+	 * It is not needed here, and the reason is the locking model, not luck:
+	 * sx126x_irq_work_handler() takes no lock at all, so there its timeout
+	 * path genuinely races a CAD being set up on the mesh thread and the
+	 * flag is the only thing preventing a teardown.  This handler holds
+	 * spi_mutex across its whole body, and every CAD entry point holds that
+	 * same mutex across SetStandby -> clear_irq_status(ALL) -> SetCad — so
+	 * the two cannot interleave, and any TIMEOUT latched before the CAD is
+	 * discarded by the clear inside lr20xx_do_cad(). */
 	/* Adaptive-CAD: signed offset applied to the per-SF base detPeak on
 	 * every LBT CAD; cad_probe_peak overrides for one calibration probe. */
 	int8_t cad_peak_offset;
@@ -1075,7 +1091,17 @@ static void lr20xx_start_rx(struct lr20xx_data *data,
 
 /* ── Lightweight RX restart (no modem reconfig) ─────────────────────── */
 
-static void lr20xx_restart_rx(struct lr20xx_data *data)
+/* Returns 0 if the receiver is believed to be back on air, <0 if a command the
+ * re-arm depends on was rejected and the caller should escalate.
+ *
+ * "Believed" is deliberate on the duty-cycle path: verification there would mean
+ * a GetStatus after SetRxDutyCycle, and an NSS falling edge terminates the cycle
+ * being checked (DS §6.3.8) — the probe would cause the fault it looks for.  So
+ * the check is placed on the SetStandby that precedes the re-arm, which is the
+ * command that actually fails when the chip is wedged, and is safe to poll
+ * because the standby has just ended any live cycle.  Continuous RX has no such
+ * constraint and is checked after SetRx. */
+static int lr20xx_restart_rx(struct lr20xx_data *data)
 {
 	void *ctx = &data->hal_ctx;
 
@@ -1123,26 +1149,62 @@ static void lr20xx_restart_rx(struct lr20xx_data *data)
 		if (lr20xx_system_get_status(ctx, NULL, &s2, NULL) == LR20XX_STATUS_OK &&
 		    s2.chip_mode == LR20XX_SYSTEM_CHIP_MODE_RX) {
 			data->in_rx_mode = true;
-			return;
+			return 0;
 		}
 	}
 
 	if (data->rx_duty_cycle_enabled) {
-		/* SetStandby first: a header/CRC error does not terminate the
-		 * duty-cycle loop (DS 6.3.8 ends it on packet reception), and
-		 * re-arming a live cycle is refused — the refusal latches
-		 * CMD_ERROR and holds DIO1 high.  Near-free when already in
-		 * STDBY_RC.  See ARCHITECTURE.md 5.5.1. */
+		lr20xx_system_stat1_t s1 = { 0 };
+
+		/* SetStandby first.  A header error does not terminate the
+		 * duty-cycle loop — DS §6.3.8 lists exactly three terminators
+		 * (packet reception, a host SetStandby, an NSS wake from sleep)
+		 * and a header error is none of them — so the chip can still be
+		 * cycling here.  Re-arming then drives an NSS edge into a live
+		 * cycle, and the datasheet is explicit for that case: on a wake
+		 * "by the device with a falling edge of NSS. A SetStandby
+		 * command should also be sent, to avoid the race conditions".
+		 * Observed on hardware without it: latched CMD_ERROR, DIO1 held
+		 * high, five strikes to a reset, ~88 ms deaf per noise header
+		 * error.  Near-free when already in STDBY_RC.
+		 * See ARCHITECTURE.md 5.5.1. */
 		lr20xx_system_set_standby_mode(ctx,
 					       LR20XX_SYSTEM_STANDBY_MODE_RC);
+
+		/* Safe to poll: the standby above ended any live cycle, so this
+		 * NSS edge has nothing left to disturb.  If the chip would not
+		 * even take a SetStandby, arming a duty cycle on top of it is
+		 * pointless — say so and let the caller escalate. */
+		if (lr20xx_system_get_status(ctx, &s1, NULL, NULL) ==
+			    LR20XX_STATUS_OK &&
+		    s1.command_status != 2 && s1.command_status != 3) {
+			LOG_WRN("restart_rx: standby rejected (cmd=%d) before "
+				"duty-cycle re-arm", s1.command_status);
+			return -EIO;
+		}
+
 		lr20xx_apply_rx_duty_cycle(data);
-	} else {
-		lr20xx_radio_common_set_rx_with_timeout_in_rtc_step(
-			ctx, 0xFFFFFF);
+		data->in_rx_mode = true;
+		return 0;
 	}
 
+	lr20xx_radio_common_set_rx_with_timeout_in_rtc_step(ctx, 0xFFFFFF);
 	CHECK_CMD(ctx, "restart_rx set_rx");
 	data->in_rx_mode = true;
+
+	/* No duty cycle armed, so polling is free of the NSS hazard. */
+	{
+		lr20xx_system_stat2_t s2 = { 0 };
+
+		if (lr20xx_system_get_status(ctx, NULL, &s2, NULL) ==
+			    LR20XX_STATUS_OK &&
+		    s2.chip_mode != LR20XX_SYSTEM_CHIP_MODE_RX) {
+			LOG_WRN("restart_rx: chip is in mode %d, not RX",
+				s2.chip_mode);
+			return -EIO;
+		}
+	}
+	return 0;
 }
 
 /* Is the receiver still live?  Conservative: true (leave it alone) whenever it
@@ -1474,8 +1536,26 @@ static void lr20xx_dio1_work_handler(struct k_work *work)
 			lr20xx_start_rx(data, cfg);
 			rx_restarted = true;
 		} else {
+			/* Under a duty cycle this is the false-preamble case:
+			 * the preamble-restarted rx_max_time + cycle_time window
+			 * expired with no packet, so the chip left the loop.
+			 * Counting it is what makes `get dc.restarts` mean
+			 * something on this radio. */
+			if (data->rx_duty_cycle_enabled) {
+				atomic_inc(&data->dc_timeout_restarts);
+			}
 			LOG_DBG("Timeout IRQ — restarting RX");
-			lr20xx_restart_rx(data);
+			if (lr20xx_restart_rx(data) < 0) {
+				/* The light re-arm could not get the chip back on
+				 * air.  Escalate to the full path, which forces
+				 * standby, reprograms the modem and re-issues
+				 * SetRx from scratch — the LR20xx counterpart of
+				 * the SX126x's retry-from-sleep.  If that fails
+				 * too the chip is wedged, and the stuck-DIO1
+				 * counter below still reaches its reset. */
+				LOG_WRN("Timeout: light re-arm failed — full RX restart");
+				lr20xx_start_rx(data, cfg);
+			}
 			rx_restarted = true;
 		}
 	}
@@ -2292,6 +2372,20 @@ void lr20xx_reset_freq_offset(const struct device *dev)
 	data->freq_off_sum_hz = 0;
 	data->freq_off_count = 0;
 	k_mutex_unlock(&data->spi_mutex);
+}
+
+uint32_t lr20xx_get_dc_timeout_restarts(const struct device *dev)
+{
+	struct lr20xx_data *data = dev->data;
+
+	return (uint32_t)atomic_get(&data->dc_timeout_restarts);
+}
+
+void lr20xx_reset_dc_timeout_restarts(const struct device *dev)
+{
+	struct lr20xx_data *data = dev->data;
+
+	atomic_set(&data->dc_timeout_restarts, 0);
 }
 
 uint32_t lr20xx_get_wakeup_time_us(const struct device *dev)

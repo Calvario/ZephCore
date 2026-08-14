@@ -64,6 +64,28 @@ void lr11xx_set_rx_boost(const struct device *dev, bool enable);
 uint32_t lr11xx_get_wakeup_time_us(const struct device *dev);
 
 /**
+ * @brief Duty-cycle re-arms caused by a timeout since boot or reset
+ *
+ * Counts the false-preamble case: UM §7.2.6 restarts the window timer with
+ * 2*RxPeriod + SleepPeriod on preamble detection, and when that expires with no
+ * packet the chip leaves the loop and the driver puts it back.  A climbing rate
+ * means the RX window is catching noise rather than packets.  Backs
+ * `get dc.restarts`, which reported a hardcoded 0 on this radio before anything
+ * counted them.
+ *
+ * @param dev LoRa device
+ * @return re-arm count
+ */
+uint32_t lr11xx_get_dc_timeout_restarts(const struct device *dev);
+
+/**
+ * @brief Clear the duty-cycle timeout re-arm counter
+ *
+ * @param dev LoRa device
+ */
+void lr11xx_reset_dc_timeout_restarts(const struct device *dev);
+
+/**
  * @brief Get a random number from the radio
  *
  * Uses LR11xx hardware RNG.

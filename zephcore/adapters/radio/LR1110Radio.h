@@ -18,6 +18,13 @@ public:
 
 	void begin() override;
 
+	/* Duty-cycle false-preamble re-arm count, behind `get dc.restarts`.
+	 * Without these the base class's stub answers 0 forever, and the one
+	 * instrument for tuning the RX window reads clean on a node that is
+	 * re-arming constantly. */
+	uint32_t getDutyCycleTimeoutRestarts() const override;
+	void resetDutyCycleTimeoutRestarts() override;
+
 protected:
 	/* Hardware primitives */
 	bool hwConfigure(const struct lora_modem_config &cfg) override;

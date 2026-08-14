@@ -1,0 +1,70 @@
+Scale the chip-side Tx timeout from airtime instead of a fixed 10 s.
+
+sx126x_lora_send_async() programmed SetTx with a constant 10000 ms. DS section
+13.1.5 is explicit that when the Tx timer fires the transmission is stopped, so
+that constant is not a safeguard on slow presets -- it is a truncation.
+
+Airtime of a 255-byte packet at CR 4/8 reaches 17.7 s at SF10/BW31.25, 15.9 s at
+SF11/BW62.5 and 28.6 s at SF12/BW62.5. Against a 10 s ceiling those presets lost
+every packet from 136 B, 154 B and 76 B up respectively, cut mid-transmission, with
+nothing in the log connecting the loss to this line: TX_DONE never arrives, the
+timeout handler re-arms RX, and the host wait is what eventually reports it.
+
+Scale as airtime + 25% + 500 ms, floored at the previous 10000 so no preset that
+works today gets a tighter deadline. Clamp to 262143 ms: sx126x_set_tx() converts
+via SX126X_MS_TO_TIMEOUT (64 steps/ms) and sys_put_be24(), which truncates
+silently above that. The ceiling is 262 s against a worst reachable airtime of
+~229 s (SF12/BW7.81 at 255 B), so it never binds on a real packet.
+
+Kept separate from 0003 because that patch cannot be regenerated from the tree,
+and the line being changed is upstream context within it rather than an added
+line -- same reason 0011, 0012 and 0013 are separate.
+
+diff --git a/drivers/lora/native/sx126x/sx126x.c b/drivers/lora/native/sx126x/sx126x.c
+--- a/drivers/lora/native/sx126x/sx126x.c
++++ b/drivers/lora/native/sx126x/sx126x.c
+@@ -1432,6 +1432,7 @@
+ 
+ static int sx126x_lora_cad(const struct device *dev, k_timeout_t timeout);
+ static uint32_t sx126x_cad_timeout_ms(struct sx126x_data *data);
++static uint32_t sx126x_lora_airtime(const struct device *dev, uint32_t data_len);
+ 
+ static int sx126x_lora_send_async(const struct device *dev,
+ 				  uint8_t *data_buf, uint32_t data_len,
+@@ -1614,8 +1615,34 @@
+ 	}
+ #endif /* CONFIG_LORA_SX126X_NATIVE_STANDALONE */
+ 
+-	/* Start transmission with 10 second timeout */
+-	ret = sx126x_set_tx(dev, 10000);
++	/* Chip-side Tx safeguard, scaled from airtime.
++	 *
++	 * DS §13.1.5: when the Tx timer fires the transmission is stopped, so
++	 * this has to exceed real airtime — and a fixed 10 s cannot. A 255-byte
++	 * packet at CR 4/8 is 17.7 s at SF10/BW31.25 and 28.6 s at SF12/BW62.5;
++	 * on those presets the old constant truncated every packet from 136 B
++	 * and 76 B up respectively, mid-transmission and with nothing in the log
++	 * tying the loss to this line.
++	 *
++	 * Floored at the previous 10000 so no preset that works today gets a
++	 * tighter deadline, and clamped to the 24-bit field: sx126x_set_tx()
++	 * converts with SX126X_MS_TO_TIMEOUT (64 steps/ms at 15.625 us) and then
++	 * sys_put_be24(), which would silently truncate above 262143 ms. That
++	 * ceiling is 262 s against a worst reachable airtime of ~229 s
++	 * (SF12/BW7.81, 255 B), so the clamp never binds on a real packet. */
++	{
++		uint32_t air_ms = sx126x_lora_airtime(dev, data_len);
++		uint32_t tmo_ms = air_ms + (air_ms / 4U) + 500U;
++
++		if (tmo_ms < 10000U) {
++			tmo_ms = 10000U;
++		}
++		if (tmo_ms > 262143U) {
++			tmo_ms = 262143U;
++		}
++		LOG_DBG("SET_TX: airtime=%u ms, timeout=%u ms", air_ms, tmo_ms);
++		ret = sx126x_set_tx(dev, tmo_ms);
++	}
+ 	if (ret < 0) {
+ 		goto out_error;
+ 	}

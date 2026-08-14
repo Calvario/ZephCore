@@ -31,6 +31,16 @@ void LR1110Radio::begin()
 	LoRaRadioBase::begin();
 }
 
+uint32_t LR1110Radio::getDutyCycleTimeoutRestarts() const
+{
+	return lr11xx_get_dc_timeout_restarts(_dev);
+}
+
+void LR1110Radio::resetDutyCycleTimeoutRestarts()
+{
+	lr11xx_reset_dc_timeout_restarts(_dev);
+}
+
 /* ── Hardware primitives ──────────────────────────────────────────────── */
 
 bool LR1110Radio::hwConfigure(const struct lora_modem_config &cfg)

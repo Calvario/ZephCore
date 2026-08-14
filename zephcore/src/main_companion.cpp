@@ -762,7 +762,21 @@ public:
 
 	void clearStats() override {
 		lora_radio.resetStats();
+		lora_radio.resetDutyCycleTimeoutRestarts();
 		companion_mesh.resetStats();
+	}
+
+	/* Duty-cycle false-preamble re-arm count.  Without these the
+	 * CommonCLICallbacks default answers 0 forever, so `get dc.restarts`
+	 * read clean on every companion regardless of what the radio was doing
+	 * — and the companion is the role the duty cycle actually runs in.
+	 * Mirrors RepeaterMesh::getDutyCycleTimeoutRestarts(). */
+	uint32_t getDutyCycleTimeoutRestarts() const override {
+		return lora_radio.getDutyCycleTimeoutRestarts();
+	}
+
+	void resetDutyCycleTimeoutRestarts() override {
+		lora_radio.resetDutyCycleTimeoutRestarts();
 	}
 
 	/* Temp radio params — deferred; stub for now. */

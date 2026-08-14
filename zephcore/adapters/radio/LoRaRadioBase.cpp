@@ -6,6 +6,7 @@
 #include "LoRaRadioBase.h"
 #include "radio_common.h"
 #include <mesh/LoRaConfig.h>
+#include <mesh/MeshCore.h>   /* MAX_TRANS_UNIT */
 #include <zephyr/kernel.h>
 #include <zephyr/random/random.h>
 #include <string.h>
@@ -94,7 +95,12 @@ LoRaRadioBase::LoRaRadioBase(const struct device *lora_dev, MainBoard &board,
  * it from this thread costs no SPI and cannot race the radio. */
 uint32_t LoRaRadioBase::txWaitBudgetMs() const
 {
-	uint32_t air = lora_airtime(_dev, _tx_len ? _tx_len : 255);
+	/* _tx_len is published by startSendRaw() before it releases
+	 * _tx_start_sem, so by the time this thread runs it is always the length
+	 * of the transmit in flight — the fallback is defensive only, and uses
+	 * the protocol maximum rather than a literal so it tracks MAX_TRANS_UNIT
+	 * if the FIFO bound ever moves. */
+	uint32_t air = lora_airtime(_dev, _tx_len ? _tx_len : MAX_TRANS_UNIT);
 
 	/* All four drivers behind this class implement .airtime (native sx126x,
 	 * lr11xx, lr20xx, loramac-node sx127x), and lora_airtime() dereferences
