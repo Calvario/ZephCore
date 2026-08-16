@@ -96,19 +96,6 @@ void lr11xx_reset_dc_timeout_restarts(const struct device *dev);
 uint32_t lr11xx_get_random(const struct device *dev);
 
 /**
- * @brief Reset AGC by performing warm sleep + full recalibration
- *
- * Warm sleep powers down the analog frontend (resets AGC gain state),
- * then Calibrate(0x3F) refreshes all blocks. Re-applies image
- * calibration for the operating frequency and RX boost afterward.
- *
- * Must be called while NOT actively receiving a packet.
- *
- * @param dev LoRa device
- */
-void lr11xx_reset_agc(const struct device *dev);
-
-/**
  * @brief Set the adaptive-CAD operating detPeak offset
  *
  * Signed delta applied to the per-SF base cadDetPeak on every LBT CAD.

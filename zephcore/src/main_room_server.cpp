@@ -443,9 +443,9 @@ static void room_event_loop(void)
 		/* Periodic housekeeping — maintenance + display refresh */
 		if (events & MESH_EVENT_HOUSEKEEPING) {
 #ifdef ZEPHCORE_LORA
-			/* Radio maintenance: noise floor calibration, AGC reset,
-			 * RX watchdog.  Separated from loop() so these never run
-			 * on packet-driven events. */
+			/* Radio maintenance: noise floor calibration, adaptive-CAD
+			 * probe, RX watchdog.  Separated from loop() so these
+			 * never run on packet-driven events. */
 			if (room_mesh_ptr) {
 				room_mesh_ptr->maintenanceLoop();
 				/* Also drive loop() so time-based actions (advert

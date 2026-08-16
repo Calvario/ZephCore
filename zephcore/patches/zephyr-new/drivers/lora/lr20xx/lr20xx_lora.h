@@ -169,13 +169,6 @@ int lr20xx_configure_side_detectors(const struct device *dev,
 uint32_t lr20xx_get_random(const struct device *dev);
 
 /**
- * @brief Reset AGC by performing warm sleep + full recalibration
- *
- * @param dev LoRa device
- */
-void lr20xx_reset_agc(const struct device *dev);
-
-/**
  * @brief Set the adaptive-CAD operating detPeak offset
  *
  * Signed delta applied to the per-SF base cadDetPeak on every LBT CAD.

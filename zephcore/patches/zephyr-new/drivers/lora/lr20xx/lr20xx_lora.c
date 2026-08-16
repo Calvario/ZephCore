@@ -491,10 +491,10 @@ static lr20xx_status_t lr20xx_calibrate_front_end(void *ctx, uint32_t freq_hz);
  * because the patch supersedes them.
  *
  * The image is volatile: lost on reset and on cold start, preserved by sleep
- * with retention (§22.3).  Every sleep this driver issues sets retention
- * (lr20xx_reset_agc), and duty-cycle sleep is retention by definition (§6.3.8),
- * so the reset paths are the only places it has to be (re)loaded.  Costs 2240
- * bytes of flash and +80 nA of retention sleep current.
+ * with retention (§22.3).  Duty-cycle sleep is retention by definition (§6.3.8)
+ * and this driver issues no other sleep, so the reset paths are the only places
+ * it has to be (re)loaded.  Costs 2240 bytes of flash and +80 nA of retention
+ * sleep current.
  *
  * Best-effort: a chip without the patch still works, so a failure here is a
  * warning, not a reason to fail init. */
@@ -609,7 +609,7 @@ static void lr20xx_hardware_reset(struct lr20xx_data *data,
 	 * caller of this function is post-config (the DIO1 stuck-recovery path
 	 * and three standby-failure paths), and lr20xx_start_rx() follows
 	 * immediately, so calibrate for the frequency actually about to be
-	 * received on.  Same shape as lr20xx_reset_agc(). */
+	 * received on. */
 	if (data->configured) {
 		lr20xx_calibrate_front_end(ctx, data->modem_cfg.frequency);
 	}
@@ -973,6 +973,32 @@ static bool lr20xx_apply_rx_duty_cycle(struct lr20xx_data *data)
 		lr20xx_radio_common_set_rx_with_timeout_in_rtc_step(
 			ctx, 0xFFFFFF);
 		return false;
+	}
+
+	/* Re-apply RX boost before re-arming — same warm-start caution as
+	 * lr11xx_restart_rx(), which has always done this on its duty-cycle
+	 * path.  A duty cycle sleeps the chip between every window (DS §6.3.8),
+	 * and DS §6.3.4 (SetAdditionalRegToRetain, "specifies the address of an
+	 * additional register to retain in Sleep mode") establishes that not
+	 * every register survives that on its own.  This driver holds no
+	 * retention entries at all, and the only place set_rx_path was ever
+	 * issued is apply_modem_config() — which the re-arm path never calls, so
+	 * before this the boost was programmed once at RX entry and never again.
+	 * If it does not survive the sleep, every window after the first ran
+	 * 3 dB down: the same failure the SX126x hit, where the fix was pinning
+	 * RX gain into the warm-start retention list.
+	 *
+	 * One SPI command, correct either way.  Whether the LR2021 actually needs
+	 * it — or wants a retention entry instead — is still an open question;
+	 * read the gain back after a window, or A/B it on PDR.
+	 *
+	 * Not conditioned on rx_boost_applied: that flag tracks what we
+	 * programmed, not what survived. */
+	if (data->rx_boost_enabled) {
+		lr20xx_radio_common_set_rx_path(
+			ctx, LR20XX_RADIO_COMMON_RX_PATH_LF,
+			LR20XX_RADIO_COMMON_RX_PATH_BOOST_MODE_7);
+		data->rx_boost_applied = true;
 	}
 
 	/* Clear the CMD_PERR the HAL's clockless wake frame provokes: it is
@@ -2120,6 +2146,28 @@ static int lr20xx_lora_recv_async(const struct device *dev,
 
 	k_mutex_lock(&data->spi_mutex, K_FOREVER);
 
+	/* Idempotent fast path: the chip is already in continuous RX, so there
+	 * is nothing to program — refresh the callback and leave the receiver on
+	 * air.  The usual caller is LoRaRadioBase::startSendRaw()'s failure path:
+	 * the LBT branch of send_async has already run lr20xx_start_rx() before
+	 * returning -EBUSY, so without this every CAD-busy verdict paid a SECOND
+	 * full rebuild (standby -> ClearRxFifo -> apply_modem_config -> SetRx) on
+	 * top of the driver's own.  startSendRaw's comment has asserted this was
+	 * "a no-op there" ever since the SX126x gained its Phase 2 fast path; on
+	 * this driver it was not, until now.
+	 *
+	 * rx_duty_cycle_enabled is part of the guard, not decoration.  This is
+	 * the CONTINUOUS entry point and it clears that flag below, so a caller
+	 * moving a duty-cycled radio to continuous RX has to take the full path:
+	 * fast-pathing there would leave the cycle running on a chip whose
+	 * bookkeeping claims continuous, and nothing would ever stand it down. */
+	if (data->in_rx_mode && !data->rx_duty_cycle_enabled) {
+		data->async_rx_cb = cb;
+		data->async_rx_user_data = user_data;
+		k_mutex_unlock(&data->spi_mutex);
+		return 0;
+	}
+
 	data->async_rx_cb = cb;
 	data->async_rx_user_data = user_data;
 	data->rx_duty_cycle_enabled = false;
@@ -2511,42 +2559,6 @@ uint32_t lr20xx_get_random(const struct device *dev)
 	return random;
 }
 
-void lr20xx_reset_agc(const struct device *dev)
-{
-	struct lr20xx_data *data = dev->data;
-	void *ctx = &data->hal_ctx;
-
-	k_mutex_lock(&data->spi_mutex, K_FOREVER);
-
-	/* Warm sleep — powers down analog frontend (resets AGC gain state).
-	 * is_ram_retention_enabled=true = warm sleep (equivalent to LR11xx warm_start). */
-	lr20xx_system_sleep_cfg_t sleep_cfg = {
-		.is_clk_32k_enabled       = false,
-		.is_ram_retention_enabled = true,
-	};
-	/* No delay after the sleep opcode — lr20xx_hal_write() already does a
-	 * k_busy_wait(1000) when it sees 0x0127, so this was a duplicate guard
-	 * (and k_sleep() with a sub-tick duration rounds up to a full tick). */
-	lr20xx_system_set_sleep_mode(ctx, &sleep_cfg, 0);
-
-	lr20xx_system_set_standby_mode(ctx, LR20XX_SYSTEM_STANDBY_MODE_RC);
-
-	lr20xx_system_calibrate(ctx, 0x6F);
-
-	if (data->configured) {
-		lr20xx_calibrate_front_end(ctx, data->modem_cfg.frequency);
-	}
-
-	if (data->rx_boost_enabled) {
-		lr20xx_radio_common_set_rx_path(
-			ctx, LR20XX_RADIO_COMMON_RX_PATH_LF,
-			LR20XX_RADIO_COMMON_RX_PATH_BOOST_MODE_7);
-		data->rx_boost_applied = true;
-	}
-
-	k_mutex_unlock(&data->spi_mutex);
-}
-
 /* ── Driver API: CAD ────────────────────────────────────────────────── */
 
 /* Datasheet Table 6-19 in full: rows = CAD symbol count 1..4, columns =
@@ -2852,7 +2864,30 @@ static int lr20xx_lora_recv_duty_cycle(const struct device *dev,
 		return -EINVAL;
 	}
 
+	uint32_t rx_ms = k_ticks_to_ms_ceil32(rx_period.ticks);
+	uint32_t slp_ms = k_ticks_to_ms_ceil32(sleep_period.ticks);
+	if (rx_ms < 1) rx_ms = 1;
+	if (slp_ms < 1) slp_ms = 1;
+
 	k_mutex_lock(&data->spi_mutex, K_FOREVER);
+
+	/* Idempotent fast path, the duty-cycle counterpart of the one in
+	 * recv_async and the same shape as the SX126x's: a cycle already armed
+	 * on exactly these periods has nothing to re-arm, so refresh the
+	 * callback and stay on air instead of tearing a live cycle down and
+	 * paying a full rebuild for it.  Timings are computed before the lock so
+	 * they can be compared here.
+	 *
+	 * Any other combination — continuous RX, or a cycle on different periods
+	 * — falls through to the full path below, which re-arms via
+	 * lr20xx_apply_rx_duty_cycle() and therefore still gets the AGC reset. */
+	if (data->in_rx_mode && data->rx_duty_cycle_enabled &&
+	    data->dc_rx_ms == rx_ms && data->dc_sleep_ms == slp_ms) {
+		data->async_rx_cb = cb;
+		data->async_rx_user_data = user_data;
+		k_mutex_unlock(&data->spi_mutex);
+		return 0;
+	}
 
 	data->async_rx_cb = cb;
 	data->async_rx_user_data = user_data;
@@ -2863,11 +2898,6 @@ static int lr20xx_lora_recv_duty_cycle(const struct device *dev,
 	lr20xx_system_clear_irq_status(ctx, LR20XX_SYSTEM_IRQ_ALL_MASK);
 	lr20xx_radio_fifo_clear_rx(ctx);
 	lr20xx_apply_modem_config(data, cfg, false);
-
-	uint32_t rx_ms = k_ticks_to_ms_ceil32(rx_period.ticks);
-	uint32_t slp_ms = k_ticks_to_ms_ceil32(sleep_period.ticks);
-	if (rx_ms < 1) rx_ms = 1;
-	if (slp_ms < 1) slp_ms = 1;
 
 	/* Store for the re-arm paths (lr20xx_start_rx / lr20xx_restart_rx)
 	 * so every re-entry uses exactly this timing. */

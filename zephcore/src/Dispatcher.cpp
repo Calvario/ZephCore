@@ -517,6 +517,32 @@ void Dispatcher::checkSend()
 				 * continuously on a busy site and buries real
 				 * faults. */
 				LOG_DBG("checkSend: startSendRaw refused, re-queuing delay=%u", retry);
+
+				/* Escalate a refusal that will not end.  This branch
+				 * used to leave cad_busy_start alone, so a packet the
+				 * driver's own LBT kept rejecting — the pre-TX gate
+				 * having passed — looped indefinitely with no counter,
+				 * no error flag and nothing above DBG.  At default log
+				 * level a node in that state looks completely idle
+				 * while it never transmits, which is exactly how a
+				 * chip-side CAD (LR20xx CAD_LBT) fails.
+				 *
+				 * Deliberately no recoverRxState() here, unlike the
+				 * isReceiving() branch above: that one recovers a chip
+				 * suspected of being stuck in RX, whereas a busy
+				 * channel is a true reading and walking the radio
+				 * through REST would only add deaf time. Report and
+				 * keep retrying. */
+				if (cad_busy_start == 0) {
+					cad_busy_start = now;
+				} else if (now - cad_busy_start > getCADFailMaxDuration()) {
+					_err_flags |= ERR_EVENT_CAD_TIMEOUT;
+					LOG_WRN("checkSend: LBT has refused TX for %ums "
+						"(len=%d, noise=%d) — channel busy or CAD too sensitive",
+						(unsigned)(now - cad_busy_start), len,
+						_radio->getNoiseFloor());
+					cad_busy_start = now;
+				}
 				logTxFail(outbound, outbound->getRawLength());
 				_mgr->queueOutbound(outbound, outbound_priority, futureMillis((int)retry));
 				outbound = nullptr;
@@ -525,6 +551,12 @@ void Dispatcher::checkSend()
 				}
 			} else {
 				outbound_expiry = futureMillis((int)max_airtime);
+				/* A transmit got out, so the refusal streak above is
+				 * over.  Without this the timer keeps running across
+				 * successful sends and the next isolated refusal
+				 * inherits a stale start, reporting a stall that
+				 * already ended. */
+				cad_busy_start = 0;
 			}
 		}
 	}
