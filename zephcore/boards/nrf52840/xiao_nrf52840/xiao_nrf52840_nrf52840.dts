@@ -8,6 +8,7 @@
  * - LEDs: red P0.26 (D11, MeshCore P_LORA_TX_LED), blue P0.06 (D12), green P0.30 (D13), active-low
  * - User button: D0 = P0.02
  * - Battery: AIN7 P0.31, divider enable P0.14 (D14), active-low enable
+ * - Charge current: HICHG P0.13, LOW = 100mA, floating/HIGH = 50mA (BQ25100)
  * - I2C: P1.12 SDA / P1.11 SCL (MeshCore Wire on D7/D6 when LoRa uses D4/D5)
  * - UART0 not used (pins shared with I2C in this layout)
  */
@@ -81,10 +82,26 @@
 		tap-delay-ms = <400>;
 	};
 
+	/*
+	 * Battery ADC divider enable, P0.14 (~2.96:1, ~1.5M total).
+	 *
+	 * Held LOW permanently rather than toggled per read. The divider's
+	 * bottom leg lands on this pin, so driving it HIGH lifts the AIN7 node
+	 * to VBAT_low + (VBAT - VDD)/2.96 ~ 3.6V at a 4.2V cell — exactly the
+	 * nRF52840 GPIO absolute maximum (VDD + 0.3V), with no margin and over
+	 * it on a hotter pack. Letting it float is worse (node sits at VBAT).
+	 * LOW puts the node at ~1.4V and costs ~2.8uA of divider current, which
+	 * is noise next to BLE + LoRa RX. Matches MeshCore variants/xiao_nrf52.
+	 *
+	 * always-on, not boot-on: boot-on only survives because ZephyrBoard's
+	 * enable/disable calls are balanced and leave the refcount at 1. Any
+	 * unbalanced disable would drop it to 0 and drive the pin HIGH again.
+	 */
 	vbat_enable: vbat-enable {
 		compatible = "regulator-fixed";
 		regulator-name = "vbat-enable";
 		enable-gpios = <&gpio0 14 GPIO_ACTIVE_LOW>;
+		regulator-always-on;
 	};
 
 	zephyr,user {
@@ -136,6 +153,18 @@
 
 &gpio0 {
 	status = "okay";
+
+	/* HICHG — BQ25100 charge-current select. Physically LOW selects 100mA;
+	 * left floating (reset default) the charger stays at 50mA. Matches
+	 * MeshCore variants/xiao_nrf52 initVariant(). Boards that charge the
+	 * pack through an external charger (e.g. a TP4056 carrier) must delete
+	 * this hog or drive it inactive — do not run two chargers at once. */
+	hichg {
+		gpio-hog;
+		gpios = <13 GPIO_ACTIVE_LOW>;
+		output-high;
+		line-name = "hichg";
+	};
 };
 
 &gpio1 {

@@ -15,6 +15,7 @@
  * - D3  = P0.29 (RESET)    - D7 = P1.12 (RXEN)
  *
  * Battery: P0.31/AIN7 with enable on P0.14
+ * Charge current: HICHG P0.13, LOW = 100mA, floating/HIGH = 50mA (BQ25100)
  * LEDs: RED=P0.26/D11, BLUE=P0.06/D12, GREEN=P0.30/D13
  */
 
@@ -61,12 +62,21 @@
 		};
 	};
 
-	/* Battery ADC enable - P0.14 must be LOW to read battery */
+	/*
+	 * Battery ADC enable - P0.14 must be LOW to read battery, and is held
+	 * LOW permanently: driving it HIGH lifts the AIN7 node to ~3.6V at a
+	 * 4.2V cell, the nRF52840 GPIO absolute maximum. See the same node in
+	 * boards/nrf52840/xiao_nrf52840 for the full reasoning.
+	 *
+	 * always-on rather than boot-on: boot-on holds the pin only as long as
+	 * every regulator_enable() is matched by exactly one disable(), leaving
+	 * the refcount at 1. always-on removes that dependency.
+	 */
 	vbat_enable: vbat-enable {
 		compatible = "regulator-fixed";
 		regulator-name = "vbat-enable";
 		enable-gpios = <&gpio0 14 GPIO_ACTIVE_LOW>;
-		regulator-boot-on;
+		regulator-always-on;
 	};
 
 	/* Battery ADC channel */
@@ -109,6 +119,19 @@
 
 &gpio0 {
 	status = "okay";
+
+	/* HICHG — BQ25100 charge-current select on the XIAO module. Physically
+	 * LOW selects 100mA; left floating (reset default) the charger stays at
+	 * 50mA. Matches MeshCore variants/ikoka_nano_nrf initVariant(). Note the
+	 * sibling ikoka_handheld_nrf variant deliberately drives this pin the
+	 * other way because it charges through an external TP4056 — any carrier
+	 * board with its own charger must delete this hog. */
+	hichg {
+		gpio-hog;
+		gpios = <13 GPIO_ACTIVE_LOW>;
+		output-high;
+		line-name = "hichg";
+	};
 };
 
 &gpio1 {
