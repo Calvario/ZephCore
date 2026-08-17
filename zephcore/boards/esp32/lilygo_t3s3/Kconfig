@@ -1,0 +1,5 @@
+# Extra heap for the SSD1306 128x64 CFB (UI pages) + ZephCore UI/BLE
+# allocations on top of the esp32_common.conf platform heap.
+config HEAP_MEM_POOL_ADD_SIZE_BOARD
+	int
+	default 4096

@@ -40,6 +40,7 @@ xiao_esp32c3
 xiao_esp32c6/esp32c6/hpcore
 xiao_esp32s3/esp32s3/procpu
 lilygo_tlora_c6/esp32c6/hpcore
+lilygo_t3s3/esp32s3/procpu
 station_g2/esp32s3/procpu
 heltec_wifi_lora32_v3/esp32s3/procpu
 heltec_wifi_lora32_v4/esp32s3/procpu
