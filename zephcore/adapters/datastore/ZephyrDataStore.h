@@ -75,6 +75,9 @@ private:
 	static constexpr const char *MNT_POINT = "/lfs";
 	static constexpr const char *PREFS_FILE = "/lfs/new_prefs";
 	static constexpr const char *MAIN_ID_FILE = "/lfs/_main.id";
+	/* Where an identity that parses under no known layout is parked before
+	 * a fresh one is generated over the top — see loadMainIdentity(). */
+	static constexpr const char *MAIN_ID_BAD_FILE = "/lfs/_main.id.bad";
 	static constexpr const char *SHUTDOWN_FILE = "/lfs/shutdn";
 
 	/* External QSPI flash (optional) - contacts, channels, blobs */

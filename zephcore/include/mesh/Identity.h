@@ -61,8 +61,46 @@ public:
 	void calcSharedSecret(uint8_t *secret, const uint8_t *other_pub_key) const;
 	static bool validatePrivateKey(const uint8_t prv[64]);
 
+	/* Arduino-compatible *buffer* format: prv || pub (or prv alone when the
+	 * buffer is only PRV_KEY_SIZE).  This is protocol-facing — it is what
+	 * CMD_EXPORT/IMPORT_PRIVATE_KEY and the `prv.key` CLI put on the wire —
+	 * so it must stay byte-identical to upstream.  Do NOT use it for
+	 * on-flash storage; use readFromStorage()/writeToStorage() instead. */
 	bool readFrom(const uint8_t *src, size_t len);
 	size_t writeTo(uint8_t *dest, size_t max_len) const;
+
+	/* On-flash format: pub || prv, matching Arduino MeshCore's IdentityStore
+	 * (LocalIdentity::writeTo(Stream&)).  Kept separate from the buffer
+	 * format above because the two orders differ and conflating them is
+	 * exactly how a node ends up advertising a key it cannot sign for. */
+	size_t writeToStorage(uint8_t *dest, size_t max_len) const;
+
+	/* Tolerant counterpart to writeToStorage(). Accepts every layout either
+	 * project has ever written and tells them apart by deriving the pub from
+	 * the candidate prv — the stored pub is a 256-bit checksum over the prv,
+	 * so a wrong guess cannot match:
+	 *
+	 *   len == 64  ->  prv only          (ZephCore repeater/room <= 1.17.x)
+	 *   len == 96  ->  pub || prv        (Arduino MeshCore, ZephCore >= 1.17.2)
+	 *   len == 96  ->  prv || pub        (ZephCore companion <= 1.17.x)
+	 *
+	 * pub_key is always the derived value, never the stored bytes, so a
+	 * loaded identity is coherent by construction.  Returns false when no
+	 * layout coheres — the pair is unusable and the caller must not run
+	 * with it. */
+	bool readFromStorage(const uint8_t *src, size_t len);
+
+	/* Last resort after readFromStorage() fails: one half of a 96-byte blob
+	 * may still be an intact private key (the other having been clobbered by
+	 * a stale/foreign write).  Tests both candidate halves with
+	 * validatePrivateKey() and adopts one only if exactly one qualifies —
+	 * ambiguity means we cannot tell which half is which, and guessing wrong
+	 * would cement a garbage identity.  Recovers in RAM only: the file is
+	 * left alone so the evidence survives and the warning repeats each boot.
+	 * Note this changes the node's advertised pub_key to the one its private
+	 * key actually owns; contacts must re-add it either way, since the pub it
+	 * was advertising was never usable. */
+	bool recoverFromStorage(const uint8_t *src, size_t len);
 };
 
 } /* namespace mesh */

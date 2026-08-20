@@ -532,16 +532,40 @@ bool ZephyrDataStore::loadMainIdentity(mesh::LocalIdentity &identity)
 {
 	uint8_t buf[PRV_KEY_SIZE + PUB_KEY_SIZE + 32];
 	size_t len = 0;
-	if (!openRead(MAIN_ID_FILE, buf, sizeof(buf), len) || len < PRV_KEY_SIZE + PUB_KEY_SIZE) {
+	if (!openRead(MAIN_ID_FILE, buf, sizeof(buf), len) || len < PRV_KEY_SIZE) {
 		return false;
 	}
-	return identity.readFrom(buf, len);
+	if (identity.readFromStorage(buf, len)) {
+		return true;
+	}
+	if (identity.recoverFromStorage(buf, len)) {
+		/* Deliberately not re-persisted: the file is the only record of what
+		 * went wrong, and re-deriving costs a few ms per boot.  The repeated
+		 * warning is the point — this state should be visible, not papered
+		 * over silently. */
+		LOG_WRN("main identity pub/prv mismatch - advertising the pub its private key owns");
+		return true;
+	}
+
+	/* No layout coheres — the stored pub is not prv·B under any reading, so
+	 * the pair is unusable: adverts would verify nowhere, inbound DMs would
+	 * not decrypt, and CMD_EXPORT_PRIVATE_KEY would hand the app a key that
+	 * contradicts SELF_INFO.  Returning false makes the caller generate a
+	 * fresh identity, so park the bytes first rather than overwriting them —
+	 * the private key may still be extractable by hand. */
+	LOG_ERR("main identity incoherent (%d bytes) - keeping bytes at %s, regenerating",
+		(int)len, MAIN_ID_BAD_FILE);
+	fs_unlink(MAIN_ID_BAD_FILE);
+	if (fs_rename(MAIN_ID_FILE, MAIN_ID_BAD_FILE) < 0) {
+		LOG_ERR("failed to park corrupt identity - regenerating over it");
+	}
+	return false;
 }
 
 bool ZephyrDataStore::saveMainIdentity(const mesh::LocalIdentity &identity)
 {
 	uint8_t buf[PRV_KEY_SIZE + PUB_KEY_SIZE + 32];
-	size_t n = identity.writeTo(buf, sizeof(buf));
+	size_t n = identity.writeToStorage(buf, sizeof(buf));
 	if (n == 0) {
 		return false;
 	}

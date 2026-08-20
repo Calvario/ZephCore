@@ -69,13 +69,28 @@ bool RepeaterDataStore::loadIdentity(mesh::LocalIdentity& id) {
     LOG_DBG("loadIdentity: read %d bytes from %s", (int)n, path);
 
     if (n >= PRV_KEY_SIZE) {
-        if (id.readFrom(buf, n)) {
+        if (id.readFromStorage(buf, n)) {
             LOG_INF("Loaded identity from %s", path);
             return true;
         }
-        LOG_ERR("loadIdentity: readFrom failed");
+        if (id.recoverFromStorage(buf, n)) {
+            /* Not re-persisted on purpose — see ZephyrDataStore::loadMainIdentity. */
+            LOG_WRN("identity pub/prv mismatch - advertising the pub its private key owns");
+            return true;
+        }
+        LOG_ERR("loadIdentity: no coherent key layout in %d bytes", (int)n);
     }
 
+    /* Unusable pair — the caller regenerates, so park the bytes instead of
+     * letting a fresh identity overwrite them (same as the companion). */
+    char bad_path[56];
+    if (snprintf(bad_path, sizeof(bad_path), "%s.bad", path) < (int)sizeof(bad_path)) {
+        fs_unlink(bad_path);
+        if (fs_rename(path, bad_path) == 0) {
+            LOG_ERR("Identity file corrupt - kept at %s", bad_path);
+            return false;
+        }
+    }
     LOG_ERR("Identity file corrupt");
     return false;
 }
@@ -101,8 +116,10 @@ bool RepeaterDataStore::saveIdentity(const mesh::LocalIdentity& id) {
         return false;
     }
 
-    uint8_t buf[PRV_KEY_SIZE];
-    int len = id.writeTo(buf, sizeof(buf));
+    /* pub || prv, same as the companion and Arduino MeshCore.  Older builds
+     * wrote prv alone (64 bytes); readFromStorage() still accepts those. */
+    uint8_t buf[PUB_KEY_SIZE + PRV_KEY_SIZE];
+    int len = id.writeToStorage(buf, sizeof(buf));
     ssize_t n = fs_write(&file, buf, len);
     ret = fs_sync(&file);
     fs_close(&file);

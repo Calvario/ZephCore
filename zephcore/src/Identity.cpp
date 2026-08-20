@@ -199,6 +199,65 @@ size_t LocalIdentity::writeTo(uint8_t *dest, size_t max_len) const
 	return PRV_KEY_SIZE + PUB_KEY_SIZE;
 }
 
+size_t LocalIdentity::writeToStorage(uint8_t *dest, size_t max_len) const
+{
+	if (max_len < PUB_KEY_SIZE + PRV_KEY_SIZE) return 0;
+	memcpy(dest, pub_key, PUB_KEY_SIZE);
+	memcpy(dest + PUB_KEY_SIZE, prv_key, PRV_KEY_SIZE);
+	return PUB_KEY_SIZE + PRV_KEY_SIZE;
+}
+
+bool LocalIdentity::readFromStorage(const uint8_t *src, size_t len)
+{
+	uint8_t derived[PUB_KEY_SIZE];
+
+	/* prv alone — nothing to disagree with, derive and go. */
+	if (len == PRV_KEY_SIZE) {
+		memcpy(prv_key, src, PRV_KEY_SIZE);
+		crypto_eddsa_scalarbase(pub_key, prv_key);
+		return true;
+	}
+	if (len != PUB_KEY_SIZE + PRV_KEY_SIZE) return false;
+
+	/* Canonical: pub || prv. */
+	crypto_eddsa_scalarbase(derived, src + PUB_KEY_SIZE);
+	if (memcmp(derived, src, PUB_KEY_SIZE) == 0) {
+		memcpy(prv_key, src + PUB_KEY_SIZE, PRV_KEY_SIZE);
+		memcpy(pub_key, derived, PUB_KEY_SIZE);
+		return true;
+	}
+
+	/* Legacy ZephCore companion: prv || pub. */
+	crypto_eddsa_scalarbase(derived, src);
+	if (memcmp(derived, src + PRV_KEY_SIZE, PUB_KEY_SIZE) == 0) {
+		memcpy(prv_key, src, PRV_KEY_SIZE);
+		memcpy(pub_key, derived, PUB_KEY_SIZE);
+		return true;
+	}
+
+	return false;
+}
+
+bool LocalIdentity::recoverFromStorage(const uint8_t *src, size_t len)
+{
+	if (len != PUB_KEY_SIZE + PRV_KEY_SIZE) return false;
+
+	/* Where the prv would sit under each layout. */
+	const uint8_t *cand[2] = { src + PUB_KEY_SIZE, src };  /* pub||prv, prv||pub */
+	int found = -1;
+
+	for (int i = 0; i < 2; i++) {
+		if (!validatePrivateKey(cand[i])) continue;
+		if (found >= 0) return false;  /* both plausible — refuse to guess */
+		found = i;
+	}
+	if (found < 0) return false;
+
+	memcpy(prv_key, cand[found], PRV_KEY_SIZE);
+	crypto_eddsa_scalarbase(pub_key, prv_key);
+	return true;
+}
+
 void LocalIdentity::sign(uint8_t *sig, const uint8_t *message, int msg_len) const
 {
 	signExpanded(sig, prv_key, pub_key, message, (size_t)msg_len);
