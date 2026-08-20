@@ -405,10 +405,37 @@ void BaseChatMesh::handleReturnPathRetry(const ContactInfo &contact, const uint8
 	if (rpath) sendDirect(rpath, contact.out_path, contact.out_path_len, 3000);
 }
 
+/* An unconfigured channel slot has an all-zero secret. */
+static bool isChannelSlotEmpty(const ChannelDetails &ch)
+{
+	static const uint8_t zeroes32[32] = { 0 };
+	return memcmp(ch.channel.secret, zeroes32, sizeof(ch.channel.secret)) == 0;
+}
+
 int BaseChatMesh::searchChannelsByHash(const uint8_t *hash, mesh::GroupChannel dest[], int max_matches)
 {
 	int n = 0;
 	for (int i = 0; i < MAX_GROUP_CHANNELS && n < max_matches; i++) {
+		/* Skip unconfigured slots.  The zero-key MAC validates against an
+		 * all-zero secret, so null-key group traffic (a sender with an unset
+		 * PSK) would be decrypted and delivered as if it belonged to that
+		 * slot — every node with a free slot is a null-key sink.
+		 *
+		 * The test is the secret, not name[0] as upstream uses: CMD_SET_CHANNEL
+		 * copies whatever 32-byte name the app supplies, so a configured
+		 * channel may carry an empty name and a cleared slot may keep a stale
+		 * one.  The zero secret is the exact condition that makes a slot
+		 * dangerous.
+		 *
+		 * A memset slot's hash is 0x00, which does not collide with the
+		 * null-key hash — but saveChannels() persists all MAX_GROUP_CHANNELS
+		 * slots and onChannelLoaded() runs setChannel() on each, recomputing
+		 * an empty slot's hash from its zero secret.  After the first save
+		 * plus reboot every free slot carries the live null-key hash.
+		 *
+		 * Skipping them also keeps empty slots from consuming dest[] entries
+		 * and crowding out a real channel whose hash byte happens to match. */
+		if (isChannelSlotEmpty(channels[i])) continue;
 		if (channels[i].channel.hash[0] == hash[0]) {
 			dest[n++] = channels[i].channel;
 		}

@@ -3031,22 +3031,42 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 		return true;
 
 	case CMD_SEND_RAW_DATA:
-		/* Raw data packet: [cmd][path_len][path...][payload...] */
+		/* Raw data packet: [cmd][path_len][path...][payload...]
+		 *
+		 * path_len is the encoded 2-bit (hash_size - 1) + 6-bit hop count, not
+		 * a byte count, so it has to be decoded rather than added to an offset.
+		 * Treating it as a length rejected every path with a hash size above 1:
+		 * hash_size 2 sets bit 6 (path_len 0x42 for two hops read as 66 bytes,
+		 * failing the length check) and hash_size 3 sets bit 7, which used to
+		 * read back as a negative int8_t. */
 		if (len >= 6) {  /* min: cmd + path_len + 4 byte payload */
-			int i = 1;
-			int8_t path_len = (int8_t)data[i++];
-			if (path_len >= 0 && i + path_len + 4 <= (int)len) {
-				const uint8_t *path = &data[i];
-				i += path_len;
-				mesh::Packet *pkt = createRawData(&data[i], len - i);
-				if (pkt) {
-					sendDirect(pkt, path, path_len);
-					sendPacketOk();
+			size_t i = 1;
+			uint8_t path_len = data[i++];
+			if (mesh::Packet::isValidPathLen(path_len)) {
+				uint8_t path[MAX_PATH_SIZE];
+				/* Untrusted phone frame: bound the source at the bytes that
+				 * actually remain, so a crafted path_len cannot over-read. */
+				size_t path_bytes = mesh::Packet::writePath(path, &data[i], len - i, path_len);
+				if (path_bytes == 0 && (path_len & 63) != 0) {
+					/* Zero bytes written with a non-zero hop count (low 6
+					 * bits): the decoded path runs past the end of the frame. */
+					sendPacketError(ERR_ILLEGAL_ARG);
+					return true;
+				}
+				i += path_bytes;
+				if (i + 4 > len) {  /* min payload 4 bytes */
+					sendPacketError(ERR_ILLEGAL_ARG);
 				} else {
-					sendPacketError(ERR_TABLE_FULL);
+					mesh::Packet *pkt = createRawData(&data[i], len - i);
+					if (pkt) {
+						sendDirect(pkt, path, path_len);
+						sendPacketOk();
+					} else {
+						sendPacketError(ERR_TABLE_FULL);
+					}
 				}
 			} else {
-				/* Flood mode not supported (path_len < 0) */
+				/* Flood mode not supported */
 				sendPacketError(ERR_UNSUPPORTED);
 			}
 		} else {
