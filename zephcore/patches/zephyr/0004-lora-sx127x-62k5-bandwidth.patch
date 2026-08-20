@@ -1,3 +1,18 @@
+Subject: [PATCH] lora: sx127x: 62.5 kHz bandwidth
+
+Adds BW_62_KHZ to sx12xx_get_bandwidth_idx(), the Zephyr-enum to
+loramac-node-index mapping.  The SX127x hardware supports sub-125 kHz LoRa
+bandwidths; index 3 is 62.5 kHz (register BW=6).  The radio-side half of this --
+the index-3 register mapping and the LDRO rules that come with a >16 ms symbol
+time -- lives in the loramac-node module and is added by
+patches/modules/loramac-node/0001-sx1276-bw62k5.patch.
+
+Sole owner of drivers/lora/loramac-node/sx12xx_common.c.  A byte-identical copy
+of this hunk was also carried in 0003, which meant this patch failed
+git apply --check on every configure and only landed because the stale-file
+fallback reset the file first.  That copy is gone; see 0003's "Why this is one
+patch".
+
 diff --git a/drivers/lora/loramac-node/sx12xx_common.c b/drivers/lora/loramac-node/sx12xx_common.c
 index 17689720dd2..09982dc2e70 100644
 --- a/drivers/lora/loramac-node/sx12xx_common.c

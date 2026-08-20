@@ -181,6 +181,11 @@ void Dispatcher::maintenanceLoop()
 	 * we only surface offset changes so the app layer can persist them. */
 	_radio->cadMaintenance();
 
+	/* Receiver hygiene: deaf-aware AGC unstick + temperature-drift
+	 * recalibration.  Both sleep the chip, so they live here rather than on
+	 * any packet path. */
+	_radio->agcMaintenance();
+
 	int8_t cad_off = _radio->getCadOffset();
 
 	if (!cad_offset_shadow_valid) {

@@ -96,6 +96,32 @@ void lr11xx_reset_dc_timeout_restarts(const struct device *dev);
 uint32_t lr11xx_get_random(const struct device *dev);
 
 /**
+ * @brief Unstick a jammed AGC: warm sleep, then recalibrate.
+ *
+ * Leaves the driver out of RX — the caller must startReceive() afterwards.
+ *
+ * @param dev LoRa device
+ */
+void lr11xx_reset_agc(const struct device *dev);
+
+/**
+ * @brief Redo the frequency-dependent calibrations (temperature drift path).
+ *
+ * On this part calibrate(0x3F) already includes image rejection, so this is
+ * the same sequence as lr11xx_reset_agc().
+ *
+ * @param dev LoRa device
+ */
+void lr11xx_recalibrate(const struct device *dev);
+
+/**
+ * @brief Junction temperature in whole degrees C, or INT16_MIN if unavailable.
+ *
+ * @param dev LoRa device
+ */
+int16_t lr11xx_get_chip_temp_c(const struct device *dev);
+
+/**
  * @brief Set the adaptive-CAD operating detPeak offset
  *
  * Signed delta applied to the per-SF base cadDetPeak on every LBT CAD.

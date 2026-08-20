@@ -482,7 +482,7 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                      zephcore_buzzer_mode_name(mode));
 #endif
         } else if (memcmp(config, "agc.reset.interval", 18) == 0) {
-            strcpy(reply, "Removed - use rxduty instead");
+            strcpy(reply, "Removed - Automatic AGC reset is on");
         } else if (memcmp(config, "multi.acks", 10) == 0) {
             snprintf(reply, CLI_REPLY_SIZE, "> %u", (uint32_t)_prefs->multi_acks);
         } else if (memcmp(config, "allow.read.only", 15) == 0) {
@@ -742,7 +742,7 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
              * The prefs BYTE is retained (read/written, never acted on) — the
              * on-disk layout is byte-exact and shifting it would corrupt every
              * existing node's prefs. */
-            strcpy(reply, "Removed - use rxduty instead");
+            strcpy(reply, "Removed - Automatic AGC reset is on");
         } else if (memcmp(config, "cad.auto ", 9) == 0) {
             if (memcmp(&config[9], "on", 2) == 0 || memcmp(&config[9], "off", 3) == 0) {
                 _prefs->cad_auto = (config[9] == 'o' && config[10] == 'n') ? 1 : 0;

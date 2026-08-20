@@ -169,6 +169,30 @@ int lr20xx_configure_side_detectors(const struct device *dev,
 uint32_t lr20xx_get_random(const struct device *dev);
 
 /**
+ * @brief Unstick a jammed AGC: warm sleep, then recalibrate (no front end).
+ *
+ * Leaves the driver out of RX — the caller must startReceive() afterwards.
+ *
+ * @param dev LoRa device
+ */
+void lr20xx_reset_agc(const struct device *dev);
+
+/**
+ * @brief As lr20xx_reset_agc(), plus a front-end calibration at the operating
+ *        frequency.  For temperature drift, not for the packet path.
+ *
+ * @param dev LoRa device
+ */
+void lr20xx_recalibrate(const struct device *dev);
+
+/**
+ * @brief Junction temperature in whole degrees C, or INT16_MIN if unavailable.
+ *
+ * @param dev LoRa device
+ */
+int16_t lr20xx_get_chip_temp_c(const struct device *dev);
+
+/**
  * @brief Set the adaptive-CAD operating detPeak offset
  *
  * Signed delta applied to the per-SF base cadDetPeak on every LBT CAD.

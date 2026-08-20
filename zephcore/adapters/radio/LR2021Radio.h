@@ -52,6 +52,9 @@ protected:
 	uint8_t hwCadPeakMin() override;
 	uint8_t hwCadPeakMax() override;
 	uint32_t hwWakeupTimeUs() override;
+	void hwResetAgc() override;
+	void hwRecalibrate() override;
+	int16_t hwGetChipTempC() override;
 };
 
 } /* namespace mesh */

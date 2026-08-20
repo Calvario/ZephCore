@@ -34,6 +34,9 @@ protected:
 	int16_t hwGetCurrentRSSI() override;
 	bool hwIsReceiving() override;
 	void hwSetRxBoost(bool enable) override;
+	void hwResetAgc() override;
+	void hwRecalibrate() override;
+	int16_t hwGetChipTempC() override;
 	uint32_t hwWakeupTimeUs() override;
 	int hwCadProbe(int8_t level) override;
 	void hwCadSetPeakOffset(int8_t offset) override;

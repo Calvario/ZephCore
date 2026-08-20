@@ -121,6 +121,9 @@ public:
 	void setCadParams(bool auto_enabled, int8_t offset,
 			  uint16_t probe_interval_s, uint8_t busycap_pct) override;
 	void cadMaintenance() override;
+	/** Deaf-aware AGC unstick + temperature-drift recalibration.
+	 *  Called from Dispatcher::maintenanceLoop(); never on the packet path. */
+	void agcMaintenance() override;
 	uint32_t msUntilNextMaintenance() override;
 	int8_t getCadOffset() const override { return _cad_offset; }
 
@@ -174,6 +177,26 @@ protected:
 	 *  into the floor with nothing to climb back out on. */
 	virtual uint8_t hwCadPeakMin() { return 0; }
 	virtual uint8_t hwCadPeakMax() { return 0; }
+
+	/* ── Receiver hygiene — see LoRaRadioBase::agcMaintenance() ────── */
+
+	/** Unstick a jammed AGC: warm sleep to drop the analog front end, then
+	 *  recalibrate on the way back up.  Semtech's stated remedy; the
+	 *  datasheets do not describe it, so do not "simplify" it away on
+	 *  datasheet grounds alone.  Must leave the driver out of RX so the
+	 *  caller's startReceive() performs a real re-entry rather than hitting
+	 *  an idempotent fast path.  Default: unsupported, no-op. */
+	virtual void hwResetAgc() {}
+
+	/** Redo the frequency-dependent calibrations (image / front end, and
+	 *  PLL+AAF where the part separates them) at the current operating
+	 *  frequency.  Called on temperature drift, never on the packet path.
+	 *  Same RX-state contract as hwResetAgc(). Default: unsupported. */
+	virtual void hwRecalibrate() {}
+
+	/** Chip junction temperature in whole degrees C, or INT16_MIN when the
+	 *  backend cannot measure it (which disables drift recalibration). */
+	virtual int16_t hwGetChipTempC() { return INT16_MIN; }
 
 	/** Radio deaf time per duty-cycle wake transition (context restore +
 	 *  PLL lock + TCXO startup where fitted), in microseconds.  Counts
@@ -298,7 +321,15 @@ protected:
 	 * changes once at INF instead of on every RX restart.  0/0 = never
 	 * computed; UINT32_MAX rx = continuous-RX fallback active. */
 	uint32_t _dc_last_rx_us;
+
 	uint32_t _dc_last_sleep_us;
+
+	/* agcMaintenance() bookkeeping.  RX activity is inferred by sampling the
+	 * existing packet counters rather than timestamping in the RX callback,
+	 * so nothing is added to the ISR path. */
+	uint32_t _agc_rx_count_shadow;
+	uint32_t _agc_last_activity_ms;
+	int16_t  _agc_last_cal_temp_c;
 
 	/* Config cache — skip redundant hwConfigure() */
 	struct lora_modem_config _last_cfg;

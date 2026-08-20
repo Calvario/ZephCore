@@ -20,6 +20,7 @@
 12. [BLE Protocol Reference](#12-ble-protocol-reference)
 13. [Data Storage](#13-data-storage)
 14. [Key Call Flows](#14-key-call-flows)
+15. [Watchdogs and Recovery Mechanisms](#15-watchdogs-and-recovery-mechanisms)
 
 ---
 
@@ -477,6 +478,7 @@ The custom `lr11xx_lora.c` driver handles several LR1110 firmware bugs:
 - **RX buffer drift**: Buffer base shifts 4 bytes per packet → `clear_rxbuffer()` after every RX
 - **Header error**: Can shift buffer pointer → standby before RX restart
 - **DIO1 stuck HIGH**: 5-cycle detection → full hardware reset + recovery
+- **BUSY-high wedge**: a command racing the autonomous `SetRxDutyCycle` sleep phase can leave the chip BUSY-high with DIO1 low. No IRQ ever fires, so the event-driven driver never re-arms and the node goes permanently deaf. A wedge-recovery watchdog on its own work queue (`lr11xx_wedge`, `K_PRIO_COOP(7)`) checks every 3 s: after 12 s of DIO1 silence it polls the BUSY GPIO continuously for 250 ms, and a dwell with no low edge means a genuine wedge → hardware reset + RX restart. False-positive free by construction — a healthy chip, continuous or duty-cycled, always drops BUSY low within one cycle. Reads the GPIO only (no SPI), so it cannot itself disturb the chip or race the autonomous DC state machine.
 - **RX duty cycle**: wired via `SetRxDutyCycle` MODE_RX, sized by the shared adapter math (same as SX126x). The earlier "broken, 23-40% loss" verdict was a window-sizing bug (over-sleep + no header budget), not a chip defect — default-off, HW-verify before production use.
 
 ### 5.5 SX127x and LR2021 Paths
@@ -926,15 +928,23 @@ Applied automatically at CMake configure time; a failed patch aborts the configu
 
 | Patch | Risk | Purpose |
 |-------|------|---------|
-| 0001-lora-lr11xx-build | LOW | Integrates LR11xx driver into Zephyr LoRa build |
-| 0002-lora-lr20xx-build | LOW | Integrates LR20xx driver into Zephyr LoRa build |
-| 0003-lora-sx126x-native | **HIGH** | DIO1 work queue, duty cycle, RX-busy gating, extension API, errata workarounds |
+| 0001-lora-lr11xx-lr20xx-build | LOW | Registers the LR11xx and LR20xx drivers in the Zephyr LoRa build |
+| 0003-lora-sx126x-native | **HIGH** | DIO1 work queue, duty cycle, CAD, RX-busy gating, band RSSI/AGC calibration, PA/OCP tuning, extension API |
 | 0004-lora-sx127x-62k5-bandwidth | LOW | Adds 62.5 kHz bandwidth to the loramac-node backend |
-| 0005-gnss-air530z-easy | MEDIUM | EASY ephemeris + removes PM (prevents deadlocks) |
+| 0005-gnss-config-and-version-query | MEDIUM | Air530Z nav-rate config + `$PCAS06` version query; NMEA generic dump |
 | 0006-blobs-py | LOW | Fix `west blobs fetch` KeyError |
 | 0007-spi-gpio-native-linux | LOW | Wires native-Linux SPI/GPIO drivers into the Zephyr build |
 | 0008-flash-sim-per-node-file | LOW | Flash simulator defaults to per-node settings file (native Linux) |
 | 0009-display-ssd16xx-fill-ram-white | LOW | E-paper full-refresh-to-white anti-ghosting helper |
+| 0010-uarte-pm-suspend-bounded-rxto-wait | MEDIUM | Bounds the nRF UARTE STOPRX/RXTO spin on PM suspend; unbounded upstream, wedges the mesh thread |
+
+**One patch per file.** No upstream file is touched by more than one patch, so
+apply order is irrelevant and no patch can be anchored inside another's added
+lines. Consolidated 2026-08-20 (15 → 9): `0002` folded into `0001`, and
+`0011`–`0015` folded into `0003`, each keeping its rationale as a `== section ==`
+in that patch's preamble. `0002` is a deliberate numbering gap. Add a new
+sx126x fix by regenerating `0003`, never by stacking an `0016` on it — see
+`WEST_UPDATE.md`.
 
 New drivers in `patches/zephyr-new/` (LR11xx, LR20xx, native-Linux SPI/GPIO, DTS bindings) are copied — not patched — into the Zephyr tree at configure time.
 
@@ -1173,3 +1183,46 @@ main event loop (every 5s) → Dispatcher::maintenanceLoop()
     → EMA: floor += round((sample - floor) / 8)
     → clamp [-120, -50] dBm
 ```
+
+---
+
+## 15. Watchdogs and Recovery Mechanisms
+
+**There is no hardware watchdog.** No `CONFIG_WATCHDOG`, no `task_wdt`, no `wdt`
+node enabled on any board — the `wdt` nodes visible in board `.dts` files are
+inherited SoC definitions, and the `RTCWDT` references in the TTGO board configs
+concern the ESP32 ROM bootloader's own watchdog, not something ZephCore arms.
+The only consumer of the concept is the boot breadcrumb in `main_companion.cpp`,
+which reads `RESET_WATCHDOG` out of `hwinfo_get_reset_cause()` and reports it in
+the "Restarted:" v-contact message (see [6.2.1](#621-v-contact-loopback-admin-contact)).
+
+Everything below is software: bounded stall detection in the layer that owns the
+state machine. Each entry names what it recovers, because several are
+deliberately diagnostic-only and recover nothing.
+
+### 15.1 Named watchdogs
+
+| Watchdog | Location | Period | Trigger → action |
+|----------|----------|--------|------------------|
+| SX126x parked-RX | `patches/zephyr/0003-lora-sx126x-native.patch` (`sx126x_dc_watchdog_handler`) | `2×(preamble+8)` symbols, floor 250 ms | Duty-cycle only. Two consecutive samples showing the chip parked in full RX after a false preamble detect → re-arm the DC cycle. Two-strike so a sighting can never fall inside one real packet's preamble→header gap and abort a live reception. Counted by `get dc.restarts`. |
+| LR11xx wedge-recovery | `lr11xx_lora.c` (`lr11xx_wedge_watchdog_handler`, own `lr11xx_wedge` queue) | 3 s | DIO1 silent >12 s **and** BUSY continuously high for a 250 ms confirm poll → hardware reset + RX restart. See [5.4](#54-lr1110-driver-errata-workarounds). |
+| Radio stall | `Dispatcher::maintenanceLoop()` | `RADIO_STALL_THRESHOLD_MS` (8 s) | Radio neither in RX nor mid-TX for the whole window → latch `ERR_EVENT_STARTRX_TIMEOUT`. **Diagnostic only.** The bit is surfaced everywhere: repeater/room-server `stats`, binary telemetry, MQTT uplink, and the companion's BLE device-status response. |
+| Contact-dump stall | `main_companion.cpp` housekeeping | housekeeping tick | Dump active and the iterator cursor unmoved across a whole tick → re-post `MESH_EVENT_CONTACT_ITER`. The dump is pumped solely by the BLE/USB tx-idle callback, so one lost kick would strand it silently. |
+| BLE advertising | `main_companion.cpp` housekeeping | housekeeping tick | Enabled, not connected, not advertising → `zephcore_ble_set_enabled(true)`. Covers transient `bt_le_adv_start` failure, which would otherwise leave the node undiscoverable until reboot. |
+| BLE TX timeout | `ZephyrBLE.cpp` (`BLE_TX_TIMEOUT_MS`) | 2 s | `ble_tx_in_progress` set with no completion callback → clear the flag and proceed to the next TX. Sits 3 s inside the 5 s supervision timeout. |
+| USB partial-input | `ZephyrCompanionUSB.cpp` (`USB_FRAME_TIMEOUT_MS`) | byte-driven | Mid-frame or mid-text-line too long → reset parser to `USB_RX_IDLE`. **Not a timer** — it only runs when bytes arrive, so it never wakes a sleeping node. |
+| Buzzer safety | `helpers/ui/buzzer.c` (`BUZZER_TONE_MAX_MS`) | 2 s | Note handler stalls → silence PWM + amp off. The PWM block is autonomous and would otherwise drive the pin forever after a crash or work-queue stall. |
+
+### 15.2 Unnamed, same job
+
+Timeouts and deadlines that are watchdogs in everything but name:
+
+| Mechanism | Location | Bounds |
+|-----------|----------|--------|
+| RX-latch payload deadline | all three custom radio paths: SX126x `patch 0013`, `lr11xx_lora.c`, `lr20xx_lora.c` (`header_seen_at_ms` + `*_max_payload_ms()`) | A `HEADER_VALID` whose packet never completes would pin the TX gate closed and silently mute the node — continuous RX has no symbol timer. Released at 255-byte airtime +25% +100 ms. See [5.2.1](#521-rx-busy-gate-tx-during-rx-prevention). |
+| Stuck-DIO1 counter | `lr11xx_lora.c` and `lr20xx_lora.c` | 5 empty DIO1 cycles → hardware reset. Counting rather than timing; on the LR11xx it complements the wedge watchdog rather than replacing it. |
+| CAD timeout | `Dispatcher::checkSend()` | 4 s (~20 retry attempts) → `ERR_EVENT_CAD_TIMEOUT` + `recoverRxState()`, rather than falling through to TX. See [5.2.2](#522-cad-timeout-recovery). |
+| Chip-side TX timeout | SX126x `SetTx` deadline (`patch 0014`, airtime +25% +500 ms, floored at 10 s, clamped 262143 ms); LR2021 `TIMEOUT` IRQ handler | The chip stops the transmission when this fires, so a fixed value is a truncation, not a safeguard — at SF12/BW62.5 the old flat 10 s cut every packet from 76 bytes up. |
+| Serial partial-frame resync | `SerialCompanionTransport.c` (`FRAME_PARTIAL_TIMEOUT_MS`) | 2 s. Parser-level only — deliberately **not** a session or idle timeout; an idle-but-connected companion sits in `RX_IDLE` indefinitely. |
+| TCP send timeout | `LinuxTCPTransport.c` | Native sim only. A peer that can't accept a frame in the window is wedged → close it, rather than hang the whole queue. |
+| Bounded RXTO wait | `patches/zephyr/0010-uarte-pm-suspend-bounded-rxto-wait.patch` | `uarte_pm_suspend()` busy-waits for RXTO with no timeout upstream. Landing in the STOPRX race with bytes in flight spins forever on the main thread and wedges the entire mesh (observed: RAK3401 1W repeater on 1.16.6, CLI answering only `-> busy`). Backstop for the GPS UART PM path in [7.3](#73-gps-adaptersgps). |

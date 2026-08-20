@@ -1427,6 +1427,102 @@ uint32_t lr11xx_get_random(const struct device *dev)
 	return random;
 }
 
+/* ── Extension API: receiver hygiene ─────────────────────────────────
+ *
+ * Warm sleep to drop the analog front end, then recalibrate on the way back up
+ * — Semtech's stated remedy for a jammed AGC, and the same sequence as Arduino
+ * MeshCore's lr11x0ResetAGC() (helpers/radiolib/LR11x0Reset.h).  Driven from
+ * LoRaRadioBase::agcMaintenance() on RX silence, never on the packet path.
+ *
+ * Unlike the LR2021, calibrate(0x3F) here DOES include image rejection and
+ * reverts it to the 902-928 MHz default, so the image cal must be re-issued —
+ * exactly what the Arduino helper does.  That makes recal_fe moot on this part:
+ * both entry points pay it because the calibration forces it.
+ */
+static void lr11xx_agc_reset_locked(struct lr11xx_data *data)
+{
+	void *ctx = &data->hal_ctx;
+	lr11xx_system_sleep_cfg_t sleep_cfg = {
+		.is_warm_start = true,
+		.is_rtc_timeout = false,
+	};
+
+	lr11xx_system_set_sleep(ctx, sleep_cfg, 0);
+	k_sleep(K_USEC(500));
+	data->hal_ctx.radio_is_sleeping = true;
+
+	lr11xx_system_set_standby(ctx, LR11XX_SYSTEM_STANDBY_CFG_RC);
+	lr11xx_system_calibrate(ctx, 0x3F);
+
+	if (data->configured) {
+		uint16_t freq_mhz = data->modem_cfg.frequency / 1000000;
+
+		lr11xx_system_calibrate_image_in_mhz(ctx, freq_mhz - 4,
+						     freq_mhz + 4);
+	}
+
+	if (data->rx_boost_enabled) {
+		lr11xx_radio_cfg_rx_boosted(ctx, true);
+		data->rx_boost_applied = true;
+	}
+
+	/* Contract with agcMaintenance(): leave the driver out of RX so the
+	 * caller's startReceive() performs a real re-entry. */
+	data->in_rx_mode = false;
+	lr11xx_reset_rx_busy_signals(data);
+}
+
+void lr11xx_reset_agc(const struct device *dev)
+{
+	struct lr11xx_data *data = dev->data;
+
+	if (!data->configured) {
+		return;
+	}
+	k_mutex_lock(&data->spi_mutex, K_FOREVER);
+	lr11xx_agc_reset_locked(data);
+	k_mutex_unlock(&data->spi_mutex);
+}
+
+void lr11xx_recalibrate(const struct device *dev)
+{
+	/* Same sequence: calibrate(0x3F) already carries the image cal on this
+	 * part, so there is nothing extra for the drift path to do. */
+	lr11xx_reset_agc(dev);
+}
+
+/* Junction temperature in whole degrees C, INT16_MIN if unavailable.
+ * UM: T = (Temp(10:0)/2047 * Vana - Vbe25) * 1000/VbeSlope + 25, with typicals
+ * Vana 1.35 V, Vbe25 0.7295 V, VbeSlope -1.7 mV/C.  Runs once per maintenance
+ * pass, so the float is free. */
+int16_t lr11xx_get_chip_temp_c(const struct device *dev)
+{
+	struct lr11xx_data *data = dev->data;
+	uint16_t raw = 0;
+	lr11xx_status_t rc;
+
+	if (!data->configured) {
+		return INT16_MIN;
+	}
+	if (k_mutex_lock(&data->spi_mutex, K_NO_WAIT) != 0) {
+		return INT16_MIN;
+	}
+	rc = lr11xx_system_get_temp(&data->hal_ctx, &raw);
+	k_mutex_unlock(&data->spi_mutex);
+
+	if (rc != LR11XX_STATUS_OK) {
+		return INT16_MIN;
+	}
+
+	float v = ((float)(raw & 0x07FF) / 2047.0f) * 1.35f - 0.7295f;
+	float t = v * (1000.0f / -1.7f) + 25.0f;
+
+	if (t < -128.0f || t > 127.0f) {
+		return INT16_MIN;   /* implausible — treat as unavailable */
+	}
+	return (int16_t)t;
+}
+
 /* ── Deferred hardware init (runs on first lora_config call) ────────── */
 
 /* ── Driver API: CAD ────────────────────────────────────────────────── */

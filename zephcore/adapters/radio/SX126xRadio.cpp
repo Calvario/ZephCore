@@ -75,6 +75,27 @@ bool SX126xRadio::hwIsReceiving()
 	return sx126x_is_receiving(_dev);
 }
 
+void SX126xRadio::hwResetAgc()
+{
+	/* Leaves the chip in STANDBY and the driver state at IDLE, so the
+	 * caller's startReceive() performs a real re-entry. */
+	sx126x_reset_agc(_dev);
+}
+
+void SX126xRadio::hwRecalibrate()
+{
+	/* Calibrate(ALL) on this part already includes image rejection and
+	 * sx126x_reset_agc() re-issues CalibrateImage for the operating
+	 * frequency, so the drift path needs nothing extra. */
+	sx126x_reset_agc(_dev);
+}
+
+/* No hwGetChipTempC(): the SX126x exposes no junction-temperature readout —
+ * no command in the datasheet, and RadioLib has no getTemperature() for it
+ * either.  Drift recalibration is therefore inactive on this family, which
+ * costs little: unlike the LR parts, its datasheet gives no temperature
+ * threshold for image calibration in the first place. */
+
 void SX126xRadio::hwSetRxBoost(bool enable)
 {
 	sx126x_set_rx_boost(_dev, enable);

@@ -78,6 +78,21 @@ bool LR1110Radio::hwIsReceiving()
 	return lr11xx_is_receiving(_dev);
 }
 
+void LR1110Radio::hwResetAgc()
+{
+	lr11xx_reset_agc(_dev);
+}
+
+void LR1110Radio::hwRecalibrate()
+{
+	lr11xx_recalibrate(_dev);
+}
+
+int16_t LR1110Radio::hwGetChipTempC()
+{
+	return lr11xx_get_chip_temp_c(_dev);
+}
+
 void LR1110Radio::hwSetRxBoost(bool enable)
 {
 	lr11xx_set_rx_boost(_dev, enable);

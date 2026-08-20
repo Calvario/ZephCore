@@ -167,6 +167,23 @@ uint8_t LR2021Radio::hwCadPeakMax()
 	return lr20xx_cad_peak_max();
 }
 
+void LR2021Radio::hwResetAgc()
+{
+	lr20xx_reset_agc(_dev);
+}
+
+void LR2021Radio::hwRecalibrate()
+{
+	/* Front-end calibration included: this is the temperature-drift path, and
+	 * image/FE cal is the part a temperature swing actually invalidates. */
+	lr20xx_recalibrate(_dev);
+}
+
+int16_t LR2021Radio::hwGetChipTempC()
+{
+	return lr20xx_get_chip_temp_c(_dev);
+}
+
 uint32_t LR2021Radio::hwWakeupTimeUs()
 {
 	/* Per-device, because the TCXO term dominates and is board-specific:

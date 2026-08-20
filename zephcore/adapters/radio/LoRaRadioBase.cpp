@@ -60,6 +60,8 @@ LoRaRadioBase::LoRaRadioBase(const struct device *lora_dev, MainBoard &board,
 	  _rx_duty_cycle_enabled(IS_ENABLED(CONFIG_ZEPHCORE_LORA_RX_DUTY_CYCLE)),
 	  _rx_boost_enabled(true),
 	  _dc_last_rx_us(0), _dc_last_sleep_us(0),
+	  _agc_rx_count_shadow(0), _agc_last_activity_ms(0),
+	  _agc_last_cal_temp_c(INT16_MIN),
 	  _config_cached(false),
 	  _has_radio_override(false),
 	  _override_freq(0), _override_bw(0),
@@ -1123,6 +1125,102 @@ bool LoRaRadioBase::isReceiving()
 		return true;
 	}
 	return isChannelActive();
+}
+
+/* ── Receiver hygiene ─────────────────────────────────────────────────
+ *
+ * Two independent faults, two independent triggers, neither on the packet path.
+ *
+ * 1. STUCK AGC.  Semtech's remedy is a warm sleep plus recalibration; it is not
+ *    in the datasheets, so it is not up for removal on datasheet reasoning.
+ *    What IS a design choice is when to fire it, and the honest answer is that
+ *    a periodic reset gets it backwards: a timer fires most often on a busy
+ *    channel, which is exactly where a received packet has just PROVED the AGC
+ *    is working, and it fires no more often on a silent one, where a
+ *    desensitised receiver is invisible and nothing else will reveal it.
+ *
+ *    So trigger on silence instead.  If nothing has been heard for
+ *    AGC_IDLE_RESET_MS the receiver is either genuinely idle — in which case
+ *    the reset costs nothing, there is no traffic to miss — or it is deaf, in
+ *    which case this is the only thing that will recover it.  Self-targeting in
+ *    both directions: a busy node essentially never resets, and the resets a
+ *    quiet node does perform are free.  Arduino MeshCore's periodic
+ *    `agc_reset_interval` addressed the same fault and shipped defaulted to 0
+ *    (off), which is a fair summary of how well a plain timer serves it.
+ *
+ *    Deliberately NOT reset here: the noise floor.  The previous periodic
+ *    implementation (removed in fe6e585) zeroed it on every fire, forcing a
+ *    fresh seed and a full EMA warmup each time — that, not the AGC work, is
+ *    what made it a net loss.  Arduino zeroes it too; we do not.
+ *
+ * 2. CALIBRATION DRIFT.  Image/front-end and PLL/AAF calibration are valid for
+ *    a temperature range, not forever: "Image calibration is necessary if there
+ *    is a frequency change > 10MHz, or a temperature change > 10 C", and the
+ *    LR2021 additionally advises redoing PLL and AAF beyond +/-20 C.  A node
+ *    that boots on a hot afternoon and runs into a cold night crosses both.
+ *    Nothing does this automatically: the LR2021's temperature-compensation
+ *    block (DS 6.12) only corrects crystal drift from TX self-heating, and it
+ *    refuses to run at all when a TCXO is fitted.
+ *
+ *    AGC_RECAL_TEMP_DELTA_C is deliberately tighter than either datasheet
+ *    figure — cheap insurance, and the reading is a junction temperature that
+ *    lags ambient. */
+#define AGC_IDLE_RESET_MS        60000U
+#define AGC_RECAL_TEMP_DELTA_C   5
+
+void LoRaRadioBase::agcMaintenance()
+{
+	/* Never mid-transmit: both operations sleep the chip. */
+	if (atomic_get(&_tx_active)) {
+		return;
+	}
+
+	uint32_t now = (uint32_t)k_uptime_get_32();
+
+	/* Any demodulation activity counts as proof of life, errored frames
+	 * included — a CRC failure still means RF reached the demodulator, which
+	 * is precisely what a stuck AGC would prevent.  Counting only good
+	 * packets would fire resets on a node that is merely out of range. */
+	uint32_t rx_total = (uint32_t)atomic_get(&_packets_recv) +
+			    (uint32_t)atomic_get(&_packets_recv_errors);
+
+	if (rx_total != _agc_rx_count_shadow || _agc_last_activity_ms == 0) {
+		_agc_rx_count_shadow = rx_total;
+		_agc_last_activity_ms = now ? now : 1;
+	} else if ((now - _agc_last_activity_ms) >= AGC_IDLE_RESET_MS) {
+		LOG_INF("agc: %u ms without RX activity — resetting AGC",
+			(unsigned)(now - _agc_last_activity_ms));
+		hwResetAgc();
+		/* hwResetAgc() leaves the chip out of RX by contract, so this is
+		 * a genuine re-entry and re-arms the duty cycle if one is set. */
+		startReceive();
+		_agc_last_activity_ms = now ? now : 1;
+	}
+
+	/* Temperature drift.  Sampled every pass because the read is one cheap
+	 * command; the expensive recalibration is gated on the delta. */
+	int16_t temp_c = hwGetChipTempC();
+
+	if (temp_c == INT16_MIN) {
+		return;   /* backend cannot measure — drift handling disabled */
+	}
+	if (_agc_last_cal_temp_c == INT16_MIN) {
+		_agc_last_cal_temp_c = temp_c;   /* first reading is the baseline */
+		return;
+	}
+
+	int delta = (int)temp_c - (int)_agc_last_cal_temp_c;
+
+	if (delta < 0) {
+		delta = -delta;
+	}
+	if (delta >= AGC_RECAL_TEMP_DELTA_C) {
+		LOG_INF("agc: chip temp moved %d C (%d -> %d) — recalibrating",
+			delta, (int)_agc_last_cal_temp_c, (int)temp_c);
+		hwRecalibrate();
+		startReceive();
+		_agc_last_cal_temp_c = temp_c;
+	}
 }
 
 void LoRaRadioBase::recoverRxState()

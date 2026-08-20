@@ -1,0 +1,53 @@
+Subject: [PATCH] lora: register the lr11xx and lr20xx drivers
+
+Hooks the two out-of-tree LoRa drivers into the drivers/lora build --
+add_subdirectory_ifdef() in CMakeLists.txt, rsource in Kconfig.  The drivers
+themselves have no upstream counterpart and are copied into the tree from
+patches/zephyr-new/drivers/lora/{lr11xx,lr20xx}/, so there is nothing to patch
+on that side.
+
+Sole owner of drivers/lora/CMakeLists.txt and drivers/lora/Kconfig.  Was 0001
+(lr11xx) plus 0002 (lr20xx).  0003 carried both hunks as well, having been
+regenerated at some point as a diff of the whole drivers/lora tree -- so on
+every configure 0003 failed git apply --check, the stale-file fallback in
+zephcore_apply_patches() reset these two files, and 0003 re-supplied the lines
+0001 and 0002 had just added.  Now that each file has exactly one owner, both
+patches apply first time.
+
+diff --git a/drivers/lora/CMakeLists.txt b/drivers/lora/CMakeLists.txt
+index 9cd035fcf2b..18d04ec099a 100644
+--- a/drivers/lora/CMakeLists.txt
++++ b/drivers/lora/CMakeLists.txt
+@@ -1,7 +1,11 @@
+ # SPDX-License-Identifier: Apache-2.0
++# ZephCore patch: adds lr11xx driver subdirectory.
+ 
+ zephyr_sources_ifdef(CONFIG_LORA_SHELL shell.c)
+ 
++add_subdirectory_ifdef(CONFIG_LORA_LR11XX lr11xx)
++add_subdirectory_ifdef(CONFIG_LORA_LR20XX lr20xx)
++
+ # zephyr-keep-sorted-start
+ add_subdirectory_ifdef(CONFIG_LORA_MODULE_BACKEND_LORAMAC_NODE loramac-node)
+ add_subdirectory_ifdef(CONFIG_LORA_MODULE_BACKEND_LORA_BASICS_MODEM lora-basics-modem)
+diff --git a/drivers/lora/Kconfig b/drivers/lora/Kconfig
+index 657bdb9ce28..f8513b37044 100644
+--- a/drivers/lora/Kconfig
++++ b/drivers/lora/Kconfig
+@@ -5,6 +5,7 @@
+ #
+ 
+ # Top-level configuration file for LORA drivers.
++# ZephCore patch: adds lr11xx driver Kconfig.
+ 
+ menuconfig LORA
+ 	bool "LoRa drivers"
+@@ -60,6 +61,8 @@ config LORA_INIT_PRIORITY
+ 
+ rsource "Kconfig.sx12xx"
+ rsource "Kconfig.rylrxxx"
++rsource "lr11xx/Kconfig"
++rsource "lr20xx/Kconfig"
+ rsource "lora-basics-modem/Kconfig"
+ rsource "native/Kconfig"
+ 

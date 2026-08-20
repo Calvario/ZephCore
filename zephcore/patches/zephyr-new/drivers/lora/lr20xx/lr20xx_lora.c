@@ -95,6 +95,7 @@ struct lr20xx_data {
 	bool rx_boost_enabled;
 	bool rx_boost_applied;
 
+
 	/* Duty-cycle re-arms triggered by a timeout, i.e. the false-preamble
 	 * case: the preamble-restarted rx_max_time + cycle_time window expired
 	 * with no packet, so the chip left the loop and the host put it back.
@@ -963,6 +964,134 @@ static void lr20xx_apply_modem_config(struct lr20xx_data *data,
  * lr20xx_lora_recv_duty_cycle().  Returns true on success, false if no
  * timing has been provided yet (falls back to continuous RX).
  */
+/* Unstick the AGC, per Semtech's stated remedy: warm sleep to power the analog
+ * front end down, then recalibrate on the way back up.  Same shape as Arduino
+ * MeshCore's sx126xResetAGC() / lr11x0ResetAGC() (helpers/radiolib/SX126xReset.h,
+ * LR11x0Reset.h) and
+ * as our own SX126x duty-cycle re-arm.  Caller must hold spi_mutex.
+ *
+ * Two LR2021-specific differences from those ports, both saving real time:
+ *
+ * 1. NO CalibFE afterwards.  On the SX126x and LR11x0, Calibrate(ALL) includes
+ *    image calibration and resets it to the 902-928 MHz default, which is why
+ *    both Arduino helpers re-issue calibrateImage()/calibrateImageRejection().
+ *    On the LR2021 the front end is a separate command: DS Table 6-28 lists the
+ *    Calibrate blocks as LF_RC, HF_RC, PLL, AAF, MU and PA_OFF — no image, no
+ *    front end.  CalibFE (§6.4.2) owns those and its values survive retention
+ *    sleep, so re-running it here would cost ~9 ms to reproduce what is already
+ *    on the chip.  The old (dead, never-called) lr20xx_reset_agc() ran it
+ *    unconditionally, which is most of why it looked expensive.
+ *
+ * 2. No fixed post-Calibrate delay.  DS §6.4.1: "Upon completion of the
+ *    calibration, the chip automatically enters Standby RC mode" — BUSY
+ *    deasserts and the next command's check_device_ready() waits on it, so the
+ *    SX126x's 5 ms busy-wait has no counterpart here.
+ *
+ * Budget: 1 ms for the HAL's post-sleep-opcode wait, 1 ms for the warm start
+ * (DS Table 3-23 TSPDRCW, "retrieve calibration from retained registers"), plus
+ * the Calibrate itself, which the datasheet does not put a number on. */
+static void lr20xx_agc_reset_locked(struct lr20xx_data *data, bool recal_fe)
+{
+	void *ctx = &data->hal_ctx;
+	lr20xx_system_sleep_cfg_t sleep_cfg = {
+		.is_clk_32k_enabled       = false,
+		/* Retention: keeps the modem config and the PRAM image (DS
+		 * §22.3).  A cold sleep here would drop both. */
+		.is_ram_retention_enabled = true,
+	};
+
+	lr20xx_system_set_sleep_mode(ctx, &sleep_cfg, 0);
+	lr20xx_system_set_standby_mode(ctx, LR20XX_SYSTEM_STANDBY_MODE_RC);
+
+	/* 0x6F = every block in Table 6-28.  Legal only outside Rx/Tx, which the
+	 * standby above guarantees. */
+	lr20xx_system_calibrate(ctx, 0x6F);
+
+	/* Re-assert the Rx path after calibrating AAF and MU, both of which are
+	 * receive-chain blocks.  Retention preserves the setting across the sleep
+	 * (see the note in lr20xx_apply_rx_duty_cycle), but nothing documents what
+	 * Calibrate leaves behind — and both Arduino helpers re-apply boost here
+	 * for the same reason.  One command. */
+	if (data->rx_boost_enabled) {
+		lr20xx_radio_common_set_rx_path(
+			ctx, LR20XX_RADIO_COMMON_RX_PATH_LF,
+			LR20XX_RADIO_COMMON_RX_PATH_BOOST_MODE_7);
+		data->rx_boost_applied = true;
+	}
+
+	/* Front end only on the drift path.  Image/FE calibration is valid for a
+	 * temperature range rather than forever (DS: "necessary if there is a
+	 * frequency change > 10MHz, or a temperature change > 10 C"), so it is
+	 * exactly what a temperature swing invalidates — and exactly what a stuck
+	 * AGC does not, which is why the AGC path skips its ~9 ms. */
+	if (recal_fe && data->configured) {
+		lr20xx_calibrate_front_end(ctx, data->modem_cfg.frequency);
+	}
+
+	/* Contract with LoRaRadioBase::agcMaintenance(): leave the driver OUT of
+	 * RX.  The chip is parked in STDBY_RC here, and the caller's
+	 * startReceive() must perform a real re-entry — without this the
+	 * idempotent fast paths in recv_async / recv_duty_cycle would see
+	 * in_rx_mode still set, refresh the callback and return, leaving the
+	 * receiver switched off. */
+	data->in_rx_mode = false;
+	lr20xx_reset_rx_busy_signals(data);
+}
+
+/* ── Extension API: receiver hygiene ─────────────────────────────────── */
+
+void lr20xx_reset_agc(const struct device *dev)
+{
+	struct lr20xx_data *data = dev->data;
+
+	if (!data->configured) {
+		return;
+	}
+	k_mutex_lock(&data->spi_mutex, K_FOREVER);
+	lr20xx_agc_reset_locked(data, false);
+	k_mutex_unlock(&data->spi_mutex);
+}
+
+void lr20xx_recalibrate(const struct device *dev)
+{
+	struct lr20xx_data *data = dev->data;
+
+	if (!data->configured) {
+		return;
+	}
+	k_mutex_lock(&data->spi_mutex, K_FOREVER);
+	lr20xx_agc_reset_locked(data, true);
+	k_mutex_unlock(&data->spi_mutex);
+}
+
+/* Junction temperature in whole degrees C, INT16_MIN if unavailable.
+ * VALUE_FORMAT_UNIT returns 13.5sb: integer part in the high byte, fraction in
+ * the low.  13-bit resolution costs nothing here — this runs once per
+ * maintenance tick, never on the packet path. */
+int16_t lr20xx_get_chip_temp_c(const struct device *dev)
+{
+	struct lr20xx_data *data = dev->data;
+	uint16_t raw = 0;
+	lr20xx_status_t rc;
+
+	if (!data->configured || lr20xx_is_chip_busy(dev)) {
+		return INT16_MIN;
+	}
+	if (k_mutex_lock(&data->spi_mutex, K_NO_WAIT) != 0) {
+		return INT16_MIN;
+	}
+	rc = lr20xx_system_get_temp(&data->hal_ctx,
+				    LR20XX_SYSTEM_VALUE_FORMAT_UNIT,
+				    LR20XX_SYSTEM_MEAS_RES_13_BITS,
+				    LR20XX_SYSTEM_TEMP_SRC_VBE, &raw);
+	k_mutex_unlock(&data->spi_mutex);
+
+	if (rc != LR20XX_STATUS_OK) {
+		return INT16_MIN;
+	}
+	return (int16_t)((int8_t)(raw >> 8));
+}
+
 static bool lr20xx_apply_rx_duty_cycle(struct lr20xx_data *data)
 {
 	void *ctx = &data->hal_ctx;
@@ -975,31 +1104,28 @@ static bool lr20xx_apply_rx_duty_cycle(struct lr20xx_data *data)
 		return false;
 	}
 
-	/* Re-apply RX boost before re-arming — same warm-start caution as
-	 * lr11xx_restart_rx(), which has always done this on its duty-cycle
-	 * path.  A duty cycle sleeps the chip between every window (DS §6.3.8),
-	 * and DS §6.3.4 (SetAdditionalRegToRetain, "specifies the address of an
-	 * additional register to retain in Sleep mode") establishes that not
-	 * every register survives that on its own.  This driver holds no
-	 * retention entries at all, and the only place set_rx_path was ever
-	 * issued is apply_modem_config() — which the re-arm path never calls, so
-	 * before this the boost was programmed once at RX entry and never again.
-	 * If it does not survive the sleep, every window after the first ran
-	 * 3 dB down: the same failure the SX126x hit, where the fix was pinning
-	 * RX gain into the warm-start retention list.
+	/* Deliberately NO RX-boost re-apply here, unlike lr11xx_restart_rx().
+	 * The LR2021 retains it across the duty-cycle sleep and the datasheet is
+	 * explicit on every step of that:
+	 *   §4.4.1  — retention "save[s] all previously programmed chip settings"
+	 *   §6.3.8  — "In RxDutyCycleMode, the transceiver context is retained
+	 *              during sleep operations", and the inter-window sleep is
+	 *              always the with-retention kind
+	 *   §7.3.4  — the Rx gain tables, whose entries are G1..G11 plus
+	 *              G12_boost0..7 and G13_boost0..7, are "automatically stored
+	 *              in the retention memory"
+	 * SetRxPath is an ordinary command, so the boost is part of that retained
+	 * context.  SetAdditionalRegToRetain (§6.3.4) is not a counter-argument:
+	 * it takes "the address of an additional peripheral register", for
+	 * directly-poked internals outside the command-programmed context — the
+	 * datasheet's only worked example is the SX1276 freq-hop compatibility
+	 * register 0xF30A24, set by a workaround rather than by a command.
 	 *
-	 * One SPI command, correct either way.  Whether the LR2021 actually needs
-	 * it — or wants a retention entry instead — is still an open question;
-	 * read the gain back after a window, or A/B it on PDR.
-	 *
-	 * Not conditioned on rx_boost_applied: that flag tracks what we
-	 * programmed, not what survived. */
-	if (data->rx_boost_enabled) {
-		lr20xx_radio_common_set_rx_path(
-			ctx, LR20XX_RADIO_COMMON_RX_PATH_LF,
-			LR20XX_RADIO_COMMON_RX_PATH_BOOST_MODE_7);
-		data->rx_boost_applied = true;
-	}
+	 * This is where the SX126x and the LR2021 genuinely differ: the SX126x
+	 * does NOT retain Rx gain (DS §9.6 requires pinning it into the warm-start
+	 * retention list, and skipping that costs 3 dB on every wake after the
+	 * first).  Do not port that fix here by analogy — it is a real gap on that
+	 * chip and a no-op write on this one. */
 
 	/* Clear the CMD_PERR the HAL's clockless wake frame provokes: it is
 	 * self-inflicted by the wake and says nothing about the command below.
