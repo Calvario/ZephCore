@@ -588,6 +588,10 @@ target_sources(app PRIVATE adapters/clock/ZephyrRTCDiscover.c)
 # goertek,spa06 node is present.
 target_sources_ifdef(CONFIG_SENSOR app PRIVATE adapters/sensors/spa06.c)
 
+# T1000-E onboard NTC + photocell on the SAADC. Same deal: compiles to nothing
+# when no seeed,t1000e-analog node is present.
+target_sources_ifdef(CONFIG_SENSOR app PRIVATE adapters/sensors/t1000e_analog.c)
+
 # ========== Battery Curve Selection ==========
 # helpers/battery_curve.c is always compiled — it provides battery_curve_lookup()
 # and the weak battery_curve_default. A board-specific battery_curve.c is compiled

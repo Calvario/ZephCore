@@ -18,6 +18,7 @@
 
 /* LPP Type Codes (from CayenneLPP spec) */
 #define LPP_ANALOG_INPUT        2     /* 2 bytes, 0.01 signed */
+#define LPP_LUMINOSITY          101   /* 2 bytes, 1 lux unsigned */
 #define LPP_TEMPERATURE         103   /* 2 bytes, 0.1°C signed */
 #define LPP_RELATIVE_HUMIDITY   104   /* 1 byte, 0.5% unsigned */
 #define LPP_BAROMETRIC_PRESSURE 115   /* 2 bytes, 0.1 hPa unsigned */
@@ -91,6 +92,25 @@ public:
     uint8_t addRelativeHumidity(uint8_t channel, float percent) {
         uint8_t val = (uint8_t)(percent * LPP_HUMIDITY_MULT);
         return addField1(channel, LPP_RELATIVE_HUMIDITY, val);
+    }
+
+    /**
+     * Add luminosity reading
+     *
+     * The LPP type is nominally lux at 1-unit resolution, and a real
+     * ambient-light part gives lux. Boards whose light sensor reports a
+     * relative scale instead (the T1000-E photocell's 0-100) send that scale
+     * through unchanged — matching what Arduino MeshCore reports there, so a
+     * node reads the same after reflashing.
+     *
+     * @param channel Channel number
+     * @param value Luminosity, clamped to the 16-bit field
+     * @return Number of bytes written, or 0 on overflow
+     */
+    uint8_t addLuminosity(uint8_t channel, float value) {
+        if (value < 0.0f) value = 0.0f;
+        if (value > 65535.0f) value = 65535.0f;
+        return addField2Unsigned(channel, LPP_LUMINOSITY, (uint16_t)value);
     }
 
     /**

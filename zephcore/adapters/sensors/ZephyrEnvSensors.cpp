@@ -4,9 +4,10 @@
  *
  * Auto-detects available sensors via Zephyr devicetree nodelabels.
  *
- * Environment sensors (temp/humidity/pressure):
+ * Environment sensors (temp/humidity/pressure/light):
  *   SHTC3, AHT20/DHT20/AM2301B, SHT4x, SHT3xD, BME280, BME680, BMP280, BMP388, LPS22HB, SPA06
  *   MCU die temperature as fallback (nordic,nrf-temp)
+ *   Board-local analog sensors (seeed,t1000e-analog: NTC thermistor + photocell)
  *
  * Power monitors (voltage/current/power):
  *   INA219, INA3221, INA226, INA228, INA230, INA232, INA236, INA237
@@ -48,6 +49,7 @@ LOG_MODULE_REGISTER(zephcore_sensors, CONFIG_ZEPHCORE_SENSORS_LOG_LEVEL);
 #if HAS_ENV_SENSORS
 static const struct device *temp_humidity_dev = NULL;
 static const struct device *pressure_dev = NULL;
+static const struct device *light_dev = NULL;
 static bool temp_dev_has_pressure = false;  /* BME280/BME680 also have pressure */
 static bool env_available = false;
 
@@ -184,7 +186,20 @@ check_pressure:
 	}
 
 done:
-	env_available = (temp_humidity_dev != NULL) || (pressure_dev != NULL);
+	/* === Board-local analog sensors ===
+	 * Not on any bus — a thermistor and a photocell wired straight to the
+	 * SoC's ADC, so there is nothing to probe and the node's presence in DT
+	 * is the whole detection. Its thermistor is read last in
+	 * env_sensors_read() and only fills in a temperature nothing else
+	 * supplied — a dedicated part beats a thermistor inside the case. */
+	dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(t1000e_sensors));
+	if (sensor_ready(dev)) {
+		light_dev = dev;
+		LOG_INF("Found analog sensors: %s (T1000-E NTC + photocell)", dev->name);
+	}
+
+	env_available = (temp_humidity_dev != NULL) || (pressure_dev != NULL) ||
+			(light_dev != NULL);
 	if (!env_available) {
 		LOG_INF("No environment sensors found");
 	}
@@ -250,6 +265,25 @@ int env_sensors_read(struct env_data *data)
 		}
 	}
 
+	/* === Board-local analog sensors (light, and thermistor as fallback) ===
+	 * One fetch covers both channels — it switches the sensor rail, so
+	 * splitting it would pay that cost twice. */
+	if (light_dev) {
+		if (sensor_sample_fetch(light_dev) == 0) {
+			if (sensor_channel_get(light_dev, SENSOR_CHAN_LIGHT, &val) == 0) {
+				data->luminosity = sensor_value_to_float(&val);
+				data->has_luminosity = true;
+			}
+			/* Only where no bus sensor — nor a barometer's die
+			 * channel above — already produced a temperature. */
+			if (!data->has_temperature &&
+			    sensor_channel_get(light_dev, SENSOR_CHAN_AMBIENT_TEMP, &val) == 0) {
+				data->temperature_c = sensor_value_to_float(&val);
+				data->has_temperature = true;
+			}
+		}
+	}
+
 	/* === MCU die temperature — always read when available ===
 	 * Used as fallback when no external temp sensor, and always
 	 * available via has_mcu_temperature for telemetry decisions. */
@@ -263,7 +297,7 @@ int env_sensors_read(struct env_data *data)
 	}
 
 	return (data->has_temperature || data->has_humidity || data->has_pressure ||
-	        data->has_mcu_temperature) ? 0 : -ENODATA;
+	        data->has_luminosity || data->has_mcu_temperature) ? 0 : -ENODATA;
 #else
 	return -ENOTSUP;
 #endif

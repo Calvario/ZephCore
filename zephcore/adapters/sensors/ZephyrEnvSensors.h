@@ -2,9 +2,10 @@
  * SPDX-License-Identifier: MIT
  * Zephyr Environment & Power Sensors
  *
- * Environment: temperature, humidity, pressure
+ * Environment: temperature, humidity, pressure, light
  *   Supports: SHTC3, AHT20/DHT20/AM2301B, SHT4x, SHT3x, BME280, BME680, BMP280, BMP388, LPS22HB
  *   MCU die temperature as fallback (nordic,nrf-temp)
+ *   Board-local analog sensors: T1000-E NTC thermistor + photocell
  *
  * Power monitors: voltage, current, power
  *   Supports: INA219, INA3221, INA226, INA228, INA230, INA232, INA236, INA237
@@ -27,11 +28,20 @@ struct env_data {
 	float humidity_pct;      /* Relative humidity in percent */
 	float pressure_hpa;      /* Barometric pressure in hPa */
 	float mcu_temperature_c; /* MCU die temperature in Celsius */
+	float luminosity;        /* Ambient light — see note below */
 	bool has_temperature;
 	bool has_humidity;
 	bool has_pressure;
 	bool has_mcu_temperature;
+	bool has_luminosity;
 };
+
+/* Note on luminosity: the unit is whatever the board's light sensor reports on
+ * SENSOR_CHAN_LIGHT, and it is forwarded to CayenneLPP luminosity unscaled.
+ * A true ambient-light part gives lux; the T1000-E's photocell gives Seeed's
+ * 0-100 scale, which Arduino MeshCore also reports verbatim. Keeping it
+ * unscaled is what makes a ZephCore node read the same as the stock firmware
+ * it replaced. */
 
 /* Initialize environment sensors (call once at boot) */
 int env_sensors_init(void);

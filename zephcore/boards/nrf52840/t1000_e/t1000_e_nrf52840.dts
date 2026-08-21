@@ -105,6 +105,29 @@
 		vbat-mv-multiplier = <7236>;  /* 2:1 divider, 3.6V ref; +0.5% for nRF SAADC gain error */
 	};
 
+	/* Onboard NTC thermistor (AIN7) and photocell (AIN5).
+	 *
+	 * Both dividers hang off the sensor_power rail AND need SENSOR_EN
+	 * (P0.4) asserted — Arduino drives both before every read. The driver
+	 * switches them per sample fetch; regulator refcounting keeps that
+	 * safe alongside the battery read, which shares the rail.
+	 *
+	 * The NTC conversion needs the rail voltage feeding its divider, so
+	 * the battery channel is wired in here as "vcc" with the same
+	 * multiplier zephyr,user uses. It is clamped to vcc-max-mv, which is
+	 * where it sits for all but the flattest cell. */
+	t1000e_sensors: analog-sensors {
+		compatible = "seeed,t1000e-analog";
+		io-channels = <&adc 7>, <&adc 5>, <&adc 0>;
+		io-channel-names = "ntc", "light", "vcc";
+		vcc-mv-multiplier = <7236>;
+		vcc-max-mv = <3300>;
+		ntc-series-ohms = <8250>;
+		settle-time-ms = <10>;
+		power-gpios = <&gpio0 4 GPIO_ACTIVE_HIGH>;
+		power-supply = <&sensor_power>;
+	};
+
 	/* Buzzer on PWM0 channel 0 (P0.25) with enable on P1.05 */
 	pwmbuzzer {
 		compatible = "pwm-leds";
@@ -227,7 +250,24 @@
 	};
 };
 
-/* I2C0 for QMA6100P accelerometer + external sensors */
+/* I2C0 — QMA6100P accelerometer only, and it is not declared here.
+ *
+ * Deliberately does NOT include common/sensors-i2c.dtsi. This is a sealed
+ * tracker: there is no Grove/expansion header, so none of those parts can
+ * ever be attached, and Arduino MeshCore agrees — the t1000-e variant uses
+ * its own T1000SensorManager with no I2C environment sensors at all, unlike
+ * the boards that pull in EnvironmentSensorManager.
+ *
+ * Including the list cost ~3.5 s of every boot. Both rails feeding this bus
+ * (sensor_power on P1.6, and the accelerometer's own P1.7) are off at boot,
+ * so its pull-ups are unpowered and SDA/SCL sit low. A transfer to a dead
+ * bus never completes, so each of the seven phantom parts burned a full
+ * CONFIG_I2C_NRFX_TRANSFER_TIMEOUT (500 ms) instead of NAKing in
+ * microseconds the way it would on a live bus.
+ *
+ * The bus stays enabled so the accelerometer can be added as a single node
+ * later — but powering P1.7 is part of that change, not optional.
+ */
 &i2c0 {
 	compatible = "nordic,nrf-twim";
 	status = "okay";
@@ -235,9 +275,6 @@
 	pinctrl-0 = <&i2c0_default>;
 	pinctrl-1 = <&i2c0_sleep>;
 	pinctrl-names = "default", "sleep";
-
-	/* All supported environment & power sensors — auto-detected at runtime */
-	#include "../../common/sensors-i2c.dtsi"
 };
 
 /* SPI1 for LR1110 */

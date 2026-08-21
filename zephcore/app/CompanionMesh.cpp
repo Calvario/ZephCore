@@ -1223,7 +1223,7 @@ bool CompanionMesh::vcontactHandleFrame(const uint8_t *data, size_t len)
 			if (tag == 0) tag = 1;
 			sendPacketSent(MSG_SEND_SENT_DIRECT, tag, 3000);
 
-			uint8_t rsp[8 + 4 + 11 + 11 + (12 * POWER_MAX_CHANNELS) + 8];
+			uint8_t rsp[8 + 4 + 11 + 15 + (12 * POWER_MAX_CHANNELS) + 8];
 			int i = 0;
 			rsp[i++] = PUSH_CODE_TELEMETRY_RESPONSE;
 			rsp[i++] = 0;  /* reserved */
@@ -1564,6 +1564,16 @@ int CompanionMesh::appendSelfTelemetry(uint8_t *reply, uint8_t permissions)
 				uint16_t press = (uint16_t)(env.pressure_hpa * 10);
 				reply[i++] = (press >> 8) & 0xFF;
 				reply[i++] = press & 0xFF;
+			}
+			if (env.has_luminosity) {
+				reply[i++] = CH_SELF;
+				reply[i++] = LPP_LUMINOSITY;
+				float lum = env.luminosity;
+				if (lum < 0.0f) lum = 0.0f;
+				if (lum > 65535.0f) lum = 65535.0f;
+				uint16_t lux = (uint16_t)lum;
+				reply[i++] = (lux >> 8) & 0xFF;
+				reply[i++] = lux & 0xFF;
 			}
 		}
 
@@ -3152,9 +3162,9 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 			// Response: [PUSH_CODE_TELEMETRY_RESPONSE][reserved][6-byte pubkey][telemetry_data]
 			// Worst-case size tracks POWER_MAX_CHANNELS so a future bump can't
 			// silently overflow this stack buffer. With current value 4:
-			// header(8) + batt(4) + gps(11) + env(temp4+hum3+press4=11)
-			// + power(POWER_MAX_CHANNELS * 12 = 48) + 8 byte safety pad = 90.
-			uint8_t rsp[8 + 4 + 11 + 11 + (12 * POWER_MAX_CHANNELS) + 8];
+			// header(8) + batt(4) + gps(11) + env(temp4+hum3+press4+lum4=15)
+			// + power(POWER_MAX_CHANNELS * 12 = 48) + 8 byte safety pad = 94.
+			uint8_t rsp[8 + 4 + 11 + 15 + (12 * POWER_MAX_CHANNELS) + 8];
 			int i = 0;
 			rsp[i++] = PUSH_CODE_TELEMETRY_RESPONSE;
 			rsp[i++] = 0;  // reserved

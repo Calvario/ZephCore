@@ -1,0 +1,82 @@
+# Copyright (c) 2026 ZephCore
+# SPDX-License-Identifier: MIT
+
+description: |
+  Seeed Tracker T1000-E onboard analog sensors.
+
+  Two passive parts sit on the board's switched 3V3 sensor rail and are read
+  through the SoC's ADC:
+
+    - An NTC thermistor forming the upper leg of a divider, reported as
+      SENSOR_CHAN_AMBIENT_TEMP in degrees C. The resistance is converted
+      through the same resistance/temperature table Seeed's own firmware uses,
+      so readings match the stock and Arduino MeshCore builds.
+
+    - A photocell, reported as SENSOR_CHAN_LIGHT. Seeed's firmware maps it to
+      a 0-100 scale rather than to lux, and Arduino MeshCore forwards that
+      scale verbatim as CayenneLPP luminosity, so this driver does the same.
+      The value is a percentage despite the channel's nominal lux units.
+
+  Neither divider outputs a valid voltage until the rail regulator and the
+  sensor-enable GPIO are both asserted and given time to settle, so the driver
+  switches them around each sample fetch rather than leaving them on.
+
+compatible: "seeed,t1000e-analog"
+
+include: [sensor-device.yaml]
+
+properties:
+  io-channels:
+    required: true
+    description: |
+      ADC channels, in the order named by io-channel-names: "ntc", "light" and
+      "vcc". "vcc" is the battery/rail divider channel — converting the NTC
+      divider needs the rail voltage feeding it, not a constant.
+
+  io-channel-names:
+    required: true
+
+  vcc-mv-multiplier:
+    type: int
+    required: true
+    description: |
+      Scales the raw "vcc" reading to millivolts as mv = raw * multiplier / 4096.
+      Same convention as the zephyr,user vbat-mv-multiplier property, and
+      normally the same value, since it is normally the same channel.
+
+  vcc-max-mv:
+    type: int
+    default: 3300
+    description: |
+      Rail voltage ceiling in millivolts, used to clamp the measured "vcc"
+      before it becomes the NTC divider reference. Above the regulator's
+      dropout the divider is fed from the fixed rail rather than from the
+      cell, so the higher battery reading would overstate it. Only a cell
+      flat enough to drag the rail down reads below this.
+
+  power-gpios:
+    type: phandle-array
+    description: |
+      Sensor-enable pin (SENSOR_EN, P0.4 on the T1000-E), asserted for the
+      duration of a sample fetch. This is in addition to power-supply: the
+      T1000-E gates these two sensors behind both.
+
+  power-supply:
+    type: phandle
+    description: |
+      Regulator for the switched sensor rail (PIN_3V3_EN, P1.6 on the
+      T1000-E), enabled for the duration of a sample fetch. Refcounted, so it
+      nests safely with the battery read, which switches the same rail.
+
+  settle-time-ms:
+    type: int
+    default: 10
+    description: |
+      Delay between asserting the rail and enable pin and sampling, to let the
+      divider and its decoupling capacitor settle.
+
+  ntc-series-ohms:
+    type: int
+    default: 8250
+    description: |
+      Series resistor in the lower leg of the NTC divider, in ohms.

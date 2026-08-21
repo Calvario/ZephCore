@@ -391,6 +391,9 @@ int RepeaterMesh::handleRequest(ClientInfo* sender, uint32_t sender_timestamp, u
             if (env.has_pressure) {
                 lpp.addBarometricPressure(CH_SELF, env.pressure_hpa);
             }
+            if (env.has_luminosity) {
+                lpp.addLuminosity(CH_SELF, env.luminosity);
+            }
         } else {
             /* No env sensors at all — try MCU temp directly */
             float mcu_temp = _board.getMCUTemperature();
