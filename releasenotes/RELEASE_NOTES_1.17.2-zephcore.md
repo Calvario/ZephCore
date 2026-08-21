@@ -1,12 +1,13 @@
 # ZephCore 1.17.2-zephcore
 
-A **minor release.** Four changes, two of which only affect specific hardware, plus a hardening pass on
-how the node's identity is stored.
+A **minor release.** Six changes, two of which only affect specific hardware, plus a hardening pass on
+how the node's identity is stored and a fix for repeater guest logins that 1.17.1 broke.
 
 > [!NOTE]
-> **Most people can skip this.** The one group that should not is **XIAO nRF52840 and Ikoka Nano 30 dBm**
-> owners — those boards get twice the charge current and a battery-sense pin that no longer sits at the
-> nRF52840's absolute maximum. Everyone else: safe to skip and pick these up with the next real release.
+> **Most people can skip this.** Two groups should not. **XIAO nRF52840 and Ikoka Nano 30 dBm** owners —
+> those boards get twice the charge current and a battery-sense pin that no longer sits at the nRF52840's
+> absolute maximum. And **anyone running a repeater**, where 1.17.1 stopped accepting guest logins that
+> use no password. Everyone else: safe to skip and pick these up with the next real release.
 >
 > Straight upgrade from 1.17.1 either way — bonds and data survive, no re-pairing.
 
@@ -79,12 +80,53 @@ All roles, all boards.
 > comes up with a broken identity. Nothing is lost: older firmware misreads the file but does not rewrite
 > it, so flashing 1.17.2 again restores the identity exactly as it was.
 
+## Repeaters accept guest logins without a password again
+
+1.17.1 changed an empty guest password to mean "guest access disabled" on both repeaters and room
+servers. That was right for room servers and wrong for repeaters: Arduino MeshCore ships an empty guest
+password by default and treats a blank password as a valid guest login, so a repeater with no guest
+password set is supposed to be open to guests. On 1.17.1 those logins were refused.
+
+Repeaters now match Arduino again. Guests on a repeater cannot run CLI commands or read the access
+list — they get login plus status and telemetry. Set `guest.password` if you want one required.
+
+**Room servers are deliberately unchanged.** An empty guest password still disables guest access there,
+so a room is never accidentally left open; that hole is what the 1.17.1 change was for. Use
+`allow.read.only on` to run an open room.
+
+`allow.read.only` no longer appears in the repeater CLI either. Only the room server ever consulted it,
+so on a repeater it was a setting that silently did nothing. Stored configuration is untouched.
+
+## Duty-cycled nodes spend more time with the radio off
+
+Receive duty cycling derates its sleep budget to absorb drift in the radio's internal sleep clock. That
+derating was 15 % and is now 5 %, which the radio can afford because that clock is recalibrated every
+time the chip temperature moves 5 °C — so the drift it has to absorb is what accumulates inside a 5 °C
+window, not since power-on.
+
+On a typical SF7 preset this moves radio-off time from about **31 % to about 35 %**. All three radio
+families pick it up.
+
+> [!NOTE]
+> If a node starts dropping packets for no visible reason — random losses while signal strength looks
+> perfectly healthy — raise `CONFIG_ZEPHCORE_LORA_DC_MARGIN_PCT` back toward 15 before investigating
+> anything else. This kind of loss does not depend on signal strength, so RSSI will not show it.
+
+## An LR1110 too old to join the mesh now says so
+
+An LR1110 running firmware older than 0x0303 cannot change the LoRa sync word, which leaves the node on
+the public one — transmitting and receiving fine, but invisible to everyone else on the mesh. That is now
+reported in the log instead of looking like a dead radio.
+
 ---
 
 ## Known limitations
 
-- **The two radio changes are not on-air validated** — both are build-verified and reasoned from the
-  datasheet, not measured on a live mesh.
+- **The radio changes are only partly on-air validated.** The duty-cycle margin change is computed and
+  build-verified, not measured: the loss it could cause is signal-strength-independent, and confirming
+  it needs a delivery-ratio comparison against `rxduty 0` on a marginal link, which has not been run.
+  The LR2021 listen-before-talk change is likewise reasoned from the datasheet only.
+- **The repeater guest-login change is build-verified on both roles but not exercised on hardware.**
 - **The identity repair and regenerate paths are not exercised on hardware.** Every layout and failure
   case is covered by host tests against the same crypto library the firmware uses, and all three roles
   build clean, but no physical node has been put into a broken state and recovered. The normal path — a

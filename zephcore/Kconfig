@@ -199,7 +199,21 @@ config ZEPHCORE_GUEST_PASSWORD
 	string "Default guest password"
 	default ""
 	help
-	  Default password for guest access. Empty string disables guest access.
+	  Default password for guest access.
+
+	  An empty string means different things per role, matching Arduino
+	  MeshCore:
+
+	    REPEATER     - open guest access.  A blank submitted password logs
+	                   in as PERM_ACL_GUEST, which cannot run CLI commands
+	                   or read the access list; it gets login plus
+	                   status/telemetry.
+	    ROOM SERVER  - guest access disabled, so a room is never
+	                   accidentally left open.  Arduino reaches the same
+	                   place by defaulting the room server's guest password
+	                   to ROOM_PASSWORD instead of leaving it empty.
+
+	  Set a non-empty value to require a password on either role.
 
 config ZEPHCORE_MAX_UNSYNCED_POSTS
 	int "Room server: max buffered posts"
@@ -701,7 +715,7 @@ config ZEPHCORE_LORA_DC_MIN_SYMBOLS
 config ZEPHCORE_LORA_DC_MARGIN_PCT
 	int "RX duty cycle: sleep-budget safety margin (percent)"
 	range 0 40
-	default 15
+	default 5
 	help
 	  Percentage the per-cycle deaf-time budget is derated before the
 	  sleep period is programmed.  The theoretical catch budget assumes
@@ -715,8 +729,53 @@ config ZEPHCORE_LORA_DC_MARGIN_PCT
 	  independent loss that presents as random DC packet drops.  This
 	  margin trades a little radio-off time for that robustness and is
 	  shared by every radio (SX126x / LR11xx / LR20xx).  Set to 0 to
-	  restore the old zero-margin behaviour; 15% is a conservative default,
-	  lower it once you have measured your board's clock+transition on air.
+	  restore the old zero-margin behaviour.
+
+	  Lowered from 15% to 5% on 2026-08-21.  What justifies it: the clock
+	  half of the error is bounded, not open-ended.  RC64k is recalibrated
+	  by Calibrate(ALL) (SX126X_CALIBRATE_RC64K is bit 0 of 0x7F) whenever
+	  agcMaintenance() sees the chip temperature move AGC_RECAL_TEMP_DELTA_C
+	  (5 C), so the drift this must absorb is what accrues inside a 5 C
+	  window, not across the whole operating range since boot.
+
+	  What it costs, at SF7/BW62.5/P=32 on a 5 ms-TCXO board: absolute slack
+	  against the catch budget falls from 4608 us (15%) to 1536 us (5%), and
+	  the tolerated sleep-timer error falls from 23.5% to 6.8%.  Off-time
+	  goes 30.9% -> 34.9%.  Note the tolerance always exceeds the margin
+	  percentage, because the derate applies to the whole budget while the
+	  clock error acts only on the sleep portion.
+
+	  The part NOT bounded by the temperature recalibration is the
+	  wake-transition estimate in hwWakeupTimeUs() -- a programmed TCXO delay
+	  (deterministic) plus ~1 ms of context restore and PLL lock that the
+	  datasheet itself calls "not accurate and may vary".  At 5% that term
+	  has 1536 us of headroom minus whatever RC64k drift consumes.  If a
+	  board shows unexplained duty-cycle packet loss, raise this first --
+	  the loss is signal-strength-independent, so RSSI will look fine and
+	  only a PDR comparison against rxduty 0 will show it.
+
+config ZEPHCORE_LORA_RETENTION_DEBUG
+	bool "SX126x: verify the warm-start retention list on air"
+	depends on ZEPHCORE_RADIO_NATIVE
+	help
+	  Read back the SX126x register retention list (0x029F) and the Rx gain
+	  register (0x08AC) and report whether they survived, at chip init and
+	  after every duty-cycle packet.
+
+	  This exists to answer one question: does installing the retention list
+	  once at init actually hold?  The list is what restores Rx gain across
+	  the chip-internal sleep->RX wakes of SetRxDutyCycle, which the host
+	  never sees.  If it does not hold, every window after the first sleep
+	  listens at power-saving gain -- a silent 3 dB sensitivity loss with
+	  nothing in the log, which is precisely the failure this check makes
+	  visible.
+
+	  The check runs after RX_DONE and before sx126x_restart_rx() rewrites
+	  the gain, so it observes the value the packet was actually received
+	  with rather than the one we are about to reapply.
+
+	  Costs two SPI register reads per received packet.  Debug builds only;
+	  enabled by boards/common/debug.conf.
 
 endmenu
 

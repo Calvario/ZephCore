@@ -65,7 +65,9 @@ All commands are sent over USB serial (CDC-ACM). Commands sent remotely over the
 
 > **Password length:** admin and guest passwords are capped at **15 characters** (16-byte storage incl. NUL; same limit as Arduino MeshCore). The login-send path silently truncates anything longer, so a password >15 chars will never authenticate. Applies to `set guest.password` as well.
 
-> **Guest access is off unless a guest password is set.** An empty `guest.password` (the default) disables guest login rather than matching a blank submitted password. To run an open room-server, use `set allow.read.only on` — that grants read-only (`PERM_ACL_GUEST`), not post rights.
+> **`allow.read.only` is room-server only.** `RoomServerMesh.cpp` is its sole consumer; `RepeaterMesh.cpp` never reads it, so on a repeater the setting silently did nothing. The CLI now only exposes it on `CONFIG_ZEPHCORE_ROLE_ROOM_SERVER` builds — a deliberate divergence from Arduino MeshCore, whose shared CommonCLI offers the knob on every role. The pref itself is unchanged: it stays byte 114 of the on-flash prefs layout, identical to Arduino's, so existing prefs files are unaffected.
+
+> **Guest access differs by role, matching Arduino MeshCore.** On a **repeater**, an empty `guest.password` (the default) means *open* guest access — a blank submitted password logs in as `PERM_ACL_GUEST`, which cannot run CLI commands or read the access list, so it gets login plus status/telemetry only. On a **room server**, an empty `guest.password` *disables* guest login, so a room is never accidentally left open; to run an open room use `set allow.read.only on`, which grants read-only (`PERM_ACL_GUEST`), not post rights. Set a non-empty `guest.password` to require one on either role.
 
 ---
 
@@ -237,7 +239,7 @@ All `set uplink.*` changes are saved immediately and only applied after reboot.
 | `get flood.max.advert` | Max retransmit hops for ADVERT floods |
 | `get flood.advert.interval` | Flood advertisement interval in hours |
 | `get advert.interval` | Local advertisement interval in minutes |
-| `get allow.read.only` | Whether read-only clients are allowed |
+| `get allow.read.only` | *(room server only)* Whether read-only clients are allowed |
 | `get guest.password` | Guest access password |
 | `get owner.info` | Owner/contact info (pipes `\|` display as newlines) |
 | `get int.thresh` | Interference threshold |
@@ -286,7 +288,7 @@ Changes are persisted immediately unless noted. Some require a reboot.
 | `set flood.max.advert <count>` | 0–64 | Hop limit for ADVERT floods only (default 8); curbs advert churn independent of flood.max |
 | `set flood.advert.interval <hours>` | 3–168 | How often the repeater floods its own advertisement |
 | `set advert.interval <mins>` | min–240 | How often the repeater sends local advertisements |
-| `set allow.read.only <on\|off>` | | Allow or deny read-only client connections |
+| `set allow.read.only <on\|off>` | | *(room server only)* Allow or deny read-only client connections |
 | `set guest.password <pwd>` | | Set guest access password |
 | `set owner.info <text>` | Use `\|` for newlines | Owner/contact information |
 | `set int.thresh <value>` | | Interference detection threshold |

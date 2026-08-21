@@ -161,11 +161,27 @@ uint8_t RepeaterMesh::handleLoginReq(const mesh::Identity& sender, const uint8_t
                                                           guest_pw,
                                                           sizeof(received));
 
-        /* An empty stored guest password disables guest access (as
-         * CONFIG_ZEPHCORE_GUEST_PASSWORD documents) rather than matching an
-         * empty submitted password and letting anyone in. Both compares above
-         * still run unconditionally, so timing is unchanged. */
-        if (_prefs.guest_password[0] == 0) guest_match = false;
+        /* An empty stored guest password means OPEN GUEST ACCESS on a repeater,
+         * deliberately, matching Arduino MeshCore: its NodePrefs default is
+         * guest_password[0] = 0 (src/helpers/CommonCLI.h) and
+         * examples/simple_repeater/MyMesh.cpp compares with a plain strcmp, so a
+         * blank submitted password logs in as guest. Only a blank submission
+         * matches -- a wrong non-blank password still fails, because both
+         * buffers are zero-padded and compared full-width.
+         *
+         * This is deliberately NOT what RoomServerMesh.cpp does, and the two
+         * must not be "made consistent". There an empty guest password disables
+         * guest access, because on a room server that password is what gates
+         * posting and an accidentally open room is a real hole (the 2026-07-30
+         * finding: every ZephCore room server shipped open). Arduino closes the
+         * same hole from the other side, by defaulting the room server's
+         * guest_password to ROOM_PASSWORD rather than leaving it empty.
+         *
+         * The blast radius on a repeater is small by construction:
+         * PERM_ACL_GUEST cannot run CLI commands -- the PAYLOAD_TYPE_TXT_MSG
+         * path in onPeerDataRecv() requires isAdmin() -- and cannot read the
+         * access list (REQ_TYPE_GET_ACCESS_LIST likewise). A guest gets login
+         * plus status/telemetry. Set a guest password to close it. */
 
         if (admin_match) {
             perms = PERM_ACL_ADMIN;

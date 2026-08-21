@@ -42,6 +42,22 @@ K_THREAD_STACK_DEFINE(lr11xx_wedge_wq_stack, LR11XX_WEDGE_WQ_STACK_SIZE);
 #define LR11XX_WEDGE_IDLE_MS   12000  /* only probe after this much DIO1 silence */
 #define LR11XX_WEDGE_CONFIRM_MS  250  /* continuous BUSY-high past this = wedged */
 
+/* GetVersion "use case" byte — which member of the family answered. */
+#define LR11XX_TYPE_LR1110  0x01
+#define LR11XX_TYPE_LR1120  0x02
+#define LR11XX_TYPE_LR1121  0x03
+
+/* LR1110 firmware below 0x0303 cannot change the LoRa sync word.  MeshCore
+ * runs on the private word (0x12); a chip that silently ignores
+ * SetLoRaSyncWord stays on the public one (0x34) and is invisible to the
+ * mesh — it transmits and receives nothing anyone else hears, with nothing
+ * in the log pointing at the cause.  Upstream Zephyr's native lr11xx driver
+ * refuses to initialise at all below this version; we log and continue,
+ * because a diagnosable radio is more useful in the field than an absent
+ * one, and the two firmware revisions seen on real hardware here (0x0307,
+ * 0x0401) both clear it comfortably. */
+#define LR11XX_MIN_FW_SYNC_WORD  0x0303
+
 /* ── Driver data structures ─────────────────────────────────────────── */
 
 struct lr11xx_config {
@@ -1740,6 +1756,13 @@ static int lr11xx_hw_init(struct lr11xx_data *data,
 
 	LOG_INF("LR11xx HW:0x%02X Type:0x%02X FW:0x%04X",
 		ver.hw, ver.type, ver.fw);
+
+	if (ver.type == LR11XX_TYPE_LR1110 && ver.fw < LR11XX_MIN_FW_SYNC_WORD) {
+		LOG_ERR("LR1110 FW 0x%04X < 0x%04X: sync word cannot be changed, "
+			"node will stay on the public sync word and be invisible "
+			"to the mesh — upgrade the chip firmware",
+			ver.fw, LR11XX_MIN_FW_SYNC_WORD);
+	}
 
 	/* TCXO */
 	if (cfg->tcxo_voltage_mv > 0) {

@@ -485,8 +485,19 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
             strcpy(reply, "Removed - Automatic AGC reset is on");
         } else if (memcmp(config, "multi.acks", 10) == 0) {
             snprintf(reply, CLI_REPLY_SIZE, "> %u", (uint32_t)_prefs->multi_acks);
+#ifdef CONFIG_ZEPHCORE_ROLE_ROOM_SERVER
+        /* Room server only.  RoomServerMesh.cpp is the sole consumer of
+         * allow_read_only; RepeaterMesh.cpp never reads it, so on a repeater
+         * this advertised a setting that silently did nothing.  Note this is a
+         * deliberate divergence from Arduino MeshCore, whose shared CommonCLI
+         * exposes the knob on every role for the same reason ours used to.
+         *
+         * The pref itself stays unconditional -- it is byte 114 of the on-flash
+         * prefs layout, identical to Arduino's, so dropping it would shift every
+         * field after it and invalidate existing prefs files. */
         } else if (memcmp(config, "allow.read.only", 15) == 0) {
             snprintf(reply, CLI_REPLY_SIZE, "> %s", _prefs->allow_read_only ? "on" : "off");
+#endif
         } else if (memcmp(config, "flood.advert.interval", 21) == 0) {
             snprintf(reply, CLI_REPLY_SIZE, "> %u", (uint32_t)_prefs->flood_advert_interval);
         } else if (memcmp(config, "advert.interval", 15) == 0) {
@@ -823,6 +834,8 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
             } else {
                 strcpy(reply, "Error: must be 0 or 1");
             }
+#ifdef CONFIG_ZEPHCORE_ROLE_ROOM_SERVER
+        /* Room server only -- see the matching guard on the `get` side. */
         } else if (memcmp(config, "allow.read.only ", 16) == 0) {
             if (memcmp(&config[16], "on", 2) == 0) {
                 _prefs->allow_read_only = 1;
@@ -835,6 +848,7 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
             } else {
                 strcpy(reply, "Error: must be on or off");
             }
+#endif
         } else if (memcmp(config, "flood.advert.interval ", 22) == 0) {
             int hours = _atoi(&config[22]);
             if ((hours > 0 && hours < 3) || (hours > 168)) {
