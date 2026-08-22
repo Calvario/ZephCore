@@ -6,7 +6,17 @@ All commands are sent over USB serial (CDC-ACM). Commands sent remotely over the
 
 **Sources:**
 - `helpers/CommonCLI.cpp` — common commands shared by all roles
-- `app/RepeaterMesh.cpp` — repeater-specific commands
+- `app/RepeaterMesh.cpp` — repeater-specific commands (`setperm`, `get acl`, `region`, `discover.neighbors`)
+- `app/RepeaterRegionCLI.cpp` / `app/RoomServerRegionCLI.cpp` — the `region` sub-CLI
+- `app/RepeaterUplink.cpp` — `get`/`set uplink.*` (ESP32 uplink builds only)
+- `app/RoomServerMesh.cpp` — room-server-specific commands (`room.post`)
+
+> **Commands are case-sensitive**, matching Arduino MeshCore. Nothing is lower-cased before matching.
+
+> **Request-tag prefix.** If a command is longer than 4 characters and its **third** character is `|`
+> (e.g. `a7|reboot`), the first three characters are stripped before dispatch and echoed back at the
+> start of the reply. This is how the phone app correlates replies with requests. It means a command
+> whose third character is a literal `|` cannot be sent as-is.
 
 ---
 
@@ -49,8 +59,8 @@ All commands are sent over USB serial (CDC-ACM). Commands sent remotely over the
 | Command | Description |
 |---------|-------------|
 | `neighbors` | Display current neighbor list |
-| `neighbor.remove <pubkey_hex>` | Remove a neighbor entry by its public key |
-| `discover.neighbors` | Broadcast a node discovery request to find nearby nodes |
+| `neighbor.remove <pubkey_hex>` | Remove a neighbor entry by its public key. A prefix is accepted — the hex is truncated to at most 32 bytes and matched at whatever length you give. **Repeater only in effect:** `RoomServerMesh` does not override `removeNeighbor`, so on a room server this replies `OK` and does nothing. |
+| `discover.neighbors` | *(repeater only)* Broadcast a node discovery request to find nearby nodes. Takes no arguments — anything after it replies `Err - discover.neighbors has no options`. Not implemented on room servers. |
 
 ---
 
@@ -220,9 +230,9 @@ All `set uplink.*` changes are saved immediately and only applied after reboot.
 | Command | Returns |
 |---------|---------|
 | `get name` | Node name |
-| `get role` | Firmware role (`repeater`) |
+| `get role` | Firmware role: `repeater` or `room_server` (companion builds report `companion`) |
 | `get repeat` | Forwarding enabled: `on` or `off` |
-| `get radio` | Radio params: `freq,bw,sf,cr` |
+| `get radio` | Radio params as `freq,bw,sf,cr` — the same comma-separated form `set radio` takes, so a reply can be edited and sent straight back |
 | `get freq` | Frequency in MHz |
 | `get freqerr` | Carrier frequency error measured on received packets: `mean N Hz, min A, max B, K pkts`. **LR2021 only** — other radios answer `not available`. Purely diagnostic; nothing acts on it. **The mean only approximates *this* node's reference error once it is averaged over many different peers** — their individual errors cancel, ours does not — so read `K` and the min/max spread before believing it: a tight spread over a handful of packets is one chatty neighbour, not a population. Small values are the expected answer and mean there is nothing to do; LoRa tolerates carrier error up to roughly a quarter of the bandwidth before sensitivity suffers, so at BW 62.5 kHz a few hundred Hz is noise. If it is kHz-scale the correction is board-dependent: XTAL parts have `SetXoscCpTrim`, but **TCXO parts have no chip-side trim at all** (DS §6.11.4: "If a TCXO is configured, this command has no effect"), leaving only a software offset to the programmed frequency. Values beyond ±200 kHz are discarded by the driver and warn once — the field is decoded from three `GetLoraPacketStatus` bytes that DS rev 2.1 does not document, so implausible readings are evidence the field is not real on that firmware rather than a genuine measurement. Reset by `clear stats`. |
 | `get tx` | TX power in dBm |
@@ -244,7 +254,8 @@ All `set uplink.*` changes are saved immediately and only applied after reboot.
 | `get owner.info` | Owner/contact info (pipes `\|` display as newlines) |
 | `get int.thresh` | Interference threshold |
 | `get leds` | LED master switch: `on` or `off` |
-| `get agc.reset.interval` | Removed - replies `use rxduty instead` |
+| `get buzzer` | *(room server only)* Buzzer/vibration mode as `<n> (<name>)`: `0 (silent)`, `1 (sound+vib)`, `2 (vibrate)`, `3 (sound)`. Compiled out on repeater builds (`#ifndef ZEPHCORE_REPEATER`) — a repeater answers `unknown config: buzzer`. |
+| `get agc.reset.interval` | Removed — replies `Removed - Automatic AGC reset is on`. Periodic AGC recalibration was deleted (it reset the noise floor to its unseeded sentinel on every fire). Use `set rxduty` to cut RX current. |
 | `get multi.acks` | Extra ACK transmit count (`0` or `1`) |
 | `get path.hash.mode` | Path hashing algorithm: `0`, `1`, or `2` |
 | `get loop.detect` | Loop detection level: `off`, `minimal`, `moderate`, or `strict` |
@@ -259,8 +270,8 @@ All `set uplink.*` changes are saved immediately and only applied after reboot.
 | `get extra.sf` | LR2021 side detectors: the extra spreading factors currently received alongside `sf`, comma-separated, or `none`. Reflects the saved prefs, not what the chip accepted — if the set became invalid after an `sf`/`bw` change it is reported here but was refused at boot (a `WRN` line says so). |
 | `get adc.multiplier` | Battery voltage ADC calibration multiplier |
 | `get bootloader.ver` | Bootloader version string |
-| `get public.key` | *(USB only)* Node's public key as hex |
-| `get prv.key` | *(USB only)* Node's private key as hex |
+| `get public.key` | Node's public key as hex. **Not** USB-only — it is answerable over remote admin, matching Arduino MeshCore. A public key is broadcast in every advert, so there is nothing to gate. |
+| `get prv.key` | *(USB only)* Node's private key as hex — the 128-char expanded form, the same one `set prv.key` takes |
 
 ---
 
@@ -286,20 +297,23 @@ Changes are persisted immediately unless noted. Some require a reboot.
 | `set flood.max <count>` | 0–64 | Maximum flood retransmit hops |
 | `set flood.max.unscoped <count>` | 0–64 | Hop limit for un-scoped floods only (default 64 = same as flood.max); scoped/transport floods still use flood.max |
 | `set flood.max.advert <count>` | 0–64 | Hop limit for ADVERT floods only (default 8); curbs advert churn independent of flood.max |
-| `set flood.advert.interval <hours>` | 3–168 | How often the repeater floods its own advertisement |
-| `set advert.interval <mins>` | min–240 | How often the repeater sends local advertisements |
+| `set flood.advert.interval <hours>` | `0` (off) or 3–168 | How often the repeater floods its own advertisement. `0` disables periodic flood adverts. |
+| `set advert.interval <mins>` | `0` (off) or min–240 | How often the repeater sends local (zero-hop) advertisements. `0` — the default — disables them. Stored halved (the pref holds minutes/2), so odd values round down. |
 | `set allow.read.only <on\|off>` | | *(room server only)* Allow or deny read-only client connections |
 | `set guest.password <pwd>` | | Set guest access password |
 | `set owner.info <text>` | Use `\|` for newlines | Owner/contact information |
 | `set int.thresh <value>` | | Interference detection threshold |
+| `set buzzer <0\|1\|2\|3>` | or `off` / `on` / `vibrate` / `sound` | *(room server only)* `0`/`off` silent, `1`/`on` sound + vibration, `2`/`vibrate` vibration only, `3`/`sound` sound only. Modes 2 and 3 need a vibration motor; without one the node replies `Error: no vibration motor on this board - use 0 or 1`. Applied live and persisted. Compiled out on repeater builds. |
 | `set leds <on\|off\|1\|0>` | default **on** | Master switch for every LED on the node, applied live and persisted: heartbeat, unread-message and LoRa TX-activity LEDs, plus the message and shutdown flashes. Works on every role, including headless repeaters where the TX LED is the only one that ever lights. Does **not** cover the display backlight, which is a separate UI brightness setting. |
-| `set agc.reset.interval <ms>` | Accepted, ignored | Removed - replies `use rxduty instead` |
+| `set agc.reset.interval <ms>` | Accepted, ignored | Removed — replies `Removed - Automatic AGC reset is on`. The prefs byte is still read and written so the on-flash layout stays byte-exact, but nothing acts on it. |
 | `set multi.acks <0\|1>` | | Enable extra ACK transmits |
 | `set path.hash.mode <mode>` | 0, 1, or 2 | Path hashing algorithm |
 | `set loop.detect <mode>` | `off`, `minimal`, `moderate`, `strict` | Loop detection sensitivity |
 | `set radio.rxgain <0\|1\|on\|off>` | | RX gain boost, applied live. Replies `Error: unsupported` on radios without RX boost (SX127x); the pref is still saved. |
 | `set rxduty <0\|1\|on\|off>` | | RX duty cycle mode *(reboot required)*. Window timing auto-sized per SF/BW/preamble from the SX126x datasheet constraints (boot log line `rxduty:` shows the result). Zero-loss guarantee assumes senders on preamble-32 firmware (current MeshCore at SF≤8); legacy preamble-16 senders are only caught ~50% worst-phase — keep off until the local mesh has converted. Presets with 16-symbol preambles (SF≥9) fall back to continuous RX automatically. |
-| `set adc.multiplier <mult>` | (0 = use board default) | Battery voltage ADC calibration multiplier |
+| `set adc.multiplier <mult>` | `0` (use board default) or 100–30000 | Battery voltage ADC calibration multiplier, set directly. Rejects non-numeric input, NaN/inf and negatives. |
+| `set adc.multiplier target <mv>` | 3000–4400 mV | Calibrate against a voltage you measured with a multimeter: rescales the current multiplier so the ADC reads `<mv>`. Replies with the old and new multiplier plus the before/after reading. `Error: no ADC reading on this board` if the board has no battery ADC. |
+| `set adc.multiplier full` | board must be fully charged | Same calibration, but against the board's battery-curve 100% point instead of a hand-measured value. Only meaningful on a full charge. |
 | `set meshtimesync <on\|off>` | default **off** | Mesh time sync: automatically correct this node's clock from the consensus of Ed25519-signed advert timestamps heard on the mesh. Steps at most ±1 h per step, one step per 6 h; abstains without a quorum (default 6) of tenured agreeing senders; never overrides a clock set in the last 7 days, whether from GPS (re-armed on every fix) or a manual set. See `MESHTIMESYNC.md`. |
 | `set cad.auto <on\|off>` | default **on** | Adaptive CAD: let the staircase controller move the operating detPeak offset based on probe statistics. On by default (repeaters and companions); at the default 15 s probe interval it responds to environment change in ~1–2 h. Turn off to observe/hand-tune via `get cad` + `set cad.offset`. See `ADAPTIVE_CAD.md`. |
 | `set cad.offset <n>` | −8 to 12, default 0 | Operating detPeak offset from the chip family's per-SF base (SX126x: SF+13; LR11xx/LR20xx: 56–68 table). Negative = more sensitive LBT (catches weaker signals, risks false busy), positive = less sensitive. Wide range so dense hilltops / quiet valleys can settle far from base. The per-family absolute clamp in the driver (SX126x 15–40, LR 48–90) is a firmware guardrail against a CAD that never/always fires, not a chip limit (`cadDetPeak` is a full `uint8_t`). Applied live; the auto staircase may move it later if `cad.auto` is on. |
@@ -307,13 +321,13 @@ Changes are persisted immediately unless noted. Some require a reboot.
 | `set cad.busycap <pct>` | 0 (off) or 10–90, default **25** | Airtime-protection cap: the max percentage of TX attempts the node will let CAD defer before the staircase backs off to a less sensitive detPeak — counting **real** traffic, not just false positives. On a congested hilltop most busy verdicts are distant traffic won on capture anyway, so deferring for all of it starves the node's own airtime. Self-targeting: a quiet node's busy rate never reaches the cap. Shown as `bc:` in `get cad`. 0 disables the cap (pure knee-seeking). |
 | `set cad.reset` | | Clear the accumulated per-level CAD probe statistics (RAM only; also cleared automatically on any radio parameter change). |
 | `set extra.sf <sf> [sf] [sf]` | up to 3 SFs, `0`/`off` clears | **LR2021 only** (`Error: unsupported` elsewhere) — LoRa *side detectors*: demodulate up to three extra spreading factors concurrently with `sf`, on the same bandwidth, so one repeater can serve several SF communities. Which SF a packet arrived on is a chip-side readout, not a guess. Chip constraints, enforced in the driver and reported as `Error: unsupported or invalid extra SF config`: every extra SF must be **greater** than `sf`, all distinct, highest−lowest ≤ 4, and at BW ≥ 500 kHz at most 2 (only 1 when `sf` ≥ 10). **Receive only, and the bridge it creates is one-way.** TX always uses the single configured `sf`, and all detectors share one bandwidth, so this is multi-SF, not multi-channel. A node with `sf 7` + `extra.sf 8` hears SF8 traffic and *does* forward it — but the forward goes out at SF7, so traffic moves SF8 -> SF7 only and nothing comes back. An SF8 node's direct messages are delivered while its ACKs never arrive, so it retries to its limit every time; adverts and one-way flood traffic propagate fine. Because every extra SF must be **greater** than `sf`, the main SF is always the lowest in the set and TX always uses it — so the bridge direction is fixed at high-SF-in / low-SF-out and **cannot be reversed**. Two nodes back to back both point the same way; there is no configuration that carries SF7 -> SF8. Treat it as a collector for slower-SF stragglers, not as a link between two SF islands. Applied live and restored on every RX entry. **Interaction with CAD:** the chip's SF constraint for CAD is the inverse of the one for RX, so the driver switches side detectors off for each LBT CAD and back on when RX re-arms — two extra SPI commands per TX, no configuration required. Persisted; a set that no longer fits after an `sf`/`bw` change is refused at boot and logged. |
-| `set prv.key <hex>` | 64-char hex (32-byte key) | Replace private key; derive new identity *(reboot to apply)* |
+| `set prv.key <hex>` | **128-char hex** (64-byte expanded Ed25519 key) | Replace private key; derive new identity *(reboot to apply)*. The length must be exact — `fromHex` rejects anything else with `Error, bad key`. `get prv.key` returns the same 128-char form. Not USB-gated. |
 
 ---
 
 ## Notes
 
-- **USB-only commands** — `get acl`, `get prv.key`, `get public.key`, `set freq`, `log` (dump), `stats-*`, `erase` — are blocked when the command arrives over the mesh (remote admin).
+- **USB-only commands** — `get acl`, `get prv.key`, `set freq`, `log` (dump), `stats-packets`, `stats-radio`, `stats-core`, `erase` — are blocked when the command arrives over the mesh (remote admin). These are the only ones gated on `sender_timestamp == 0`; `get public.key` and `set prv.key` are **not** among them.
 - **Adaptive contention window** — `txdelay`, `rxdelay`, and `direct.txdelay` are accepted and stored for Arduino prefs compatibility but have no effect. Use `get txdelay` to inspect the current adaptive state and `set backoff.multiplier` to tune reactive backoff.
 - **Region load mode** — after `region load`, every line received is parsed as a region entry until a blank line is sent. The loaded map is only committed to the live region tree at that point; use `region save` to persist it.
-- **Reboot delay** — `start dfu`, `start ota`, and `reboot` defer the reboot by ~600 ms so the reply can be transmitted over LoRa before the device resets.
+- **Reboot delay** — `start dfu`, `start ota` (nRF52 BLE-DFU path only), `reboot`, `clkreboot` and `erase` defer the reset by **2 seconds** so the reply can be transmitted over LoRa first. On a companion the handler then keeps deferring in 20 ms steps until the BLE/USB transport has drained, up to a further 3 s grace. On ESP32 `start ota` starts a WiFi AP + HTTP server and does **not** reboot.
