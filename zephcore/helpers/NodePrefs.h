@@ -93,6 +93,7 @@ struct NodePrefs {
 	float adc_multiplier;
 	char owner_info[120];
 	uint8_t rx_boost;               // 1 = boosted RX gain (+3dB), 0 = power save
+	uint8_t fem_rxgain;             // 1 = external FEM LNA active during RX, 0 = off (power save)
 	uint8_t rx_duty_cycle;          // 1 = RX duty cycle, 0 = continuous RX
 	/* RESERVED — formerly apc_enabled / apc_margin (Adaptive Power Control,
 	 * removed in 1.16.6). These two bytes are still read and written at their
@@ -217,6 +218,7 @@ static inline void sanitizeNodePrefs(NodePrefs* p) {
 	p->powersaving_enabled = saneBool<uint8_t>(p->powersaving_enabled, 0);
 	/* Defaults that are on, not off. */
 	p->rx_boost            = saneBool<uint8_t>(p->rx_boost, 1);
+	p->fem_rxgain          = saneBool<uint8_t>(p->fem_rxgain, 1);
 	p->wake_on_msg         = saneBool<uint8_t>(p->wake_on_msg, 1);
 	p->v_contact_enabled   = saneBool<uint8_t>(p->v_contact_enabled, 1);
 	/* Never let a corrupt byte take the radio off the air or hide BLE — both
@@ -302,6 +304,10 @@ static inline void initNodePrefs(NodePrefs* prefs) {
 	prefs->advert_loc_policy = ADVERT_LOC_NONE;
 	prefs->adc_multiplier = 0.0f;
 	prefs->rx_boost = 1;              // Default to boosted RX for better sensitivity
+	/* Default ON: the FEM's chip-enable has always been asserted for RX on the
+	 * boards that have one, so 1 is the historical behaviour and the only safe
+	 * default -- 0 costs the FEM's RX gain (~16 dB on SKY66122). */
+	prefs->fem_rxgain = 1;
 	prefs->rx_duty_cycle = 0;         // Default OFF — continuous RX for best reliability
 	prefs->_reserved_apc_enabled = 0; // reserved (was APC), see NodePrefs
 	prefs->_reserved_apc_margin = 0;  // reserved (was APC), see NodePrefs

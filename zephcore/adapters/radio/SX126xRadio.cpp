@@ -101,6 +101,20 @@ void SX126xRadio::hwSetRxBoost(bool enable)
 	sx126x_set_rx_boost(_dev, enable);
 }
 
+bool SX126xRadio::setFemRxEnable(bool enable)
+{
+	/* Pure driver-side flag -- no SPI, no chip state.  It takes effect at the
+	 * next RX/TX/sleep transition, and startReceive() goes through one, so
+	 * there is nothing to re-apply here.  Returns false when this board wires
+	 * no antenna-enable line, so the CLI reports "unsupported" rather than
+	 * acknowledging a setting that cannot do anything. */
+	if (!sx126x_set_fem_rx_enable(_dev, enable)) {
+		return false;
+	}
+	LOG_INF("FEM RX gain %s", enable ? "enabled" : "disabled");
+	return true;
+}
+
 bool SX126xRadio::hwIsChipBusy()
 {
 	return sx126x_is_chip_busy(_dev);

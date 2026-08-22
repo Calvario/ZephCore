@@ -3,8 +3,8 @@
  * SX126x native driver — extension API
  *
  * Functions extending the standard Zephyr lora_driver_api with
- * SX126x-specific features (duty cycle, RX boost, RSSI readout,
- * preamble detection).
+ * SX126x-specific features (duty cycle, RX boost, external FEM gating,
+ * RSSI readout, preamble detection).
  */
 
 #ifndef SX126X_EXT_H
@@ -49,6 +49,26 @@ bool sx126x_is_receiving(const struct device *dev);
  * @param enable true to enable boost
  */
 void sx126x_set_rx_boost(const struct device *dev, bool enable);
+
+/**
+ * @brief Enable/disable an external FEM's LNA in the RX direction
+ *
+ * Boards with an external front-end module wire its chip-enable to
+ * antenna-enable-gpios (KCT8103L CSD, SKY66122 CSD+CPS).  The driver normally
+ * asserts that line for both RX and TX.  Passing false withholds it for RX
+ * only: the FEM's LNA and its supply current (~6.5 mA on SKY66122) drop out,
+ * at the cost of the FEM's RX gain (~16 dB on the same part).  TX always
+ * asserts the line, and sleep/idle always clears it, so neither the transmit
+ * path nor the driver's idle gating is affected.
+ *
+ * Default is enabled.
+ *
+ * @param dev    LoRa device
+ * @param enable true to keep the FEM active during RX
+ * @return true if this board has an antenna-enable line to gate, false if it
+ *         has none (in which case the call did nothing)
+ */
+bool sx126x_set_fem_rx_enable(const struct device *dev, bool enable);
 
 /**
  * @brief Check if the radio chip is busy (cannot accept SPI commands)

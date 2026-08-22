@@ -38,10 +38,30 @@ top of upstream:
     C++ caller.  sx126x_lora_recv_async() has an idempotent fast path, so the
     failure-path startReceive() on that side is a no-op.
 
+  * External FEM/LNA RX gating -- sx126x_set_fem_rx_enable() plus the
+    fem_rx_off flag it sets.  antenna-enable-gpios is the chip-enable line of
+    the external FEM on the boards that route it there (KCT8103L CSD on
+    heltec_t096, heltec_wireless_tracker_v2 and heltec_wifi_lora32_v43;
+    GC1109 CSD on heltec_wifi_lora32_v4), and the driver asserts it for RX and
+    TX alike.  With the flag set, sx126x_set_rf_path() withholds it in the RX
+    direction only, so the FEM's LNA and its supply current drop out while TX
+    still gets the PA path and sleep/idle keeps clearing the line as before.
+    The setter returns false where the board declares no antenna-enable line,
+    so the CLI can report that rather than acknowledging a no-op -- that is
+    the rak3401_1watt case, where the SKY66122 enable is a standalone
+    regulator-boot-on rail outside the radio node.
+
+    The pin stays driver-owned throughout.  Taking it over from devicetree
+    instead would cost the idle gating, drop the ESP32 sleep-hold flags those
+    nodes carry, and on the boards whose CTX net is a separate tx-enable-gpios
+    it would desynchronise the external switch from DIO2.  Backs
+    `set radio.fem.rxgain` (default on = historical behaviour).
+
   * Extension API for the C++ adapter (sx126x_ext.h): sx126x_is_chip_busy,
-    sx126x_is_receiving, sx126x_set_rx_boost, sx126x_reset_agc,
-    sx126x_get_rssi_inst, sx126x_get_wakeup_time_us, the dc-restart counters,
-    the CAD tuning trio, and sx126x_apply_heltec_reg_patch.
+    sx126x_is_receiving, sx126x_set_rx_boost, sx126x_set_fem_rx_enable,
+    sx126x_reset_agc, sx126x_get_rssi_inst, sx126x_get_wakeup_time_us, the
+    dc-restart counters, the CAD tuning trio, and
+    sx126x_apply_heltec_reg_patch.
 
 In sx126x_hal.c, SX1262 Tx params use a measured-optimal PaConfig table indexed
 by requested power (RadioLib PR #1662) instead of the datasheet's fixed
@@ -1099,11 +1119,18 @@ index 30243ba5dc7..3a8bc017a52 100644
  }
  
  static void sx126x_set_rf_path(const struct device *dev, bool enable, bool tx)
-@@ -406,7 +900,20 @@ static void sx126x_set_rf_path(const struct device *dev, bool enable, bool tx)
+@@ -406,7 +900,26 @@ static void sx126x_set_rf_path(const struct device *dev, bool enable, bool tx)
  	const struct sx126x_hal_config *config = dev->config;
++	struct sx126x_data *data = dev->data;
  
- 	sx126x_hal_set_antenna_enable(dev, enable);
+-	sx126x_hal_set_antenna_enable(dev, enable);
 -	if (!config->dio2_tx_enable) {
++	/* An external FEM's enable line is asserted for TX unconditionally.  For
++	 * RX it follows fem_rx_off (the radio.fem.rxgain pref, applied through
++	 * sx126x_set_fem_rx_enable): clearing it drops the FEM's LNA and its
++	 * supply current, at the cost of that gain.  `enable` still wins, so
++	 * sleep and idle keep gating the line exactly as they did before. */
++	sx126x_hal_set_antenna_enable(dev, enable && (tx || !data->fem_rx_off));
 +	if (config->dio2_tx_enable) {
 +		/* DIO2 handles TX enable in hardware -- but rx-enable-gpios
 +		 * (e.g. E22-900M30S RXEN) and some board-specific tx-enable
@@ -1971,7 +1998,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  	if (ret < 0) {
  		sx126x_set_sleep(dev);
  		k_mutex_unlock(&data->lock);
-@@ -1083,14 +2213,812 @@ static int sx126x_lora_test_cw(const struct device *dev, uint32_t frequency,
+@@ -1083,14 +2213,828 @@ static int sx126x_lora_test_cw(const struct device *dev, uint32_t frequency,
  	return 0;
  }
  
@@ -2124,6 +2151,22 @@ index 30243ba5dc7..3a8bc017a52 100644
 +	k_mutex_lock(&data->lock, K_FOREVER);
 +	sx126x_set_rx_gain(dev, enable);
 +	k_mutex_unlock(&data->lock);
++}
++
++bool sx126x_set_fem_rx_enable(const struct device *dev, bool enable)
++{
++	struct sx126x_data *data = dev->data;
++	const struct sx126x_hal_config *config = dev->config;
++
++	/* Stored inverted so the zero-initialised default is "FEM on in RX",
++	 * which is what the driver did before this knob existed.  No SPI and no
++	 * chip state: sx126x_set_rf_path() reads it on the next RX/TX/sleep
++	 * transition, and every RX (re)start passes through there. */
++	data->fem_rx_off = !enable;
++
++	/* False when the board wires no antenna-enable line: there is no FEM to
++	 * gate, so the caller can say so instead of acknowledging a no-op. */
++	return config->antenna_enable.port != NULL;
 +}
 +
 +void sx126x_reset_agc(const struct device *dev)
@@ -2837,7 +2880,7 @@ diff --git a/drivers/lora/native/sx126x/sx126x.h b/drivers/lora/native/sx126x/sx
 index 9dbf3f26586..b6df07ce7ab 100644
 --- a/drivers/lora/native/sx126x/sx126x.h
 +++ b/drivers/lora/native/sx126x/sx126x.h
-@@ -56,13 +56,96 @@ struct sx126x_data {
+@@ -56,13 +56,104 @@ struct sx126x_data {
  	/* Async RX callback */
  	lora_recv_cb rx_cb;
  	void *rx_cb_user_data;
@@ -2854,6 +2897,14 @@ index 9dbf3f26586..b6df07ce7ab 100644
 +	/* Extension features (duty cycle, boost) */
 +	bool rx_duty_cycle_enabled;
 +	bool rx_boost_enabled;
++
++	/* External FEM/LNA gating for the RX direction, set by
++	 * sx126x_set_fem_rx_enable().  Negative logic so the zero-initialised
++	 * default preserves the historical behaviour -- antenna-enable-gpios
++	 * asserted for both RX and TX.  When set, sx126x_set_rf_path() drops
++	 * the line for RX only: TX still asserts it and sleep/idle still
++	 * clears it, so the driver keeps sole ownership of the pin. */
++	bool fem_rx_off;
 +
 +	/* AgcSensiAdjust value for the configured band (DS Table 6-4), cached
 +	 * because it shares register 0x08AC with the RX gain bits and so has

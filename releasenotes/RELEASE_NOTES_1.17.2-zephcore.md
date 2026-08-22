@@ -191,6 +191,31 @@ An LR1110 running firmware older than 0x0303 cannot be moved off the public LoRa
 and receives perfectly well, but nobody on your mesh can see it. That now appears in the log instead of
 looking like a broken radio.
 
+## New setting: switch the antenna amplifier's receive gain off
+
+Some boards carry an extra amplifier chip between the radio and the antenna. It boosts what the node
+transmits, and on the way in it boosts what the node hears. It has always been switched on for both, and
+it stays that way — **nothing changes unless you change it.**
+
+The new `set radio.fem.rxgain 0` switches off only the receive side, to save the current that part of the
+amplifier draws. Transmitting is untouched: every packet the node sends still goes out through the
+amplifier at full strength. `set radio.fem.rxgain 1` puts it back, and `get radio.fem.rxgain` shows where
+it stands. The node keeps the setting across reboots.
+
+> [!WARNING]
+> **This costs range, and a lot of it.** With the receive side off the node goes substantially deafer —
+> on a Wireless Tracker V2 the measured noise floor moves by about 23 dB between the two settings. Distant
+> and weak neighbours simply stop being heard, while the node's own transmissions carry exactly as far as
+> before, so from the outside it still looks perfectly healthy. Only worth doing on a battery-powered node
+> where you already know every neighbour is close and strong.
+
+Supported on the **Heltec T096**, **Wireless Tracker V2**, **WiFi LoRa 32 V4** and **WiFi LoRa 32 V4.3**.
+Everything else replies `Error: unsupported` — either the board has no such amplifier, or its amplifier is
+switched on by a line the radio driver cannot reach. The **RAK3401 1 W** is in that second group.
+
+Proposed by **bisbille** ([@bisbille](https://github.com/bisbille)) —
+[#74](https://github.com/liquidraver/ZephCore/pull/74).
+
 ---
 
 ## Also in this release
@@ -219,3 +244,7 @@ Housekeeping, listed for completeness — nothing here changes how a node behave
   but no real node has been broken and recovered. Normal healthy nodes are unaffected.
 - **Why that one node's identity broke is still unknown.** This release makes sure the same thing can no
   longer go unnoticed, but the original cause has not been found.
+- **The antenna amplifier receive setting is compile-checked on every affected board, but has not been
+  measured on hardware in this form.** The 23 dB figure above comes from the original proposal, which
+  reached the same pin by a different route. Leaving the setting alone keeps every node behaving exactly
+  as it did before, so a node nobody deliberately switches over is not affected at all.

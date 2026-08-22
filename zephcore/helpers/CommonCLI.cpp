@@ -544,6 +544,8 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
             snprintf(reply, CLI_REPLY_SIZE, "> %.6f", _prefs->node_lat);
         } else if (memcmp(config, "lon", 3) == 0) {
             snprintf(reply, CLI_REPLY_SIZE, "> %.6f", _prefs->node_lon);
+        } else if (memcmp(config, "radio.fem.rxgain", 16) == 0) {
+            snprintf(reply, CLI_REPLY_SIZE, "> %d", (int)_prefs->fem_rxgain);
         } else if (memcmp(config, "radio.rxgain", 12) == 0) {
             snprintf(reply, CLI_REPLY_SIZE, "> %d", (int)_prefs->rx_boost);
         } else if (memcmp(config, "radio", 5) == 0) {
@@ -1170,6 +1172,25 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                 }
             } else {
                 strcpy(reply, "Error: unsupported by this board");
+            }
+        } else if (memcmp(config, "radio.fem.rxgain ", 17) == 0) {
+            const char* arg = &config[17];
+            int val = -1;
+            if (memcmp(arg, "on", 2) == 0) val = 1;
+            else if (memcmp(arg, "off", 3) == 0) val = 0;
+            else if (arg[0] == '0' || arg[0] == '1') val = atoi(arg);
+            if (val == 0 || val == 1) {
+                /* Same shape as radio.rxgain: always save, then apply live and
+                 * report when the radio driver has no FEM gate. */
+                _prefs->fem_rxgain = (uint8_t)val;
+                savePrefs();
+                if (_callbacks->setFemRxGain(val == 1)) {
+                    snprintf(reply, CLI_REPLY_SIZE, "OK - radio.fem.rxgain=%d", _prefs->fem_rxgain);
+                } else {
+                    strcpy(reply, "Error: unsupported");
+                }
+            } else {
+                strcpy(reply, "Error: must be 0, 1, on, or off");
             }
         } else if (memcmp(config, "radio.rxgain ", 13) == 0) {
             const char* arg = &config[13];

@@ -46,6 +46,10 @@ public:
     /* Apply RX boosted gain live; returns false when the radio has no
      * RX boost feature (upstream PR #2844 semantics). */
     virtual bool setRxBoostedGain(bool enable) { (void)enable; return false; }
+    /* Gate an external FEM/LNA in the RX direction, live.  Same semantics:
+     * false means the radio driver has no such knob.  On a supported radio
+     * whose board has no FEM wired it returns true and does nothing. */
+    virtual bool setFemRxGain(bool enable) { (void)enable; return false; }
     /* Configure LR2021 side detectors (multi-SF receive); num = 0 disables.
      * Returns false when the radio has no side detectors, or when the set
      * violates a chip constraint — the driver is the validator. */

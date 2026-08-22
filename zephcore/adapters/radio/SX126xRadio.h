@@ -16,6 +16,11 @@ public:
 
 	void begin() override;
 
+	/* Gate the external FEM's LNA in the RX direction (radio.fem.rxgain).
+	 * Delegates to the driver, which owns the antenna-enable pin; returns
+	 * false on a board that has no such pin, i.e. no FEM to gate. */
+	bool setFemRxEnable(bool enable) override;
+
 	/* Duty-cycle preamble false-positive stats (SX126x-specific) */
 	uint32_t getDutyCycleTimeoutRestarts() const override;
 	void resetDutyCycleTimeoutRestarts() override;

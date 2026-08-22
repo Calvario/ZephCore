@@ -957,6 +957,10 @@ bool RoomServerMesh::setRxBoostedGain(bool enable) {
     return getRadioDriver(_radio).setRxBoost(enable);
 }
 
+bool RoomServerMesh::setFemRxGain(bool enable) {
+    return getRadioDriver(_radio).setFemRxEnable(enable);
+}
+
 bool RoomServerMesh::configSideDetectors(const uint8_t* sfs, uint8_t num) {
     return getRadioDriver(_radio).configSideDetectors(sfs, num);
 }

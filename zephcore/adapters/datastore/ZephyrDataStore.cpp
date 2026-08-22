@@ -866,6 +866,14 @@ void ZephyrDataStore::loadPrefs(NodePrefs &prefs)
 		prefs.v_contact_flags = buf[off++];
 	}
 
+	/* Offset 167: fem_rxgain (ZephCore extension).  Absent in pre-existing
+	 * files → keeps the caller's initNodePrefs() default of 1, which is the
+	 * behaviour every deployed node already has (the FEM's chip-enable has
+	 * always been asserted for RX). */
+	if (off < len) {
+		prefs.fem_rxgain = buf[off++];
+	}
+
 	sanitizeNodePrefs(&prefs);
 }
 
@@ -966,7 +974,9 @@ void ZephyrDataStore::savePrefs(const NodePrefs &prefs)
 	off += EXTRA_SF_MAX;
 	/* Offset 166: v_contact_flags (ZephCore extension) */
 	buf[off++] = prefs.v_contact_flags;
-	/* Total: 167 bytes */
+	/* Offset 167: fem_rxgain (ZephCore extension, external FEM LNA in RX) */
+	buf[off++] = prefs.fem_rxgain;
+	/* Total: 168 bytes */
 
 	bool ok = atomicReplaceFile(PREFS_FILE, buf, off);
 	LOG_DBG("savePrefs: wrote %s, ok=%d (%d bytes), name='%.16s'",

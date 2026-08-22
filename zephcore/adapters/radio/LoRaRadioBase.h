@@ -85,6 +85,16 @@ public:
 	virtual bool setRxBoost(bool enable);
 	bool isRxBoostEnabled() const { return _rx_boost_enabled; }
 
+	/* External FEM/LNA gain during RX.  Boards carrying a front-end module
+	 * wire its chip-enable to the radio's antenna-enable line, which the
+	 * driver asserts for RX and TX alike; disabling this withholds it in the
+	 * RX direction only, trading the FEM's RX gain for its supply current.
+	 * The transmit path and the driver's idle gating are unaffected.
+	 * Returns false on radios that do not implement the knob (everything but
+	 * the native SX126x today); on an SX126x board with no FEM wired it
+	 * succeeds and does nothing, since there is no pin to withhold. */
+	virtual bool setFemRxEnable(bool enable) { (void)enable; return false; }
+
 	/* Multi-SF receive via LoRa side detectors.  Only the LR2021 has them;
 	 * every other radio reports the feature as unsupported.  `num` = 0
 	 * disables.  Returns false if the radio has no side detectors or the
