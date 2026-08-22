@@ -2,16 +2,45 @@
  * SPDX-License-Identifier: MIT
  * XIAO nRF54L15 + Wio-SX1262 LoRa
  *
+ * Verified 2026-08-22 against primary sources (see datasheets/README.md):
+ * Seeed XIAO nRF54L15 schematic, the Wio-SX1262-for-XIAO carrier schematic,
+ * and the Wio-SX1262-N module datasheet.
+ *
  * Pin mapping (XIAO nRF54L15 connector → Wio-SX1262):
  * - D1 (P1.05)  = DIO1    - D8  (P2.01)  = SPI SCK  (spi00)
  * - D2 (P1.06)  = RESET   - D9  (P2.04)  = SPI MISO (spi00)
  * - D3 (P1.07)  = BUSY    - D10 (P2.02)  = SPI MOSI (spi00)
  * - D4 (P1.10)  = NSS
  * - D5 (P1.11)  = RXEN
+ * The D-pin numbers come from the XIAO schematic's connector sheet, and the
+ * same D-pin assignment is used by our xiao_esp32c6 board on this same
+ * Wio-SX1262 carrier — two independent boards agreeing on the kit's wiring.
+ *
+ * Radio module facts, from the Wio-SX1262-N module datasheet:
+ * - RF_SW pin: "logic high level means enable receiver mode" → rx-enable-gpios
+ *   is active high, which is what is set below.
+ * - DIO2 is internally connected to the RF switch, "logic high = enable
+ *   transmitter" → dio2-tx-enable, no separate TXEN line.
+ * - DIO3 supplies the module's TCXO. Permitted 1.7–3.3 V, and it must stay at
+ *   least 200 mV below VCC (3.3 V here), so the 1.8 V below is in range.
+ * - The module wires the SX1262 for DC-DC, not LDO. The Zephyr driver already
+ *   defaults to DC-DC — `regulator-ldo` must NOT be added to the lora node.
+ *
+ * Clocks: the XIAO carries its own 32.768 kHz crystal (7 pF, 20 ppm), so the
+ * upstream board DTS enables LFXO and this node keeps accurate time. The
+ * ME25LS02, the other nRF54L board here, has no such crystal and runs the RC
+ * instead — do not copy clock settings between the two.
  *
  * Console: UART20 (P1.09 TX, P1.08 RX) via SAMD11 CMSIS-DAP bridge → USB CDC
  * Flash: RRAM (not traditional NV flash)
- * Flash via: SWD through SAMD11 CMSIS-DAP (west flash / openocd)
+ * Flash via: SWD through SAMD11 CMSIS-DAP (west flash / openocd). The
+ *   nRF54L15 has no USB peripheral, so there is no UF2 or DFU path — the
+ *   published artifact is zephyr.hex, which links at RRAM base 0x0.
+ *
+ * Battery: the board has a charger (SGM40567, 200 mA) and a 2:1 divider on
+ * P1.14/AIN7, gated by P1.15/VBAT_EN (already a boot-on regulator in the
+ * upstream DTS). ZephCore does not read it yet — see the commented block at
+ * the bottom of this file for what is known and what still has to be measured.
  */
 
 #include <zephyr/dt-bindings/lora/sx126x.h>
@@ -27,7 +56,16 @@
 	status = "disabled";
 };
 
-/* SX1262 on spi00 (XIAO SPI bus — SCK/MISO/MOSI already in pinctrl) */
+/*
+ * SX1262 on spi00 (XIAO SPI bus — SCK/MISO/MOSI already in pinctrl).
+ *
+ * Note the divergence from the ME25LS02, which is the same SoC talking to the
+ * same radio: that board deletes `rx-delay-supported`/`rx-delay` from spi00
+ * because MinewSemi's working sample does. This board keeps the SoC defaults
+ * (rx-delay = 1) and works. Neither setting has been A/B'd on hardware, so
+ * they are deliberately left as each board's known-good configuration rather
+ * than unified on a guess.
+ */
 &spi00 {
 	cs-gpios = <&gpio1 10 GPIO_ACTIVE_LOW>;  /* D4 = P1.10 NSS */
 
@@ -89,3 +127,49 @@
 
 /* LittleFS auto-mount — standard /lfs mount point */
 #include "../../common/filesystem.dtsi"
+
+/*
+ * Battery voltage — NOT enabled, deliberately.
+ *
+ * The hardware is there: the schematic shows a 2:1 divider feeding P1.14/AIN7
+ * ("battery voltage = ADC sampling voltage * 2.0"), enabled by P1.15/VBAT_EN,
+ * which the upstream board DTS already declares as `vbat_pwr` with
+ * regulator-boot-on. So a plain ADC read needs no extra power sequencing.
+ *
+ * What is missing is a trustworthy scale factor. ZephyrBoard computes
+ * `mV = raw * vbat-mv-multiplier / 4096`, so the multiplier has to encode the
+ * ADC's full-scale voltage, and the nRF54L15 SAADC is not the nRF52 part we
+ * have that number for: its internal reference is 0.9 V, not 0.6 V, and DS
+ * v1.0 §8.18.7 states the single-ended range as "± 0.5*VREF/GAIN" while the
+ * saturation condition two lines later implies a full span of VREF/GAIN. Those
+ * two readings differ by a factor of two — and getting it wrong by 2x means a
+ * healthy pack reports as flat and the node warns about a battery that is fine.
+ *
+ * To finish this, measure it: enable the block below on a board with a known
+ * cell voltage, read `raw`, and solve for the multiplier. With gain 1/4 and the
+ * 0.9 V reference the full scale is either 3.6 V (multiplier 7200 for the 2:1
+ * divider) or 1.8 V (multiplier 3600). One measurement settles it.
+ *
+ *	&adc {
+ *		status = "okay";
+ *
+ *		#address-cells = <1>;
+ *		#size-cells = <0>;
+ *
+ *		channel@7 {
+ *			reg = <7>;
+ *			zephyr,gain = "ADC_GAIN_1_4";
+ *			zephyr,reference = "ADC_REF_INTERNAL";
+ *			zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+ *			zephyr,input-positive = <NRF_SAADC_AIN7>;
+ *			zephyr,resolution = <12>;
+ *		};
+ *	};
+ *
+ *	/ {
+ *		zephyr,user {
+ *			io-channels = <&adc 7>;
+ *			vbat-mv-multiplier = <7200>;
+ *		};
+ *	};
+ */

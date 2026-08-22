@@ -117,10 +117,14 @@
 	pinctrl-names = "default", "sleep";
 
 	/*
-	 * The nRF54L SPIM applies an RX sample delay that the SX126x does not
-	 * tolerate at these clock rates — MinewSemi drop it in their own sample
-	 * and so do we. Symptom if left in: garbage on MISO, driver never sees
-	 * the chip.
+	 * MinewSemi delete the SoC's spi00 RX sample delay in their own working
+	 * sample, so we do the same rather than diverge from the one
+	 * configuration known to run on this module.
+	 *
+	 * Worth knowing: xiao_nrf54l15 is the same SoC driving the same radio at
+	 * the same 8 MHz and keeps rx-delay = 1, so this is not a rule about the
+	 * SoC — it is untested either way and each board keeps what its vendor
+	 * shipped. If someone ever A/B's it on hardware, unify the two.
 	 */
 	/delete-property/ rx-delay-supported;
 	/delete-property/ rx-delay;
@@ -138,6 +142,12 @@
 		dio2-tx-enable;
 
 		/* Crystal, not TCXO — do not add dio3-tcxo-voltage. */
+
+		/*
+		 * The module fits the SX1262's DC-DC inductor (L7 on DCC_SW), and
+		 * the driver defaults to DC-DC regulator mode, so `regulator-ldo`
+		 * must NOT be added here — it would force the lossier LDO path.
+		 */
 
 		rx-boosted;
 	};

@@ -95,6 +95,7 @@ MAKER_BY_DEVICE = {
     "RAK6421 WisMesh (Raspberry Pi 5)": "rak",
     "muzi works R1 Neo": "muziworks",
     "MinewSemi ME25LS02": "minewsemi",
+    "Seeed Studio Xiao nRF54L15": "seeed",
 }
 
 DESCRIPTION = (
@@ -211,6 +212,10 @@ BOARDS = [
     # the .hex as a plain download and the user flashes it over SWD.
     dict(stem="me25ls02-nrf54l15-cpuapp", kind="nrf54l", device="MinewSemi ME25LS02",
          new=True, img="lora.svg"),
+    # Same story, except the XIAO carries a SAMD11 CMSIS-DAP bridge, so its own
+    # USB cable is enough (openocd/pyocd) -- still not a browser flash flow.
+    dict(stem="xiao_nrf54l15-nrf54l15-cpuapp", kind="nrf54l",
+         device="Seeed Studio Xiao nRF54L15", new=True, img="lora.svg"),
 
     # --- Native Linux (noflash, download only): new tiles ----------------
     dict(stem="zephcore_linux_femtofox",   kind="linux", device="Femtofox (Luckfox Pico Mini)", new=True, img="lora.svg"),
