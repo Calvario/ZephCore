@@ -78,6 +78,7 @@ MAKER_BY_DEVICE = {
     "LilyGo T-Beam (SX1262)": "lilygo",
     "LilyGo T-Impulse Plus": "lilygo",
     "LilyGo T-Lora C6": "lilygo",
+    "LilyGo T3 S3 (SX126x)": "lilygo",
     "ProMicro nrf52 (faketec)": "promicro",
     "Heltec T114": "heltec",
     "Heltec Mesh Node T096": "heltec",
@@ -185,6 +186,10 @@ BOARDS = [
     dict(stem="heltec_wifi_lora32_v4-esp32s3-procpu", kind="esp32", device="Heltec v4"),
     dict(stem="heltec_wireless_tracker-esp32s3-procpu",    kind="esp32", device="Heltec Wireless Tracker"),
     dict(stem="heltec_wireless_tracker_v2-esp32s3-procpu", kind="esp32", device="Heltec Wireless Tracker v2"),
+    # MeshCore splits this board by radio -- "(SX126x)" and "(SX127x)" are two
+    # separate tiles sharing the "LilyGo T3 S3" group. We only build the SX1262
+    # variant, so fold into the SX126x tile; an SX127x port would be its own entry.
+    dict(stem="lilygo_t3s3-esp32s3-procpu",        kind="esp32", device="LilyGo T3 S3 (SX126x)"),
     # ThinkNode M9 pulled from the build.sh release matrix 2026-07-22 (bring-up
     # still in progress — keypad/GPS/battery unverified on hardware). Restore
     # this line together with the build.sh entry once it's release-ready.

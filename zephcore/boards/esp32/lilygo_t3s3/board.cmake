@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+
 if(NOT "${OPENOCD}" MATCHES "^${ESPRESSIF_TOOLCHAIN_PATH}/.*")
   set(OPENOCD OPENOCD-NOTFOUND)
 endif()

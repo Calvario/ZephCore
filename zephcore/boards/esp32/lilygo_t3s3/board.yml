@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+
 board:
   name: lilygo_t3s3
   full_name: LilyGo T3S3

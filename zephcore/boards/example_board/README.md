@@ -41,6 +41,7 @@ SWD flash: `west flash` (requires J-Link, pyocd, or nrfjprog connected).
 | XIAO ESP32-C3        | `west build -b xiao_esp32c3 zephcore`                   | `west flash`    |
 | XIAO ESP32-C6        | `west build -b xiao_esp32c6/esp32c6/hpcore zephcore`    | `west flash`    |
 | LilyGo TLoRa C6      | `west build -b lilygo_tlora_c6/esp32c6/hpcore zephcore` | `west flash`    |
+| LilyGo T3S3 (SX1262) | `west build -b lilygo_t3s3/esp32s3/procpu zephcore`     | `west flash`    |
 | XIAO ESP32-S3        | `west build -b xiao_esp32s3/esp32s3/procpu zephcore`     | `west flash`    |
 | Station G2           | `west build -b station_g2/esp32s3/procpu zephcore`       | `west flash`    |
 | Heltec V3            | `west build -b heltec_wifi_lora32_v3/esp32s3/procpu zephcore` | `west flash` |

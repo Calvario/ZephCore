@@ -1,3 +1,7 @@
+# LilyGo T3S3 board configuration
+
+# SPDX-License-Identifier: MIT
+
 config BOARD_LILYGO_T3S3
 	select SOC_ESP32S3_WROOM_N4R2
 	select SOC_ESP32S3_PROCPU if BOARD_LILYGO_T3S3_ESP32S3_PROCPU

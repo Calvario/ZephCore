@@ -20,7 +20,16 @@
 
 #include <espressif/esp32s3/esp32s3_wroom_n4r2.dtsi>
 #include "lilygo_t3s3-pinctrl.dtsi"
-#include <espressif/partitions_0x0_amp_4M.dtsi>
+/*
+ * Base flash map: the *default* 4M table, not the _amp_ variant.
+ * partitions.overlay reclaims the stock layout with a /delete-node/ list whose
+ * labels match this table exactly. The amp table additionally defines
+ * slot0_appcpu (0x2C0000) and slot1_appcpu (0x330000..0x3A0000), which that
+ * list does not delete — they would survive and overlap the new slot1
+ * (0x1D6000..0x39C000) and storage (0x39C000). This board builds procpu-only,
+ * so the appcpu slots serve no purpose here in any case.
+ */
+#include <espressif/partitions_0x0_default_4M.dtsi>
 
 / {
 	model = "LilyGo T3S3";

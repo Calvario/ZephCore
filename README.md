@@ -46,6 +46,7 @@ Other benefits:
 | **XIAO ESP32-S3** | ESP32-S3 | SX1262 | BLE 5.0, 8MB flash, 8MB PSRAM |
 | **Station G2** | ESP32-S3 | SX1262 + PA (~20 dB gain) | OLED (SH1106), GPS, 16MB flash, 8MB PSRAM |
 | **LilyGo TLoRa C6** | ESP32-C6 | SX1262 | BLE 5.0, Wi-Fi 6 |
+| **LilyGo T3S3** | ESP32-S3 | SX1262 | OLED (SSD1306), button, TX LED, battery ADC, 4MB flash, 2MB PSRAM. **SX1262 variant only** — the SX1276/SX1280/LR1121 versions of this board are not supported |
 | **Heltec V3** | ESP32-S3 | SX1262 | OLED (SSD1306), 8MB flash |
 | **Heltec V4.2** | ESP32-S3 | SX1262 + GC1109 PA | OLED (SSD1306), 16MB flash, 2MB PSRAM |
 | **Heltec V4.3** | ESP32-S3 | SX1262 + KCT8103L PA | OLED (SSD1306), 16MB flash, 2MB PSRAM |

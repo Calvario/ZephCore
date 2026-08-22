@@ -385,7 +385,9 @@ endif()
 # so both the packet wake and the console flush land correctly. Deliberately
 # ABSENT and must stay absent unless their wiring changes:
 #   xiao_esp32s3 (DIO1=GPIO39), station_g2 (GPIO48), thinknode_m9 (GPIO42),
-#   lilygo_tlora_c6 (GPIO23, outside the C6's LP range 0-7)
+#   lilygo_tlora_c6 (GPIO23, outside the C6's LP range 0-7),
+#   lilygo_t3s3 (GPIO33 — and its console is USB Serial/JTAG, so it fails
+#     the second test below as well)
 #     -> cannot wake on a received packet; the node would go deaf while
 #        looking excellent on a current meter.
 #   ttgo_lora32 -> SX127x; patches/zephyr/0012 arms DIO1 in the sx126x driver
