@@ -35,6 +35,16 @@ Linux_boards=(
     rak6421_pi5
 )
 
+# nRF54L15 boards. No bootloader exists for this SoC (it has no USB
+# peripheral at all), so these build with --no-sysbuild and the app links at
+# RRAM base 0x0 -- zephyr.hex IS the whole image. Flashing is SWD only, which
+# is why they publish a .hex and no .uf2/.zip, and why they are download-only
+# in the Mesh America catalog.
+nRF54L_boards=(
+    me25ls02/nrf54l15/cpuapp
+    xiao_nrf54l15/nrf54l15/cpuapp
+)
+
 ESP32_boards=(
     xiao_esp32c3
     xiao_esp32c6/esp32c6/hpcore
@@ -113,6 +123,20 @@ if [[ $1 == "nrf" ]]; then
         cp img/* firmware/
         echo "Published device art: $(ls img/ | tr '\n' ' ')"
     fi
+fi
+
+if [[ $1 == "nrf54l" ]]; then
+    for board in "${nRF54L_boards[@]}"; do
+        board_clean_for_path=$(echo "$board" | sed -e 's/\//-/g')
+
+        echo "Now building $board companion"
+        west build -b "$board" zephcore --pristine --no-sysbuild
+        mv build/zephyr/zephyr.hex firmware/"$board_clean_for_path"-companion-"$COMMIT_HASH".hex
+
+        echo "Now building $board repeater"
+        west build -b "$board" zephcore --pristine --no-sysbuild -- -DEXTRA_CONF_FILE="boards/common/repeater.conf"
+        mv build/zephyr/zephyr.hex firmware/"$board_clean_for_path"-repeater-"$COMMIT_HASH".hex
+    done
 fi
 
 if [[ $1 == "linux" ]]; then

@@ -132,9 +132,14 @@ revision.
 | Board               | Build string                                                           | Flash           |
 |----------------------|------------------------------------------------------------------------|-----------------|
 | XIAO nRF54L15        | `west build -b xiao_nrf54l15/nrf54l15/cpuapp zephcore --no-sysbuild` | `west flash`    |
+| MinewSemi ME25LS02   | `west build -b me25ls02/nrf54l15/cpuapp zephcore --no-sysbuild`      | SWD (`west flash`) |
 
 Requires J-Link or CMSIS-DAP (built into XIAO board via SAMD11 bridge).
 The `--no-sysbuild` flag is required (no MCUboot support yet).
+
+The SoC has no USB peripheral at all, so neither board has a UF2 or DFU path — `zephyr.hex`
+links at RRAM base 0x0 and is the complete image, written over SWD. On the ME25LS02's MX25LE02
+carrier the USB-C port is a CH340x UART bridge (console only), so it needs an external probe.
 
 ### MG24 (Silicon Labs)
 

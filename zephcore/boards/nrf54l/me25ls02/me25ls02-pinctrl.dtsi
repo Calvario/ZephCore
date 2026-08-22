@@ -1,0 +1,54 @@
+/*
+ * MinewSemi ME25LS02 pin control
+ * Copyright (c) 2026 ZephCore
+ * SPDX-License-Identifier: MIT
+ *
+ * Pin assignments are fixed by the module: the SX1262 is wired inside the
+ * ME25LS02 can and those pins are not available for anything else.
+ * Source: ME25LS02 datasheet rev K §6 electrical schematic (the net list
+ * beside U2), cross-checked against MinewSemi's own working nRF Connect
+ * sample. Note that the DS §5.3.2 *table* disagrees with its own schematic
+ * and lists P0.01 twice — the schematic is the one that matches the sample
+ * and is what we follow. See datasheets/README.md.
+ */
+
+&pinctrl {
+	/* SX1262 on spi00 (the high-speed SPI instance) */
+	spi00_default: spi00_default {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 2, 1)>,
+				<NRF_PSEL(SPIM_MOSI, 2, 2)>,
+				<NRF_PSEL(SPIM_MISO, 2, 4)>;
+		};
+	};
+
+	spi00_sleep: spi00_sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 2, 1)>,
+				<NRF_PSEL(SPIM_MOSI, 2, 2)>,
+				<NRF_PSEL(SPIM_MISO, 2, 4)>;
+			low-power-enable;
+		};
+	};
+
+	/* Console UART -> CH340x -> USB-C. Jumpers JP1/JP2 on the dev board
+	 * connect these to the bridge; they are fitted by default. */
+	uart20_default: uart20_default {
+		group1 {
+			psels = <NRF_PSEL(UART_TX, 1, 5)>;
+		};
+
+		group2 {
+			psels = <NRF_PSEL(UART_RX, 1, 4)>;
+			bias-pull-up;
+		};
+	};
+
+	uart20_sleep: uart20_sleep {
+		group1 {
+			psels = <NRF_PSEL(UART_TX, 1, 5)>,
+				<NRF_PSEL(UART_RX, 1, 4)>;
+			low-power-enable;
+		};
+	};
+};

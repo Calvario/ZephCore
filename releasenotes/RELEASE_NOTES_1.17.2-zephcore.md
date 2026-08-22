@@ -49,6 +49,29 @@ The **LilyGo T3S3** is now supported — ESP32-S3 with an OLED screen, a button 
 > LR1121) under one name. Flashed onto any of the others it boots and looks fine but never transmits or
 > receives. Check which radio your board has first.
 
+## New board: MinewSemi ME25LS02
+
+The **ME25LS02** is now supported — a MinewSemi module pairing an nRF54L15 with an SX1262, aimed at
+people building low-cost repeaters. Both companion and repeater builds are provided, and the module's
+LLCC68 variant uses the same firmware. Requested by **xpiREC**
+([@xpiREC](https://github.com/xpiREC)), who also published the development board's documentation —
+[#68](https://github.com/liquidraver/ZephCore/issues/68).
+
+> [!IMPORTANT]
+> **This board can only be flashed with an SWD probe** — a J-Link or similar. The nRF54L15 has no USB
+> hardware at all, so there is no drag-and-drop UF2 file and no update over a cable. The USB-C socket on
+> the development board is a serial adapter for the console, not a programming port. The firmware is
+> published as a `.hex` file, and the Mesh America configurator lists the board as a download rather than
+> offering to flash it.
+
+The development board's RGB indicator and its user button both work, and the console appears on the
+USB-C serial port at 115200 baud.
+
+> [!NOTE]
+> **The node keeps time less precisely than most boards.** The module has no 32.768 kHz crystal of its
+> own, so ZephCore runs the chip's internal oscillator instead — accurate to about ±250 ppm rather than
+> the ±50 ppm a crystal gives. Everything works normally; the clock simply drifts a little faster.
+
 ## Commands to your own node get their tick straight away
 
 When you send a command to your node's own chat contact (the one named `v` plus your node name), the app
@@ -244,6 +267,11 @@ Housekeeping, listed for completeness — nothing here changes how a node behave
   but no real node has been broken and recovered. Normal healthy nodes are unaffected.
 - **Why that one node's identity broke is still unknown.** This release makes sure the same thing can no
   longer go unnoticed, but the original cause has not been found.
+- **The ME25LS02 has not been run on hardware.** Nobody involved has one yet. Both builds compile, and
+  the pin mapping was taken from the module's own schematic and cross-checked against MinewSemi's working
+  sample firmware — but no packet has been sent or received on a real module. Note also that the module's
+  datasheet contradicts its own schematic about three of the radio's control pins, and lists one pin
+  twice; the schematic is what ZephCore follows.
 - **The antenna amplifier receive setting is compile-checked on every affected board, but has not been
   measured on hardware in this form.** The 23 dB figure above comes from the original proposal, which
   reached the same pin by a different route. Leaving the setting alone keeps every node behaving exactly

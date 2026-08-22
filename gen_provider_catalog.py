@@ -54,6 +54,7 @@ MAKERS = {
     "Ikoka": "Ikoka",
     "femtofox": "Femtofox",
     "muziworks": "muzi works",
+    "minewsemi": "MinewSemi",
 }
 
 # Manufacturer per device name.
@@ -93,6 +94,7 @@ MAKER_BY_DEVICE = {
     "RAK6421 WisMesh (Raspberry Pi)": "rak",
     "RAK6421 WisMesh (Raspberry Pi 5)": "rak",
     "muzi works R1 Neo": "muziworks",
+    "MinewSemi ME25LS02": "minewsemi",
 }
 
 DESCRIPTION = (
@@ -202,13 +204,22 @@ BOARDS = [
     dict(stem="lilygo_tlora_c6-esp32c6-hpcore", kind="esp32", device="LilyGo T-Lora C6",           new=True, img="lilygo_tlora_c6.svg"),
     dict(stem="heltec_wifi_lora32_v43-esp32s3-procpu", kind="esp32", device="Heltec v4.3",         new=True, img="heltec_v4.svg"),
 
+    # --- nRF54L15 (SWD only, download-only tile): new tile ----------------
+    # The nRF54L15 has no USB peripheral, so there is no bootloader and no
+    # WebUSB/DFU path the configurator could drive -- the Type-C port on the
+    # MX25LE02 carrier is a CH340x UART bridge. The tile therefore publishes
+    # the .hex as a plain download and the user flashes it over SWD.
+    dict(stem="me25ls02-nrf54l15-cpuapp", kind="nrf54l", device="MinewSemi ME25LS02",
+         new=True, img="lora.svg"),
+
     # --- Native Linux (noflash, download only): new tiles ----------------
     dict(stem="zephcore_linux_femtofox",   kind="linux", device="Femtofox (Luckfox Pico Mini)", new=True, img="lora.svg"),
     dict(stem="zephcore_linux_rak6421",    kind="linux", device="RAK6421 WisMesh (Raspberry Pi)", new=True, img="rpi.svg"),
     dict(stem="zephcore_linux_rak6421_pi5", kind="linux", device="RAK6421 WisMesh (Raspberry Pi 5)", new=True, img="rpi.svg"),
 ]
 
-DEVICE_TYPE = {"nrf": "nrf52", "esp32": "esp32", "linux": "noflash"}
+DEVICE_TYPE = {"nrf": "nrf52", "esp32": "esp32", "linux": "noflash",
+               "nrf54l": "noflash"}
 
 # nRF52 erase package (spec §4a). ZephCore's LittleFS layout differs from MeshCore's,
 # so the official erase would wipe the wrong region — we point `erase` at ZephCore's
@@ -231,6 +242,8 @@ COMPANION_ROLES = {
     "nrf":   ["companionBle", "companionUsb"],
     "esp32": ["companionBle", "companionUsb"],
     "linux": ["companionTcp"],
+    # nRF54L15 has no USB peripheral -- the companion is BLE-only there.
+    "nrf54l": ["companionBle"],
 }
 
 HASH_RE = r"[0-9a-f]{7,40}"
@@ -270,6 +283,11 @@ def files_for(assets, board, token):
         update = find_file(assets, stem, token, variant, r"-update\.bin")
         if update:
             out.append(("flash-update", update, "Update (app only; keeps settings)"))
+    elif kind == "nrf54l":
+        hexf = find_file(assets, stem, token, variant, r"\.hex")
+        if hexf:
+            out.append(("download", hexf,
+                        "Firmware image -- flash over SWD (no USB bootloader on this SoC)"))
     elif kind == "linux":
         elf = find_file(assets, stem, token, variant, r"")
         if elf:

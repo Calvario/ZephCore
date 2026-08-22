@@ -59,6 +59,10 @@ Notes on the mapping:
   custom `companionTcp` role.
 - **Heltec T114** lists screen and "No screen" variants (subTitle) under one tile.
 - **Native-Linux** boards (femtofox, rak6421) are `noflash` download-only tiles.
+- **nRF54L15** boards (ME25LS02) are `noflash` too, for a different reason: the SoC has no USB
+  peripheral, so no bootloader exists and nothing the configurator can drive is possible. They
+  publish a `.hex` as a plain download, flashed over SWD, and the companion is listed under
+  `companionBle` only — there is no USB transport to offer.
 - **Thumbnails:** folded devices inherit MeshCore's image automatically (device-level
   fields come from the official entry on merge), so only the new tiles set a `tooltip`.
   Those reuse the configurator's own image set via jsDelivr (`IMG_BASE` in the script);

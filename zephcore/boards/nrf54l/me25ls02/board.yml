@@ -1,0 +1,9 @@
+# Copyright (c) 2026 ZephCore
+# SPDX-License-Identifier: MIT
+
+board:
+  name: me25ls02
+  full_name: MinewSemi ME25LS02 on MX25LE02 dev board (nRF54L15 + SX1262)
+  vendor: minewsemi
+  socs:
+    - name: nrf54l15

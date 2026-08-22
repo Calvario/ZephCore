@@ -102,9 +102,15 @@ xiao_mg24
 
 ```
 xiao_nrf54l15/nrf54l15/cpuapp
+me25ls02/nrf54l15/cpuapp
 ```
 
 > Requires `--no-sysbuild` flag: `west build -b xiao_nrf54l15/nrf54l15/cpuapp zephcore --no-sysbuild`
+>
+> The nRF54L15 has no USB peripheral, so there is no UF2 or DFU path on either board — flash
+> `zephyr.hex` over SWD. `me25ls02` is the MinewSemi ME25LS02 module on its MX25LE02 carrier;
+> its USB-C port is a CH340x UART bridge carrying the console, not a programming port.
+> Untested on hardware.
 
 ## Native Linux
 
