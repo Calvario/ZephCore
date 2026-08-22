@@ -260,8 +260,8 @@ bool RepeaterDataStore::loadPrefs(NodePrefs& prefs) {
                 (double)prefs.freq, prefs.sf, (double)prefs.bw);
         prefs.freq = 869.618f;
         prefs.bw = 62.5f;
-        prefs.sf = 8;
-        prefs.cr = 8;
+        prefs.sf = 7;
+        prefs.cr = 5;
         prefs.tx_power_dbm = 22;
     }
     /* Everything else that came off flash — bounds, NaNs, and the char fields,

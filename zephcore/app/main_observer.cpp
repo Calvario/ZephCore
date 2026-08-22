@@ -290,7 +290,7 @@ int main(void)
 {
 	/* Initialize radio prefs with observer-specific defaults */
 	initNodePrefs(&s_radio_prefs);
-	s_radio_prefs.cr           = 5;   /* CR 4/5 (initNodePrefs sets 8) */
+	s_radio_prefs.cr           = 5;   /* CR 4/5 (same as initNodePrefs; kept explicit) */
 	s_radio_prefs.tx_power_dbm = 0;   /* observer never TXes */
 	strncpy(s_radio_prefs.node_name, "Observer",
 		sizeof(s_radio_prefs.node_name) - 1);

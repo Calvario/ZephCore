@@ -184,7 +184,7 @@ Caveats: the `sys=` tally needs `CONFIG_ZEPHCORE_GPS_SAT_DIAG` (default on for r
 
 | Command | Description |
 |---------|-------------|
-| `tempradio <freq> <bw> <sf> <cr> <timeout_mins>` | Apply temporary radio parameters; automatically reverts after `timeout_mins`. Constraints: freq 150–2500 MHz, bw 7–500 kHz, sf 5–12, cr 5–8. Saved prefs are never mutated — concurrent `set` commands and reboots both restore the real saved values. |
+| `tempradio <freq>,<bw>,<sf>,<cr>,<timeout_mins>` | Apply temporary radio parameters; automatically reverts after `timeout_mins`. Constraints: freq 150–2500 MHz, bw 7–500 kHz, sf 5–12, cr 5–8. Saved prefs are never mutated — concurrent `set` commands and reboots both restore the real saved values. |
 
 ---
 
@@ -272,7 +272,7 @@ Changes are persisted immediately unless noted. Some require a reboot.
 |---------|-------------|-------------|
 | `set name <name>` | No `[ ] \ : , ? *` | Set node name |
 | `set repeat <on\|off>` | | Enable or disable packet forwarding |
-| `set radio <freq> <bw> <sf> <cr>` | freq 150–2500, bw 7–500, sf 5–12, cr 5–8 | Set radio params *(reboot required)* |
+| `set radio <freq>,<bw>,<sf>,<cr>` | freq 150–2500, bw 7–500, sf 5–12, cr 5–8 | **Comma-separated**, not space-separated — spaces parse as a single argument and the command is rejected. Set radio params *(reboot required)* |
 | `set freq <mhz>` | 150–2500 *(USB only)* | Set frequency alone *(reboot required)* |
 | `set tx <dbm>` | −9 to board max (default 30) | Set TX power |
 | `set lat <latitude>` | | Set stored latitude |

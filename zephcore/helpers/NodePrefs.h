@@ -276,8 +276,8 @@ static inline void initNodePrefs(NodePrefs* prefs) {
 	/* Radio params - MUST match LoRaConfig.h for interop with companion nodes */
 	prefs->freq = 869.618f;           // LoRaConfig::FREQ_HZ / 1000000.0
 	prefs->bw = 62.5f;                // LoRaConfig::BANDWIDTH
-	prefs->sf = 8;                    // LoRaConfig::SPREADING_FACTOR
-	prefs->cr = 8;                    // CR 4/8 (MeshCore uses 5-8 for CR 4/5 through 4/8)
+	prefs->sf = 7;                    // LoRaConfig::SPREADING_FACTOR
+	prefs->cr = 5;                    // CR 4/5 (MeshCore uses 5-8 for CR 4/5 through 4/8)
 #ifdef CONFIG_ZEPHCORE_DEFAULT_TX_POWER_DBM
 	prefs->tx_power_dbm = CONFIG_ZEPHCORE_DEFAULT_TX_POWER_DBM;
 #else

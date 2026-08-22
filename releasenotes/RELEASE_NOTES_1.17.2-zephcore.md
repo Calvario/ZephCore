@@ -7,9 +7,37 @@ A small release. Most of it is fixes, and a few of them only matter on specific 
 > a **T1000-E** (temperature and light sensors work again), or **any repeater** (1.17.1 broke guest logins
 > without a password). Everyone else can wait for the next release.
 >
-> Upgrading from 1.17.1 is straightforward — your contacts, settings and phone pairing all survive.
+> Upgrading from 1.17.1 is straightforward — your contacts, settings and phone pairing all survive. Note
+> that the **factory default radio settings changed to SF7 / CR 4/5**; this affects fresh flashes and
+> factory resets only, never a node that already has settings.
 
 ---
+
+## New nodes start on SF7 / CR 4/5
+
+A node with no saved settings — freshly flashed, or after a factory reset — now comes up on
+**SF7, coding rate 4/5**. It was SF8 / 4/8. Frequency (869.618 MHz), bandwidth (62.5 kHz) and
+transmit power are unchanged.
+
+Hungary moved its mesh to these settings, and ZephCore is aimed mainly at Hungarian users, so this is
+now what a node uses out of the box. On SF7 / 4/5 a packet spends roughly a third of the time on air
+that it did on SF8 / 4/8, which leaves the channel free for far more traffic. The trade is a little
+less range on the weakest links.
+
+> [!IMPORTANT]
+> **Nodes that already have settings are not touched.** Upgrading to 1.17.2 leaves your frequency,
+> spreading factor, coding rate and power exactly as you set them. Nothing is rewritten and nothing
+> needs checking afterwards.
+
+> [!WARNING]
+> **A factory reset now leaves the node on SF7 / 4/5.** If your mesh still runs SF8 / 4/8, a node that
+> has been reset will not hear it and will not be heard — radios only talk to other radios using the
+> same settings. Put it back with `set radio 869.618,62.5,8,8` after a reset, or move the whole mesh to
+> SF7 / 4/5.
+
+To change a node already in service, use `set radio <freq>,<bw>,<sf>,<cr>` on a repeater (the four
+values are comma-separated, and it needs a reboot to apply), or the radio settings screen in the phone
+app for a companion.
 
 ## Commands to your own node get their tick straight away
 
