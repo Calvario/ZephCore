@@ -536,6 +536,49 @@ static void action_deep_sleep(void)
 
 /* ========== Input Event Handler ========== */
 
+#ifdef CONFIG_ZEPHCORE_UI_DISPLAY
+/* Set when a button press woke the display; consumed by the resolved action
+ * code so the wake-up press does not also run its normal action.
+ *
+ * The display wakes on the raw press event (INPUT_KEY_0 from gpio-keys), but
+ * the action it maps to is emitted later by the longpress / multi-tap filters
+ * (up to tap-delay-ms or long-delay-ms afterwards).  By then the display
+ * reports as on, so the resolved code used to fall through and run normally —
+ * a single tap woke the screen and immediately paged forward.
+ *
+ * The flag is matched against real action codes rather than "the next event"
+ * because the multi-tap filter passes an unhandled raw KEY_A through per tap
+ * before it resolves; swallowing that would leave a double tap still acting.
+ *
+ * No expiry is needed: on every board using this UI each switch case below is
+ * fed by the longpress or multi-tap filter, so a wake is always followed by an
+ * action code that clears the flag.  (The two boards with direct joystick codes
+ * select ZEPHCORE_UI_JOYSTICK and never reach this callback.)
+ */
+static bool display_woken_pending;
+
+static bool is_ui_action_code(uint16_t code)
+{
+	switch (code) {
+	case INPUT_KEY_1:
+	case INPUT_KEY_B:
+	case INPUT_KEY_D:
+	case INPUT_KEY_C:
+	case INPUT_KEY_E:
+	case INPUT_KEY_POWER:
+	case INPUT_KEY_F:
+	case INPUT_KEY_RIGHT:
+	case INPUT_KEY_LEFT:
+	case INPUT_KEY_ENTER:
+	case INPUT_KEY_UP:
+	case INPUT_KEY_DOWN:
+		return true;
+	default:
+		return false;
+	}
+}
+#endif /* CONFIG_ZEPHCORE_UI_DISPLAY */
+
 static void ui_input_cb(struct input_event *evt, void *user_data)
 {
 	ARG_UNUSED(user_data);
@@ -591,9 +634,12 @@ static void ui_input_cb(struct input_event *evt, void *user_data)
 	}
 
 #ifdef CONFIG_ZEPHCORE_UI_DISPLAY
-	/* If display is off, wake it and consume the event */
+	/* If display is off, wake it and consume the event.  The action this
+	 * press resolves to arrives later from the longpress / multi-tap filter;
+	 * display_woken_pending makes the switch below swallow it. */
 	if (!mc_display_is_on()) {
 		mc_display_on();
+		display_woken_pending = true;
 		schedule_render();
 		return;
 	}
@@ -618,6 +664,15 @@ static void ui_input_cb(struct input_event *evt, void *user_data)
 		schedule_render();
 		return;
 	}
+
+#ifdef CONFIG_ZEPHCORE_UI_DISPLAY
+	/* This is the action the wake-up press resolved to — swallow it so the
+	 * press only woke the display, on whatever page it was showing. */
+	if (display_woken_pending && is_ui_action_code(evt->code)) {
+		display_woken_pending = false;
+		return;
+	}
+#endif
 
 	/* Map input key codes to UI actions.
 	 *

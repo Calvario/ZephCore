@@ -152,6 +152,14 @@
 	/delete-node/ tft-backlight;
 };
 
+/* Drop the upstream ST7735R 'inversion-on'.  The mono_tft wrapper writes 0xFFFF
+ * for a lit pixel and 0x0000 for background, so INV_ON paints a light
+ * background with dark text; the UI is drawn light-on-dark.  Same panel and
+ * same fix as heltec_wireless_tracker_v2 (which carries it in its own DTS). */
+&st7735r_160x80 {
+	/delete-property/ inversion-on;
+};
+
 /* White status LED on GPIO18 (meshtastic LED_PIN), active-HIGH.  The upstream
  * DTS mis-assigns GPIO17/18 to UART1 (unused on this board), which leaves the
  * pad high so the LED is permanently lit.  Disable UART1 to free the pin; the

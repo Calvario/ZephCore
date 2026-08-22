@@ -157,7 +157,9 @@
 			reg = <0>;
 			width = <160>;
 			height = <80>;
-			inversion-on;
+			/* No inversion-on: the mono_tft wrapper writes 0xFFFF for a lit
+			 * pixel and 0x0000 for background, so INV_ON paints a light
+			 * background with dark text.  The UI is drawn light-on-dark. */
 			x-offset = <0>;
 			y-offset = <24>;
 			madctl = <0xa8>;
