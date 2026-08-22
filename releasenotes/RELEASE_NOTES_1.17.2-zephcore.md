@@ -4,8 +4,9 @@ A small release. Most of it is fixes, and a few of them only matter on specific 
 
 > [!NOTE]
 > **Worth updating if you have:** a **XIAO nRF52840** or **Ikoka Nano 30 dBm** (charges twice as fast now),
-> a **T1000-E** (temperature and light sensors work again), or **any repeater** (1.17.1 broke guest logins
-> without a password). Everyone else can wait for the next release.
+> a **T1000-E** (temperature and light sensors work again), a **LilyGo T3S3** (supported for the first
+> time), or **any repeater** (1.17.1 broke guest logins without a password). Everyone else can wait for
+> the next release.
 >
 > Upgrading from 1.17.1 is straightforward — your contacts, settings and phone pairing all survive. Note
 > that the **factory default radio settings changed to SF7 / CR 4/5**; this affects fresh flashes and
@@ -38,6 +39,15 @@ less range on the weakest links.
 To change a node already in service, use `set radio <freq>,<bw>,<sf>,<cr>` on a repeater (the four
 values are comma-separated, and it needs a reboot to apply), or the radio settings screen in the phone
 app for a companion.
+
+## New board: LilyGo T3S3
+
+The **LilyGo T3S3** is now supported — ESP32-S3 with an OLED screen, a button and a battery gauge.
+
+> [!IMPORTANT]
+> **The SX1262 version only.** LilyGo sells this board with four different radios (SX1262, SX1276, SX1280,
+> LR1121) under one name. Flashed onto any of the others it boots and looks fine but never transmits or
+> receives. Check which radio your board has first.
 
 ## Commands to your own node get their tick straight away
 
@@ -72,7 +82,8 @@ The readings match Seeed's original firmware, so your node reports the same numb
 it did before.
 
 > [!NOTE]
-> Light is reported as **0–100, not in lux**. That is what the sensor and the original firmware produce.
+> Light is reported as a **0–100 brightness level, not lux**. It is the sensor's output voltage rescaled
+> onto 0–100 — nothing converts it into a real light unit, and Seeed's original firmware does the same.
 > Normal indoor lighting sits in the bottom few percent and only direct light moves it much — that is the
 > sensor's real range, not a stuck reading.
 
@@ -98,6 +109,11 @@ room is never accidentally left wide open. Use `allow.read.only on` if you want 
 `allow.read.only` no longer shows up in the repeater's command list. Only room servers ever used it, so
 on a repeater it was a setting that did nothing. Your saved configuration is untouched.
 
+## Empty channel slots no longer pick up stray traffic
+
+A channel slot you never set up used to accept group messages sent with no key at all, and file them under
+that empty slot. Unused slots are now skipped, so those messages are simply ignored.
+
 ## A node that cannot get a word in now tells you
 
 If your node keeps finding the channel busy and can never transmit, it now says so after four seconds and
@@ -116,6 +132,20 @@ radio-off time goes from about **31 % to about 35 %**. All radio types benefit.
 > perfectly fine — set `CONFIG_ZEPHCORE_LORA_DC_MARGIN_PCT` back to 15 before looking at anything else.
 > This kind of loss has nothing to do with signal strength, so signal readings will not show it.
 
+## A radio that has gone deaf now recovers on its own
+
+A LoRa receiver can get stuck at the wrong gain and quietly stop hearing anything. Nothing looks wrong —
+the node runs, the screen updates, it simply never receives. Until now the only cure was a reboot.
+
+After a full minute with nothing heard at all, the radio now resets its receiver by itself. A busy node
+essentially never does this, because every packet it receives is proof the receiver works; a silent node
+loses nothing by trying, because there was nothing to miss. Radios that can measure their own temperature
+also recalibrate after a 5 °C swing, so a node that boots on a warm afternoon still works through a cold
+night.
+
+This replaces the old `agc.reset.interval` setting, which ran on a timer whether it was needed or not and
+shipped switched off. It is automatic now and needs no configuration.
+
 ## Your node can no longer advertise an identity it cannot prove
 
 Your identity is a private key and a matching public key. If those two ever stopped matching — a damaged
@@ -131,6 +161,12 @@ Identity files are now stored in the same format Arduino MeshCore uses, so a fil
 the two projects. Every older format is still readable — nothing needs converting and no existing file is
 rewritten. If a file is too damaged to make sense of, the node keeps it as `_main.id.bad` and generates a
 fresh identity rather than throwing the old one away.
+
+Your saved settings now get a similar check. Every value read back from storage is tested against the
+range it is allowed to be in, and anything nonsensical falls back to its default instead of being used. A
+few of those are the difference between a working node and one that looks dead: a corrupted shutdown
+voltage would switch the node off seconds after boot, and a corrupted BLE pairing code would lock the
+phone app out with no way back in.
 
 Found and diagnosed by **Marcel Verdult** ([@marcelverdult](https://github.com/marcelverdult)) —
 [#70](https://github.com/liquidraver/ZephCore/pull/70).
@@ -157,15 +193,29 @@ looking like a broken radio.
 
 ---
 
+## Also in this release
+
+Housekeeping, listed for completeness — nothing here changes how a node behaves day to day.
+
+- **The Zephyr operating system underneath was updated** to a newer snapshot, and our radio patches were
+  reorganised on top of it: five separate SX126x patches are now one. Same behaviour, fewer things to go
+  wrong the next time Zephyr moves.
+- **Sending a raw packet down a known route now works at every path-hash setting.** Only diagnostic tools
+  use this, never normal messaging, and it rejected every route on a node set to a longer path hash.
+- **`get`/`set agc.reset.interval` now reply `Removed - Automatic AGC reset is on`** instead of pointing at
+  `rxduty`. The setting has been gone for a while; only the wording changed.
+- **The repeater command reference was corrected in several places** — `set radio` and `tempradio` take
+  comma-separated values, not spaces; `set prv.key` takes the 128-character key; `allow.read.only` and
+  `buzzer` are room-server only. The commands themselves did not change, the documentation was simply
+  wrong about them.
+
+---
+
 ## Not fully tested yet
 
-- **The radio timing changes have not been measured on air.** Both are worked out on paper and build
-  clean, but neither has been checked against real traffic.
-- **The repeater guest-login fix has not been tried on hardware**, only verified to build on both roles.
 - **The T1000-E sensor readings are confirmed on a real device**; the faster boot time is measured from a
   before-log only, with no after-log yet.
 - **The identity repair paths have not been tried on hardware.** Every case is covered by tests on a PC,
   but no real node has been broken and recovered. Normal healthy nodes are unaffected.
 - **Why that one node's identity broke is still unknown.** This release makes sure the same thing can no
   longer go unnoticed, but the original cause has not been found.
-- **The reported X1 trouble logging in to repeaters is not fixed here** and is still being looked into.
