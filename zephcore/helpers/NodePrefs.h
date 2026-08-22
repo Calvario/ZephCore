@@ -149,6 +149,117 @@ struct NodePrefs {
 };
 
 /* Default prefs -- must match LoRaConfig.h defaults for radio interop. */
+/* Range guards for prefs that came off flash.
+ *
+ * The atomic replace in every savePrefs() plus littlefs's own CRCs make a torn
+ * write impossible, so this is not about power loss — it is about a blob that
+ * is structurally intact and semantically wrong.  Several of these fields make
+ * a node look bricked when they are: auto_shutdown_mv powers it off seconds
+ * after boot, ble_pin locks pairing out, and the char fields are stored as
+ * fixed-size blocks with no terminator in the file format, so an unterminated
+ * one runs every later %s off the end of the struct.
+ *
+ * Called at the end of each role's loadPrefs().  Fields whose whole range is
+ * legal (autoadd_config bitmask, discovery_mod_timestamp, the v_contact_*
+ * sentinels) are deliberately left alone. */
+template <typename T>
+static inline T clampPref(T v, T lo, T hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+/* Floats need the NaN test spelled out: every comparison against NaN is false,
+ * so a plain clamp passes it straight through. */
+template <typename T>
+static inline T sanePrefFloat(T v, T lo, T hi, T fallback) {
+	if (v != v || v < lo || v > hi) return fallback;
+	return v;
+}
+
+/* A byte that is neither 0 nor 1 carries no user intent — take the default
+ * rather than clamping, which would round every garbage value up to "on". */
+template <typename T>
+static inline T saneBool(T v, T fallback) { return (v == 0 || v == 1) ? v : fallback; }
+
+static inline void sanitizeNodePrefs(NodePrefs* p) {
+	p->node_name[sizeof(p->node_name) - 1] = '\0';
+	p->password[sizeof(p->password) - 1] = '\0';
+	p->guest_password[sizeof(p->guest_password) - 1] = '\0';
+	p->owner_info[sizeof(p->owner_info) - 1] = '\0';
+	p->default_scope_name[sizeof(p->default_scope_name) - 1] = '\0';
+
+	p->airtime_factor = sanePrefFloat(p->airtime_factor, 0.0f, 9.0f, 9.0f);
+	p->rx_delay_base  = sanePrefFloat(p->rx_delay_base, 0.0f, 3600.0f, 0.0f);
+	p->adc_multiplier = sanePrefFloat(p->adc_multiplier, 0.0f, 30000.0f, 0.0f);
+	p->node_lat = sanePrefFloat(p->node_lat, -90.0, 90.0, 0.0);
+	p->node_lon = sanePrefFloat(p->node_lon, -180.0, 180.0, 0.0);
+
+	p->cr           = clampPref<uint8_t>(p->cr, 5, 8);
+	p->tx_power_dbm = clampPref<int8_t>(p->tx_power_dbm, -9, 30);
+#ifdef CONFIG_ZEPHCORE_MAX_TX_POWER_DBM
+	if (p->tx_power_dbm > CONFIG_ZEPHCORE_MAX_TX_POWER_DBM) {
+		p->tx_power_dbm = (int8_t)CONFIG_ZEPHCORE_MAX_TX_POWER_DBM;
+	}
+#endif
+
+	/* Booleans and enums fall back to a safe value rather than being clamped
+	 * to their maximum: clamping is the wrong direction for anything that
+	 * grants a permission, hides the node, or turns a radio mode on.  A byte
+	 * that is neither 0 nor 1 carries no user intent, so the fallback is
+	 * simply the field's own default. */
+	p->client_repeat       = saneBool<uint8_t>(p->client_repeat, 0);
+	p->manual_add_contacts = saneBool<uint8_t>(p->manual_add_contacts, 0);
+	p->multi_acks          = saneBool<uint8_t>(p->multi_acks, 0);
+	p->buzzer_quiet        = saneBool<uint8_t>(p->buzzer_quiet, 0);
+	p->gps_enabled         = saneBool<uint8_t>(p->gps_enabled, 0);
+	p->rx_duty_cycle       = saneBool<uint8_t>(p->rx_duty_cycle, 0);
+	p->leds_disabled       = saneBool<uint8_t>(p->leds_disabled, 0);
+	p->meshtimesync        = saneBool<uint8_t>(p->meshtimesync, 0);
+	p->cad_auto            = saneBool<uint8_t>(p->cad_auto, 0);
+	p->allow_read_only     = saneBool<uint8_t>(p->allow_read_only, 0);
+	p->powersaving_enabled = saneBool<uint8_t>(p->powersaving_enabled, 0);
+	/* Defaults that are on, not off. */
+	p->rx_boost            = saneBool<uint8_t>(p->rx_boost, 1);
+	p->wake_on_msg         = saneBool<uint8_t>(p->wake_on_msg, 1);
+	p->v_contact_enabled   = saneBool<uint8_t>(p->v_contact_enabled, 1);
+	/* Never let a corrupt byte take the radio off the air or hide BLE — both
+	 * remove the only ways left to fix the node. */
+	p->ble_disabled        = saneBool<uint8_t>(p->ble_disabled, 0);
+
+	/* Permission and privacy enums: out of range means deny/withhold. */
+	if (p->telemetry_mode_base > TELEM_MODE_ALLOW_ALL) p->telemetry_mode_base = TELEM_MODE_DENY;
+	if (p->telemetry_mode_loc  > TELEM_MODE_ALLOW_ALL) p->telemetry_mode_loc  = TELEM_MODE_DENY;
+	if (p->telemetry_mode_env  > TELEM_MODE_ALLOW_ALL) p->telemetry_mode_env  = TELEM_MODE_DENY;
+	if (p->advert_loc_policy   > ADVERT_LOC_PREFS)     p->advert_loc_policy   = ADVERT_LOC_NONE;
+
+	if (p->loop_detect    > LOOP_DETECT_STRICT) p->loop_detect    = LOOP_DETECT_MINIMAL;
+	if (p->path_hash_mode > 2)                  p->path_hash_mode = 0;
+	p->autoadd_max_hops    = clampPref<uint8_t>(p->autoadd_max_hops, 0, 64);
+	p->flood_max_unscoped  = clampPref<uint8_t>(p->flood_max_unscoped, 0, 64);
+	p->flood_max_advert    = clampPref<uint8_t>(p->flood_max_advert, 0, 64);
+	p->cad_busycap         = clampPref<uint8_t>(p->cad_busycap, 0, 90);
+	/* Neutral, not the boundary — a garbage offset is not a request to run
+	 * the CAD staircase at one end of its range. */
+	if (p->cad_offset < CAD_OFFSET_MIN || p->cad_offset > CAD_OFFSET_MAX) p->cad_offset = 0;
+	if (p->probe_interval != 0 && p->probe_interval < 10) p->probe_interval = 10;
+
+	/* 6-digit BLE passkey — anything else is rejected at pairing time and
+	 * leaves no way back in over BLE. */
+	if (p->ble_pin > 999999) p->ble_pin = 0;
+	/* Seconds; 0 = off.  A year is already far past any sane setting. */
+	if (p->gps_interval > 31536000UL) p->gps_interval = 0;
+	/* 0 = board/Kconfig default on both, else the range the UI offers. */
+	if (p->display_brightness != 0) p->display_brightness = clampPref<uint8_t>(p->display_brightness, 10, 100);
+	if (p->screen_off_secs != 0) p->screen_off_secs = clampPref<uint16_t>(p->screen_off_secs, 5, 300);
+	/* 0 = off.  Outside the cell range it either never fires or powers the
+	 * node off the moment it boots — the one that looks like a dead device. */
+	if (p->auto_shutdown_mv != 0 &&
+	    (p->auto_shutdown_mv < 2900 || p->auto_shutdown_mv > 4200)) {
+#ifdef CONFIG_ZEPHCORE_AUTO_SHUTDOWN_MILLIVOLTS
+		p->auto_shutdown_mv = CONFIG_ZEPHCORE_AUTO_SHUTDOWN_MILLIVOLTS;
+#else
+		p->auto_shutdown_mv = 0;
+#endif
+	}
+}
+
 static inline void initNodePrefs(NodePrefs* prefs) {
 	memset(prefs, 0, sizeof(NodePrefs));
 	prefs->airtime_factor = 9.0f;  /* Arduino formula: duty% = 100 / (af + 1) → 10% */

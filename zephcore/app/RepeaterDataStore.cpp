@@ -264,15 +264,9 @@ bool RepeaterDataStore::loadPrefs(NodePrefs& prefs) {
         prefs.cr = 8;
         prefs.tx_power_dbm = 22;
     }
-    if (prefs.path_hash_mode > 2) prefs.path_hash_mode = 0;
-    if (prefs.loop_detect > LOOP_DETECT_STRICT) prefs.loop_detect = LOOP_DETECT_MINIMAL;
-    if (prefs.rx_boost > 1) prefs.rx_boost = 0;
-    if (prefs.rx_duty_cycle > 1) prefs.rx_duty_cycle = 0;
-    if (prefs.meshtimesync > 1) prefs.meshtimesync = 0;
-    if (prefs.cad_auto > 1) prefs.cad_auto = 0;
-    if (prefs.cad_offset < CAD_OFFSET_MIN || prefs.cad_offset > CAD_OFFSET_MAX) prefs.cad_offset = 0;
-    if (prefs.probe_interval != 0 && prefs.probe_interval < 10) prefs.probe_interval = 10;
-    if (prefs.cad_busycap > 90) prefs.cad_busycap = 90;
+    /* Everything else that came off flash — bounds, NaNs, and the char fields,
+     * which the file format stores without terminators. */
+    sanitizeNodePrefs(&prefs);
 
     /* One-time format upgrade: old files (< 294 bytes) never saved the ZephCore
      * extension fields, and stored path_hash_mode/loop_detect as zero padding.

@@ -865,6 +865,8 @@ void ZephyrDataStore::loadPrefs(NodePrefs &prefs)
 	if (off < len) {
 		prefs.v_contact_flags = buf[off++];
 	}
+
+	sanitizeNodePrefs(&prefs);
 }
 
 void ZephyrDataStore::savePrefs(const NodePrefs &prefs)
