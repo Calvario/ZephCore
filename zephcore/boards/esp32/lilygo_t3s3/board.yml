@@ -1,0 +1,6 @@
+board:
+  name: lilygo_t3s3
+  full_name: LilyGo T3S3
+  vendor: lilygo
+  socs:
+    - name: esp32s3

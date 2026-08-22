@@ -1,0 +1,81 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * LilyGo T3S3 — ESP32-S3 (WROOM-1 N4R2), 4MB flash, 2MB QSPI PSRAM
+ *
+ * Hardware:
+ *   MCU:     ESP32-S3 (Xtensa LX7, dual-core)
+ *   Module:  ESP32-S3-WROOM-1-N4R2 (4MB flash, 2MB QSPI PSRAM)
+ *   Radio:   SX1262 on SPI2 (defined in board.overlay)
+ *   Display: SSD1306 128x64 OLED on I2C0 (defined in board.overlay)
+ *   Button:  GPIO0
+ *   TX LED:  GPIO37
+ *   VBAT:    GPIO1 ADC
+ *   Console: Native USB Serial/JTAG
+ *
+ * Peripheral wiring (radio, display, button, LED, battery) is intentionally
+ * kept in board.overlay — this DTS is the minimal SoC/bus layer.
+ */
+
+/dts-v1/;
+
+#include <espressif/esp32s3/esp32s3_wroom_n4r2.dtsi>
+#include "lilygo_t3s3-pinctrl.dtsi"
+#include <espressif/partitions_0x0_amp_4M.dtsi>
+
+/ {
+	model = "LilyGo T3S3";
+	compatible = "lilygo,t3s3";
+
+	chosen {
+		zephyr,sram = &sram1;
+		zephyr,console = &usb_serial;
+		zephyr,shell-uart = &usb_serial;
+		zephyr,flash = &flash0;
+		zephyr,code-partition = &slot0_partition;
+		zephyr,bt-hci = &esp32_bt_hci;
+	};
+
+	aliases {
+		uart-0 = &uart0;
+		i2c-0 = &i2c0;
+		watchdog0 = &wdt0;
+	};
+};
+
+&usb_serial {
+	status = "okay";
+};
+
+&i2c0 {
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_FAST>;
+	pinctrl-0 = <&i2c0_default>;
+	pinctrl-names = "default";
+};
+
+&spi2 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+	pinctrl-0 = <&spim2_default>;
+	pinctrl-names = "default";
+};
+
+&gpio0 { status = "okay"; };
+&gpio1 { status = "okay"; };
+
+&timer0 { status = "okay"; };
+&timer1 { status = "okay"; };
+&timer2 { status = "okay"; };
+&timer3 { status = "okay"; };
+
+&wdt0 { status = "okay"; };
+&trng0 { status = "okay"; };
+
+&esp32_bt_hci {
+	status = "okay";
+};
+
+&wifi {
+	status = "okay";
+};
