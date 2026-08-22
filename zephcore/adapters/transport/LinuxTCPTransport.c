@@ -519,6 +519,29 @@ bool zephcore_ble_is_congested(void)
 	return tx_congested;
 }
 
+bool zephcore_ble_tx_idle(void)
+{
+	bool no_client;
+
+	k_mutex_lock(&sock_mu, K_FOREVER);
+	no_client = (client_fd < 0);
+	k_mutex_unlock(&sock_mu);
+
+	/* No client — tx_drain_work_fn drops queued frames rather than holding
+	 * them, so there is nothing to wait for. Mirrors ZephyrBLE's disconnected
+	 * case. */
+	if (no_client) {
+		return true;
+	}
+
+	/* Sends are synchronous inside tx_drain_work_fn, so an empty queue means
+	 * every frame has reached the socket. overflow_pending is the one frame
+	 * held back outside the queue. No "in progress" flag is needed: the drain
+	 * work and the reboot poller share the system workqueue and never run
+	 * concurrently. */
+	return k_msgq_num_used_get(&ble_send_queue) == 0 && !overflow_pending;
+}
+
 bool zephcore_ble_is_advertising(void)
 {
 	/* TCP transport "advertises" by listening. Always true once started. */

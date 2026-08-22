@@ -407,6 +407,33 @@ bool zephcore_ble_is_congested(void)
 	return tx_congested;
 }
 
+bool zephcore_ble_tx_idle(void)
+{
+	/* No UART bound — nothing can be in flight, and nothing ever will be. */
+	if (uart_dev == NULL) {
+		return true;
+	}
+
+	/* The wire itself is the last stage: the TX ISR drains tx_ring into the
+	 * UART FIFO asynchronously, so an empty send queue is not enough. Poll
+	 * the ring too, plus both hold-back slots (order-preserving holdover and
+	 * the overflow retry frame). Mirrors zephcore_ble_tx_idle() in
+	 * ZephyrBLE.cpp, and matches the ring_empty test tx_drain_work_fn uses
+	 * before firing on_tx_idle.
+	 *
+	 * Deliberately no "drain in progress" flag: tx_drain_work_fn and the
+	 * reboot poller both run on the system workqueue, so this can never
+	 * observe a half-finished drain. */
+	bool ring_empty;
+	k_spinlock_key_t key = k_spin_lock(&tx_lock);
+
+	ring_empty = ring_buf_is_empty(&tx_ring);
+	k_spin_unlock(&tx_lock, key);
+
+	return k_msgq_num_used_get(&ble_send_queue) == 0 &&
+	       ring_empty && !held_pending && !overflow_pending;
+}
+
 bool zephcore_ble_is_advertising(void)
 {
 	/* A UART is "always advertising" once the transport is up — keeps the

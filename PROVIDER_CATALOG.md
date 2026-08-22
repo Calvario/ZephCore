@@ -63,6 +63,13 @@ Notes on the mapping:
   peripheral, so no bootloader exists and nothing the configurator can drive is possible. They
   publish a `.hex` as a plain download, flashed over SWD, and the companion is listed under
   `companionBle` only — there is no USB transport to offer.
+- **MG24 and STM32WL** are `noflash` download-only for the same reason as the nRF54L15 —
+  no USB device peripheral, so no bootloader and no browser-flashable path. Both publish a
+  `.hex` flashed over SWD. **XIAO MG24** has BLE (Silabs controller blob) so its companion
+  is `companionBle`. **LoRa-E5 mini** has neither BLE nor USB: its companion speaks MeshCore
+  serial framing on USART1, which reaches the host as an ordinary serial port through the
+  board's USB-UART bridge, so it is listed under `companionUsb`. Neither board exists in
+  MeshCore's catalog at all, so both are ZephCore-only tiles.
 - **Thumbnails:** folded devices inherit MeshCore's image automatically (device-level
   fields come from the official entry on merge), so only the new tiles set a `tooltip`.
   Those reuse the configurator's own image set via jsDelivr (`IMG_BASE` in the script);

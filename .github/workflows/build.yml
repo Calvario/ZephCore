@@ -195,6 +195,60 @@ jobs:
         path: firmware
         key: cache-firmware-linux-${{ github.sha }}
 
+  # SWD-only ARM platforms: nRF54L15, EFR32MG24 and STM32WL. None of these SoCs
+  # has a USB device peripheral, so all three publish a bare zephyr.hex and are
+  # download-only tiles in the catalog. Grouped into one job because the board
+  # count is small (4 boards x 2 roles) and they share the arm-zephyr-eabi
+  # toolchain that `toolchains` already installs.
+  build-swd:
+    needs: setup-zephyr
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '${{ env.python_version }}'
+        cache: 'pip'
+    - run: pip install -r requirements.txt
+
+    - uses: actions/cache/restore@v5
+      with:
+        path: modules
+        key: cache-zephyr-modules-${{ github.sha }}
+
+    - name: Setup Zephyr project
+      uses: zephyrproject-rtos/action-zephyr-setup@v1
+      with:
+        app-path: zephcore
+        toolchains: ${{ env.toolchains }}
+        sdk-version: ${{ env.zephyr_sdk }}
+
+    # MG24 only: the Silabs BLE controller is a binary blob, without which the
+    # xiao_mg24 companion cannot link. Cached the same way as the Espressif one.
+    - name: Cache Silicon Labs BLE controller blobs
+      id: cache-silabs-blobs
+      uses: actions/cache@v5
+      with:
+        path: modules/hal/silabs
+        key: ${{ runner.os }}-silabs-blobs-${{ hashFiles('modules/hal/silabs/.git/HEAD') }}
+
+    - name: Download Silicon Labs BLE controller blobs
+      if: steps.cache-silabs-blobs.outputs.cache-hit != 'true'
+      run: west blobs fetch hal_silabs
+
+    - name: build firmwares
+      run: |
+        bash build.sh nrf54l
+        bash build.sh mg24
+        bash build.sh stm32wl
+
+    - uses: actions/cache@v5
+      with:
+        path: firmware
+        key: cache-firmware-swd-${{ github.sha }}
+
   build-esp32-companions:
     needs: setup-zephyr
     runs-on: ubuntu-latest
@@ -240,7 +294,8 @@ jobs:
         key: cache-firmware-esp32-companions-${{ github.sha }}
 
   create-release:
-    needs: [build-nrf, build-esp32-companions, build-esp32-repeaters, build-linux]
+    needs: [build-nrf, build-esp32-companions, build-esp32-repeaters, build-linux,
+            build-swd]
     runs-on: ubuntu-latest
     # Needs write to create the release AND to delete/replace an existing one for
     # the same version (see the "replace existing release" step below).
@@ -295,6 +350,11 @@ jobs:
       with:
         path: firmware
         key: cache-firmware-linux-${{ github.sha }}
+
+    - uses: actions/cache/restore@v5
+      with:
+        path: firmware
+        key: cache-firmware-swd-${{ github.sha }}
 
     - name: upload firmware artifacts
       uses: actions/upload-artifact@v7
@@ -396,6 +456,10 @@ jobs:
       with:
         path: firmware
         key: cache-firmware-linux-${{ github.sha }}
+    - uses: actions/cache/restore@v5
+      with:
+        path: firmware
+        key: cache-firmware-swd-${{ github.sha }}
 
     - name: generate provider catalog
       run: |

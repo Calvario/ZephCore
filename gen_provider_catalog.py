@@ -96,6 +96,8 @@ MAKER_BY_DEVICE = {
     "muzi works R1 Neo": "muziworks",
     "MinewSemi ME25LS02": "minewsemi",
     "Seeed Studio Xiao nRF54L15": "seeed",
+    "Seeed Studio Xiao MG24": "seeed",
+    "Seeed Studio LoRa-E5 mini": "seeed",
 }
 
 DESCRIPTION = (
@@ -138,7 +140,8 @@ CUSTOM_ROLES = {
 # Board -> device mapping
 #
 # `stem`   : the exact filename stem build.sh emits (board_clean_for_path).
-# `kind`   : nrf | esp32 | linux -- drives device type, file types, extensions.
+# `kind`   : nrf | esp32 | nrf54l | mg24 | stm32wl | linux -- drives device
+#            type, file types, extensions.
 # `device` : the MeshCore-canonical device name to FOLD into, or a new tile name.
 # `new`    : True if this device is not in the official catalog (its own tile).
 # `img`    : filename in MeshCore's own image set (resolved against IMG_BASE).
@@ -217,6 +220,20 @@ BOARDS = [
     dict(stem="xiao_nrf54l15-nrf54l15-cpuapp", kind="nrf54l",
          device="Seeed Studio Xiao nRF54L15", new=True, img="lora.svg"),
 
+    # --- SWD-only ARM boards (download-only tiles): new tiles -------------
+    # Same shape as the nRF54L entries: no USB device peripheral means no
+    # bootloader and no browser-flashable path, so the tile publishes the .hex
+    # and the user flashes it with an external probe. MeshCore has no MG24 or
+    # STM32WL support at all, so both are ZephCore-only tiles.
+    dict(stem="xiao_mg24", kind="mg24", device="Seeed Studio Xiao MG24",
+         new=True, img="lora.svg"),
+    # No Bluetooth on this SoC -- the companion speaks MeshCore serial framing
+    # over USART1, bridged to USB-C by the onboard USB-UART chip, so it is
+    # offered under companionUsb (a wired serial port, same as the app sees on
+    # any CDC-ACM board) rather than companionBle.
+    dict(stem="lora_e5_mini", kind="stm32wl", device="Seeed Studio LoRa-E5 mini",
+         new=True, img="lora.svg"),
+
     # --- Native Linux (noflash, download only): new tiles ----------------
     dict(stem="zephcore_linux_femtofox",   kind="linux", device="Femtofox (Luckfox Pico Mini)", new=True, img="lora.svg"),
     dict(stem="zephcore_linux_rak6421",    kind="linux", device="RAK6421 WisMesh (Raspberry Pi)", new=True, img="rpi.svg"),
@@ -224,7 +241,7 @@ BOARDS = [
 ]
 
 DEVICE_TYPE = {"nrf": "nrf52", "esp32": "esp32", "linux": "noflash",
-               "nrf54l": "noflash"}
+               "nrf54l": "noflash", "mg24": "noflash", "stm32wl": "noflash"}
 
 # nRF52 erase package (spec §4a). ZephCore's LittleFS layout differs from MeshCore's,
 # so the official erase would wipe the wrong region — we point `erase` at ZephCore's
@@ -249,6 +266,12 @@ COMPANION_ROLES = {
     "linux": ["companionTcp"],
     # nRF54L15 has no USB peripheral -- the companion is BLE-only there.
     "nrf54l": ["companionBle"],
+    # MG24 has BLE (Silabs controller blob) but no USB device peripheral.
+    "mg24": ["companionBle"],
+    # STM32WL has neither BLE nor USB: the companion is MeshCore serial framing
+    # on USART1, which reaches the host as a plain serial port over the board's
+    # USB-UART bridge.
+    "stm32wl": ["companionUsb"],
 }
 
 HASH_RE = r"[0-9a-f]{7,40}"
@@ -293,6 +316,11 @@ def files_for(assets, board, token):
         if hexf:
             out.append(("download", hexf,
                         "Firmware image -- flash over SWD (no USB bootloader on this SoC)"))
+    elif kind in ("mg24", "stm32wl"):
+        hexf = find_file(assets, stem, token, variant, r"\.hex")
+        if hexf:
+            out.append(("download", hexf,
+                        "Firmware image -- flash over SWD (no bootloader on this board)"))
     elif kind == "linux":
         elf = find_file(assets, stem, token, variant, r"")
         if elf:

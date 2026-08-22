@@ -45,6 +45,19 @@ nRF54L_boards=(
     xiao_nrf54l15/nrf54l15/cpuapp
 )
 
+# SWD-only ARM platforms. Neither SoC has a USB device peripheral, so there is
+# no bootloader, no UF2 and no DFU path -- zephyr.hex links at the flash origin
+# and IS the whole image, written with an external probe. Same story as the
+# nRF54L boards above, which is why they publish a .hex and nothing else and are
+# download-only in the Mesh America catalog.
+MG24_boards=(
+    xiao_mg24
+)
+
+STM32WL_boards=(
+    lora_e5_mini
+)
+
 ESP32_boards=(
     xiao_esp32c3
     xiao_esp32c6/esp32c6/hpcore
@@ -135,6 +148,41 @@ if [[ $1 == "nrf54l" ]]; then
 
         echo "Now building $board repeater"
         west build -b "$board" zephcore --pristine --no-sysbuild -- -DEXTRA_CONF_FILE="boards/common/repeater.conf"
+        mv build/zephyr/zephyr.hex firmware/"$board_clean_for_path"-repeater-"$COMMIT_HASH".hex
+    done
+fi
+
+# Silicon Labs EFR32MG24. Needs the Silabs BLE controller blob (west blobs fetch
+# hal_silabs) before the first build -- CI fetches it in the build-swd job.
+# Flashed over SWD with pyocd/J-Link; the XIAO's USB-C is a debug bridge, not a
+# device port, so there is no browser-flashable path.
+if [[ $1 == "mg24" ]]; then
+    for board in "${MG24_boards[@]}"; do
+        board_clean_for_path=$(echo "$board" | sed -e 's/\//-/g')
+
+        echo "Now building $board companion"
+        west build -b "$board" zephcore --pristine
+        mv build/zephyr/zephyr.hex firmware/"$board_clean_for_path"-companion-"$COMMIT_HASH".hex
+
+        echo "Now building $board repeater"
+        west build -b "$board" zephcore --pristine -- -DEXTRA_CONF_FILE="boards/common/repeater.conf"
+        mv build/zephyr/zephyr.hex firmware/"$board_clean_for_path"-repeater-"$COMMIT_HASH".hex
+    done
+fi
+
+# STM32WL. No Bluetooth and no USB device: the companion speaks MeshCore serial
+# framing over USART1 (bridged to USB-C by the onboard USB-UART chip) and the
+# repeater uses the same UART for its CLI. Flashed over SWD/ST-Link.
+if [[ $1 == "stm32wl" ]]; then
+    for board in "${STM32WL_boards[@]}"; do
+        board_clean_for_path=$(echo "$board" | sed -e 's/\//-/g')
+
+        echo "Now building $board companion"
+        west build -b "$board" zephcore --pristine
+        mv build/zephyr/zephyr.hex firmware/"$board_clean_for_path"-companion-"$COMMIT_HASH".hex
+
+        echo "Now building $board repeater"
+        west build -b "$board" zephcore --pristine -- -DEXTRA_CONF_FILE="boards/common/repeater.conf"
         mv build/zephyr/zephyr.hex firmware/"$board_clean_for_path"-repeater-"$COMMIT_HASH".hex
     done
 fi
