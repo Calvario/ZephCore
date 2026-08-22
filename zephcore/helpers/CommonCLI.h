@@ -147,8 +147,6 @@ public:
         k_work_init_delayable(&_reboot_work, rebootWorkHandler);
     }
 
-    void loadPrefs(const char* path);
-    void savePrefs(const char* path);
     void handleCommand(uint32_t sender_timestamp, const char* command, char* reply);
     uint8_t buildAdvertData(uint8_t node_type, uint8_t* app_data);
 };

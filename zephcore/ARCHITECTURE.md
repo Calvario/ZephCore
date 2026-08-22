@@ -1109,15 +1109,17 @@ Codes `0x80`–`0x90` (`PUSH_CODE_*` in `app/CompanionMesh.h`). Most used:
 Two distinct field-by-field serializations (NOT raw struct dumps), both Arduino-compatible
 in their shared base fields:
 
-**Companion `/lfs/new_prefs` (152 bytes)** — `adapters/datastore/ZephyrDataStore.cpp`
+**Companion `/lfs/new_prefs` (168 bytes)** — `adapters/datastore/ZephyrDataStore.cpp`
 `loadPrefs()`/`savePrefs()` (offset comments inline). Arduino companion layout (name, lat/lon,
 radio params, telemetry modes, BLE pin, GPS, autoadd) plus ZephCore extensions from offset 92:
 rx_boost(92), leds_disabled(93), reserved(94-95, was APC), default flood scope name/key(96-142),
 ble_disabled(143), display/wake/screen-off/auto-shutdown(144-149), rx_duty_cycle(150),
 meshtimesync(151).
 
-**Repeater/room-server `/lfs/repeater/prefs` (297 bytes)** — `app/RepeaterDataStore.cpp`
-`loadPrefs()`/`savePrefs()` (same field order as `helpers/CommonCLI.cpp`; offset comments inline).
+**Repeater/room-server `/lfs/repeater/prefs` (305 bytes)** — `app/RepeaterDataStore.cpp`
+`loadPrefs()`/`savePrefs()` (offset comments inline).  This is the only serializer for the
+repeater layout; `helpers/CommonCLI.cpp` carried a second, unreachable copy of it until it was
+removed — do not add prefs fields anywhere but the two files named in this section.
 Key ranges: name(4-36), radio(72-119), adaptive-delay(80-111, ignored at runtime),
 leds_disabled(120, magic-encoded `0xA0`/`0xA1` — the byte formerly held `agc_reset_interval`, which
 stored seconds/4, so any other value is a legacy interval and decodes to "LEDs on"),
