@@ -296,10 +296,30 @@ uint8_t CommonCLI::buildAdvertData(uint8_t node_type, uint8_t* app_data) {
     }
 }
 
+/* How long past the initial delay we keep waiting for the transport to drain,
+ * and how often we look.  The poll MUST re-schedule rather than sleep: this
+ * handler runs on the system work queue, which is the same queue that drains
+ * the BLE TX ring — blocking here would stall the very thing being waited on
+ * and guarantee the timeout. */
+#define REBOOT_TX_DRAIN_GRACE_MS 3000
+#define REBOOT_TX_POLL_MS          20
+
 void CommonCLI::rebootWorkHandler(struct k_work *work)
 {
     struct k_work_delayable *dwork = k_work_delayable_from_work(work);
     CommonCLI *self = CONTAINER_OF(dwork, CommonCLI, _reboot_work);
+
+    /* Hold the reset until the companion app has actually been told what
+     * happened — the CLI reply and, more importantly, the delivery-ack for the
+     * command that asked for this reboot.  Losing that ack is what makes the
+     * app resend the command, and a resend of "reboot" arrives after RAM has
+     * been zeroed, so the v-contact dedup ring cannot recognise it and the
+     * command runs a second time. */
+    if (!self->_callbacks->transportTxIdle() &&
+        k_uptime_get() < self->_reboot_deadline_ms) {
+        k_work_reschedule(&self->_reboot_work, K_MSEC(REBOOT_TX_POLL_MS));
+        return;
+    }
 
     switch (self->_pending_reboot) {
     case REBOOT_DFU:
@@ -320,7 +340,10 @@ void CommonCLI::rebootWorkHandler(struct k_work *work)
 void CommonCLI::scheduleReboot(uint8_t type)
 {
     _pending_reboot = type;
-    /* 2 second delay - enough for LoRa reply to be transmitted */
+    /* 2 second delay - enough for LoRa reply to be transmitted.  On a
+     * companion the handler then keeps deferring in REBOOT_TX_POLL_MS steps
+     * until the BLE/USB transport has drained, up to the grace below. */
+    _reboot_deadline_ms = k_uptime_get() + 2000 + REBOOT_TX_DRAIN_GRACE_MS;
     k_work_schedule(&_reboot_work, K_SECONDS(2));
 }
 
@@ -377,7 +400,11 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         scheduleReboot(REBOOT_NORMAL);
     } else if (memcmp(command, "clkreboot", 9) == 0) {
         getRTCClock()->setCurrentTime(1715770351);  // 15 May 2024, 8:50pm
-        _board->reboot();
+        /* Deferred like every other reboot path: called inline this reset the
+         * board before the reply — and before any delivery-ack — could leave
+         * the TX queue. */
+        strcpy(reply, "OK - clock reset, rebooting");
+        scheduleReboot(REBOOT_NORMAL);
     } else if (memcmp(command, "advert.zerohop", 14) == 0) {
         _callbacks->sendSelfAdvertisement(1500, false);  // 0-hop (direct) advert
         strcpy(reply, "OK - zerohop advert sent");

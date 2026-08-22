@@ -444,6 +444,19 @@ size_t zephcore_usb_companion_write_frame(const uint8_t *src, size_t len)
 
 /* True if the TX ring can hold one more frame of `payload_len` (+3 framing).
  * The pump checks this before each contact so write_frame can't fail mid-dump. */
+/* True when the TX ring has drained — every framed byte handed to the CDC
+ * interrupt writer.  Mirrors zephcore_ble_tx_idle() for the USB transport. */
+bool zephcore_usb_companion_tx_idle(void)
+{
+	if (!usb_dev) {
+		return true;
+	}
+	k_spinlock_key_t key = k_spin_lock(&usb_tx_lock);
+	bool idle = ring_buf_is_empty(&usb_tx_ring_buf);
+	k_spin_unlock(&usb_tx_lock, key);
+	return idle;
+}
+
 bool zephcore_usb_companion_tx_has_space(size_t payload_len)
 {
 	if (!usb_dev) {

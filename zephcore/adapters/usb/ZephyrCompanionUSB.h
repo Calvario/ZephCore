@@ -43,6 +43,10 @@ size_t zephcore_usb_companion_write_frame(const uint8_t *src, size_t len);
  */
 bool zephcore_usb_companion_tx_has_space(size_t payload_len);
 
+/** True when the companion TX ring has fully drained. True when no USB device
+ *  is bound (nothing to wait for). Counterpart to zephcore_ble_tx_idle(). */
+bool zephcore_usb_companion_tx_idle(void);
+
 /**
  * Register a callback fired when the TX ring fully drains (USB analogue of the
  * BLE on_tx_idle notify-complete event). Used to resume the contact pump. May

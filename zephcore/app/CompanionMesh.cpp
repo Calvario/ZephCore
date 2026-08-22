@@ -219,6 +219,9 @@ CompanionMesh::CompanionMesh(mesh::Radio &radio, mesh::MillisecondClock &ms, mes
 	_vcontact_pending_count = 0;
 	_vcontact_hold_msgwait = false;
 	_vcontact_app_hidden = false;
+	_vcontact_confirm_ack = 0;
+	_vcontact_confirm_work.self = this;
+	k_work_init_delayable(&_vcontact_confirm_work.work, vcontactConfirmWorkHandler);
 	memset(&prefs, 0, sizeof(prefs));
 	prefs.node_lat = 0;
 	prefs.node_lon = 0;
@@ -990,6 +993,46 @@ void CompanionMesh::vcontactNotify(const char *text)
 	vcontactQueueText(text);
 }
 
+/* How long the delivery-ack is held back after its PACKET_SENT.
+ *
+ * A plain timer on purpose.  The tempting trigger — "flush as soon as the app
+ * sends us another frame, that proves it is done with the response" — is
+ * useless here: we emit MSG_WAITING for the CLI reply a few lines further
+ * down, and the app answers that with CMD_SYNC_NEXT_MESSAGE inside one
+ * connection interval.  That inbound frame would arrive ~50 ms in and flush
+ * the confirm almost as early as sending it inline did, which is the bug.
+ *
+ * Bounded on the other side by the 3000 ms est_timeout we advertise in
+ * PACKET_SENT: the confirm must land well before the app gives up and resends,
+ * or the resend races it. */
+#define VCONTACT_CONFIRM_DELAY_MS 300
+
+void CompanionMesh::vcontactConfirmWorkHandler(struct k_work *work)
+{
+	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+	ConfirmWork *cw = CONTAINER_OF(dwork, ConfirmWork, work);
+	cw->self->vcontactFlushConfirm();
+}
+
+void CompanionMesh::vcontactFlushConfirm()
+{
+	/* Single 32-bit read/clear: a concurrent flush from the work handler and
+	 * the frame path can at worst emit the push twice, which the app treats as
+	 * idempotent.  Losing it is the failure that matters, so no lock. */
+	uint32_t ack = _vcontact_confirm_ack;
+	if (ack == 0) {
+		return;
+	}
+	_vcontact_confirm_ack = 0;
+	k_work_cancel_delayable(&_vcontact_confirm_work.work);
+
+	uint8_t ack_push[8];
+	memcpy(ack_push, &ack, 4);
+	memset(&ack_push[4], 0, 4);        /* trip time: 0 ms — never left the box */
+	LOG_DBG("vcontact: emitting deferred ack 0x%08x", ack);
+	sendPush(PUSH_CODE_SEND_CONFIRMED, ack_push, 8);
+}
+
 void CompanionMesh::deriveVContactKey()
 {
 	/* v-contact pubkey = SHA256("zc-vcontact" || self pubkey). Re-run whenever
@@ -1057,8 +1100,13 @@ bool CompanionMesh::vcontactHandleFrame(const uint8_t *data, size_t len)
 			 * the real send path. The old code sent a RANDOM ack, which never
 			 * matched the value the app derives locally, so the app treated the
 			 * loopback message as un-acked and resent it once (attempt=1) a few
-			 * seconds later → duplicate reply. Emitting the correct SENT +
-			 * CONFIRMED up front (before the CLI runs) settles the app at once. */
+			 * seconds later → duplicate reply.
+			 *
+			 * The value is right, but the CONFIRMED that carries it is NOT sent
+			 * inline — see _vcontact_confirm_ack. Sent here it lands
+			 * sub-millisecond after the PACKET_SENT response to the same write,
+			 * before the app has committed the outgoing message, and the app
+			 * drops it. Deferred by a few hundred ms it sticks first time. */
 			uint8_t hbuf[5 + MAX_TEXT_LEN];
 			memcpy(hbuf, &data[3], 4);          /* timestamp, on-wire LE bytes */
 			hbuf[4] = (data[2] & 3);            /* attempt & 3 */
@@ -1069,10 +1117,9 @@ bool CompanionMesh::vcontactHandleFrame(const uint8_t *data, size_t len)
 			if (ack == 0) ack = 1;
 
 			sendPacketSent(MSG_SEND_SENT_DIRECT, ack, 3000);
-			uint8_t ack_push[8];
-			memcpy(ack_push, &ack, 4);
-			memset(&ack_push[4], 0, 4);         /* trip time: 0 ms */
-			sendPush(PUSH_CODE_SEND_CONFIRMED, ack_push, 8);
+			_vcontact_confirm_ack = ack;
+			k_work_reschedule(&_vcontact_confirm_work.work,
+					  K_MSEC(VCONTACT_CONFIRM_DELAY_MS));
 
 			/* Dedupe app resends: a retry reuses the message timestamp (only
 			 * the attempt byte changes). The correct ack above should stop most

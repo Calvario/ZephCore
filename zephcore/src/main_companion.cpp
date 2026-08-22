@@ -718,6 +718,22 @@ public:
 	void updateAdvertTimer() override {}
 	void updateFloodAdvertTimer() override {}
 
+	/* Reboot gate — true only when the app has been told everything we owe it.
+	 * A held-back v-contact delivery-ack counts as outstanding even though it
+	 * has not reached the TX queue yet, so a `reboot` typed into the v-contact
+	 * waits for its own ack before resetting. */
+	bool transportTxIdle() override {
+		if (companion_mesh.vcontactConfirmPending()) {
+			return false;
+		}
+#if ZEPHCORE_USB_STACK
+		if (zephcore_ble_get_active_iface() == ZEPHCORE_IFACE_USB) {
+			return zephcore_usb_companion_tx_idle();
+		}
+#endif
+		return zephcore_ble_tx_idle();
+	}
+
 	/* Log control — no log file on companion. */
 	void setLoggingOn(bool enable) override { (void)enable; }
 	void eraseLogFile() override {}

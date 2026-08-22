@@ -58,6 +58,12 @@ public:
     virtual void removeNeighbor(const uint8_t* pubkey, int key_len) {
         (void)pubkey; (void)key_len;
     }
+    /* True when the companion transport has nothing left to deliver: TX queue
+     * drained AND no delivery-ack still held back.  Reboot-class commands poll
+     * this before resetting so the reply and its ack are not cut off by the
+     * reset they just scheduled.  Default true — the repeater's LoRa reply is
+     * covered by the fixed pre-reboot delay instead. */
+    virtual bool transportTxIdle() { return true; }
     virtual void formatStatsReply(char* reply)           { strcpy(reply, "not available"); }
     virtual void formatRadioStatsReply(char* reply)      { strcpy(reply, "not available"); }
     virtual void formatPacketStatsReply(char* reply)     { strcpy(reply, "not available"); }
@@ -119,6 +125,9 @@ class CommonCLI {
     /* Deferred reboot - lets LoRa reply be sent before rebooting */
     struct k_work_delayable _reboot_work;
     uint8_t _pending_reboot;
+    /* Uptime (ms) past which the reboot goes ahead even if the transport is
+     * still busy — a stalled or dropped link must not wedge the reset. */
+    int64_t _reboot_deadline_ms;
     static void rebootWorkHandler(struct k_work *work);
 
     mesh::RTCClock* getRTCClock() { return _rtc; }
@@ -129,7 +138,7 @@ public:
     CommonCLI(mesh::MainBoard& board, mesh::RTCClock& rtc, ClientACL& acl,
               NodePrefs* prefs, CommonCLICallbacks* callbacks)
         : _board(&board), _rtc(&rtc), _acl(&acl), _prefs(prefs), _callbacks(callbacks),
-          _pending_reboot(REBOOT_NONE)
+          _pending_reboot(REBOOT_NONE), _reboot_deadline_ms(0)
     {
         k_work_init_delayable(&_reboot_work, rebootWorkHandler);
     }

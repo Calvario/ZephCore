@@ -1420,6 +1420,18 @@ bool zephcore_ble_is_congested(void)
 	return ble_tx_congested;
 }
 
+bool zephcore_ble_tx_idle(void)
+{
+	/* Nothing connected — nothing can be in flight, and nothing ever will be. */
+	if (!current_conn) {
+		return true;
+	}
+	return k_msgq_num_used_get(&ble_send_queue) == 0 &&
+	       !ble_tx_in_progress &&
+	       !tx_retry_pending &&
+	       !overflow_pending;
+}
+
 bool zephcore_ble_is_advertising(void)
 {
 	return adv_running;

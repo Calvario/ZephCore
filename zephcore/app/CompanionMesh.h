@@ -182,6 +182,10 @@ public:
 	 *  carry sane timestamps. Self-gating; safe to call speculatively. Hooked
 	 *  at CMD_APP_START, CMD_SET_DEVICE_TIME, and GPS time sync. */
 	void vcontactClockSynced();
+	/** True while a v-contact delivery-ack is still waiting to be emitted.
+	 *  Reboot-class CLI commands gate on this (plus transport TX idle) so the
+	 *  ack is not cut off by the reset it just scheduled. */
+	bool vcontactConfirmPending() const { return _vcontact_confirm_ack != 0; }
 
 	/**
 	 * Continue contact iteration (call each main loop iteration).
@@ -514,6 +518,37 @@ private:
 	 * the USB CLI. The pref is node-side state: `set v.contact off` is the only
 	 * durable disable. Cleared at CMD_APP_START (the session reset). */
 	bool _vcontact_app_hidden;
+	/* Deferred delivery-ack for a v-contact chat message.
+	 *
+	 * The ack itself is computed and PACKET_SENT emitted synchronously (the app
+	 * is waiting on that as the response to its own write), but the
+	 * PUSH_CODE_SEND_CONFIRMED that marks the bubble delivered is held back.
+	 * Emitted inline it lands sub-millisecond after the response to the very
+	 * same write -- before the app has committed the outgoing message to its
+	 * own state -- and the app drops it.  It then resends at est_timeout, the
+	 * dedup ring above suppresses the CLI re-run, and the resend's ack is the
+	 * one that finally sticks: one reply, two acks, delivery mark seconds late.
+	 *
+	 * No radio ack can arrive that fast, so the real send path never provokes
+	 * this; the v-contact is the only sub-millisecond acker in the system.
+	 *
+	 * 0 = nothing pending.  Emitted by the timer only — see the note on
+	 * VCONTACT_CONFIRM_DELAY_MS for why an inbound frame is not the trigger. */
+	uint32_t _vcontact_confirm_ack;
+	/* CONTAINER_OF is offsetof underneath, and offsetof on a non-standard-layout
+	 * type is only conditionally supported — CompanionMesh has base classes and
+	 * virtuals, so it does not qualify (CommonCLI does, which is why the same
+	 * trick is clean there). Wrap the work item in a POD that carries its own
+	 * back-pointer: offsetof stays inside a standard-layout struct, and the
+	 * owner comes from the pointer rather than from pointer arithmetic. */
+	struct ConfirmWork {
+		struct k_work_delayable work;
+		CompanionMesh *self;
+	};
+	ConfirmWork _vcontact_confirm_work;
+	static void vcontactConfirmWorkHandler(struct k_work *work);
+	/** Emit a deferred SEND_CONFIRMED now, if one is pending.  Idempotent. */
+	void vcontactFlushConfirm();
 	bool vcontactClockValid();
 	bool vcontactReady() {
 		return isVContactEnabled() && !_vcontact_app_hidden && _vcontact_lastmod != 0;

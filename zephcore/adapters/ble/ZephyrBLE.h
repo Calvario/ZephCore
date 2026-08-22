@@ -62,6 +62,12 @@ bool zephcore_ble_is_connected(void);
 /** True if TX queue is full and overflow retry is active. */
 bool zephcore_ble_is_congested(void);
 
+/** True when every queued frame has been transmitted and link-layer acked:
+ *  send queue empty, nothing in flight, no retry or overflow frame held back.
+ *  True when disconnected (nothing to wait for). Reboot-class CLI commands
+ *  poll this so a reset cannot cut off a reply or delivery-ack mid-flight. */
+bool zephcore_ble_tx_idle(void);
+
 /** True if the controller is currently broadcasting advertising PDUs.
  *  Returns FALSE during an active connection (Zephyr stops adv when the
  *  BT_MAX_CONN=1 slot is consumed) and FALSE after any explicit stop.
