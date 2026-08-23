@@ -6,16 +6,25 @@
  * Integration layer that wires buttons, buzzer, and display together.
  * All event-driven via Zephyr input subsystem + k_work.
  *
- * Input flow (after longpress + multi-tap filter chain):
+ * Input flow (after longpress + multi-tap filter chain).  This file maps
+ * key code → action only; which gesture emits which code is per-board, set by
+ * the tap-codes array in that board's devicetree.  Tap counts below are the
+ * common case, not a guarantee — e.g. Heltec T096 has no buzzer and gives the
+ * 2-tap slot to page-prev, pushing KEY_B out to 3 taps.
+ *
  *   KEY_1     → action_page_next()       (1 tap, 400ms delayed)
- *   KEY_LEFT  → action_page_prev()       (2 taps — RAK4631 / Pocket / Heltec V3–V4.3)
- *   KEY_B     → action_flood_advert()    (2 taps on extended multitap overlays)
- *   KEY_D     → action_buzzer_toggle()   (3 taps)
- *   KEY_C     → action_gps_toggle()      (4 taps, immediate)
+ *   KEY_LEFT  → action_page_prev()       (2 taps on boards with a screen)
+ *   KEY_B     → action_leds_toggle()     (LED heartbeat; 2 taps stock)
+ *   KEY_D     → action_buzzer_toggle()   (notification mode; 3 taps stock)
+ *   KEY_C     → action_gps_toggle()      (4 taps)
+ *   KEY_E     → action_flood_advert()    (5 taps)
  *   KEY_G     → GPS switch on/off        (hardware toggle, ThinkNode M1)
  *   KEY_POWER / KEY_F → action_deep_sleep() (long press — boards that emit these)
  *   KEY_ENTER → action_page_enter()      (long press — Pocket / Heltec; joystick center Wio)
  *   KEY_RIGHT → action_page_next()       (joystick, Wio Tracker)
+ *
+ * The last entry of a board's tap-codes fires immediately (no tap-delay-ms
+ * wait) — the filter knows no further tap can extend it.
  *
  * Notification flow:
  *   LoRa RX → CompanionMesh → ui_notify(UI_EVENT_CONTACT_MSG)
@@ -68,12 +77,17 @@ extern void ui_led_flash_msg(void);
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(ui_task, CONFIG_ZEPHCORE_BOARD_LOG_LEVEL);
 
-/* Tap-count feedback melodies.
+/* Action feedback melodies.
  * b=200, d=16 → each chirp ~75ms, rest ~75ms = clear separation.
  *
- * 2 taps (flood advert):  chirp-chirp
- * 3 taps (buzzer toggle): chirp×3 + high(ON) or low(OFF)
- * 4 taps (GPS toggle):    chirp×4 + high(ON) or low(OFF)
+ * The chirp count identifies the action, not the tap count — the two are only
+ * equal on boards using the stock tap-codes order, and LED already differs
+ * there (2 taps, 5 chirps).  Do not "fix" a count to match a gesture.
+ *
+ * advert sent (zero-hop or flood): chirp-chirp
+ * buzzer / notification mode:      chirp×3 + high(ON) or low(OFF)
+ * GPS toggle:                      chirp×4 + high(ON) or low(OFF)
+ * LED heartbeat toggle:            chirp×5 + high(ON) or low(OFF)
  *
  * ON tail:  high E7 (~2637Hz) = "enabled"
  * OFF tail: low G5 (~784Hz)   = "disabled"  */
@@ -277,12 +291,12 @@ static void action_page_enter(void)
 		break;
 
 	case UI_PAGE_GPS:
-		/* Toggle GPS (same as quad-tap) */
+		/* Toggle GPS (same as the KEY_C tap action) */
 		action_gps_toggle();
 		break;
 
 	case UI_PAGE_BUZZER:
-		/* Toggle buzzer mute (same as triple-tap) */
+		/* Cycle notification mode (same as the KEY_D tap action) */
 		action_buzzer_toggle();
 		break;
 
@@ -687,9 +701,11 @@ static void ui_input_cb(struct input_event *evt, void *user_data)
 
 	/* Map input key codes to UI actions.
 	 *
-	 * RAK4631 / WisMesh Pocket / Heltec V3–V4.3: 1 tap KEY_1, 2 taps KEY_LEFT;
-	 * long press KEY_ENTER (page enter). Other boards: up to 4–5 tap codes
-	 * (KEY_B/D/C/E) and KEY_POWER or KEY_F long → deep sleep.
+	 * Two-code boards (RAK4631 / WisMesh Pocket / Heltec V3–V4.3 / T-Echo /
+	 * ThinkNode M1 / T-Impulse): 1 tap KEY_1, 2 taps KEY_LEFT; long press
+	 * KEY_ENTER (page enter).  Five-code boards emit KEY_B/D/C/E as well, and
+	 * KEY_POWER or KEY_F long → deep sleep.  The gesture behind each code is
+	 * the board's business (see the tap-codes note at the top of this file).
 	 * KEY_RIGHT/LEFT/ENTER/UP/DOWN: joystick (Wio Tracker)
 	 *
 	 * NOTE: KEY_A (raw short-press from longpress filter) is NOT handled
@@ -700,27 +716,27 @@ static void ui_input_cb(struct input_event *evt, void *user_data)
 	switch (evt->code) {
 	/* ===== Multi-tap outputs ===== */
 	case INPUT_KEY_1:
-		/* Single tap (400ms delayed): page next */
+		/* First tap-codes entry (400ms delayed): page next */
 		action_page_next();
 		break;
 
 	case INPUT_KEY_B:
-		/* Double tap (400ms delayed): toggle LED heartbeat */
+		/* Toggle LED heartbeat (2 taps stock, 3 on T096) */
 		action_leds_toggle();
 		break;
 
 	case INPUT_KEY_D:
-		/* Triple tap (400ms delayed): toggle buzzer mute */
+		/* Cycle notification mode; no-op where UI_BUZZER=n */
 		action_buzzer_toggle();
 		break;
 
 	case INPUT_KEY_C:
-		/* Quadruple tap (400ms delayed): toggle GPS */
+		/* Toggle GPS */
 		action_gps_toggle();
 		break;
 
 	case INPUT_KEY_E:
-		/* Quintuple tap (immediate): flood advert */
+		/* Flood advert (last tap-codes entry, so immediate) */
 		action_flood_advert();
 		break;
 
