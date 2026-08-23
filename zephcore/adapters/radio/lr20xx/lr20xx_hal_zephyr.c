@@ -252,75 +252,141 @@ lr20xx_hal_status_t lr20xx_hal_write(const void *context, const uint8_t *command
 #define LR20XX_STAT_LEN 2
 
 /**
- * @brief Clock one command-and-response frame inside a single NSS assertion.
+ * @brief Clock a command and read back its response, as two NSS windows.
  *
- * The LR2021 streams the whole answer within the NSS window that carried the
- * command:
+ * The command goes out in its own window.  The chip raises BUSY while it
+ * prepares the answer, and a second window clocks that answer out:
  *
- *     MOSI  [ command_length ][      LR20XX_STAT_LEN + data_length      ]
- *     MISO  [  undefined     ][ stat header ][        payload           ]
+ *     window 1   MOSI [ command_length ]   MISO [ undefined ]
+ *                -- BUSY high while the chip prepares the answer --
+ *     window 2   MOSI [ LR20XX_STAT_LEN + data_length ]
+ *                MISO [ stat header ][ payload ]
  *
- * Releasing NSS between the command and the payload ends the frame, so the
- * following read starts a fresh one and the chip answers it with the status /
- * IRQ word rather than the payload the caller asked for. That misread is not
- * obviously wrong at the call site — it is a plausible-looking short integer —
- * so it surfaces as nonsense lengths and all-zero status reads rather than as
- * an SPI error. Keep every read in one transaction.
+ * This mirrors Semtech's reference HAL (lr20xx_hal_read() in LoRa Basics
+ * Modem): command out, NSS released, wait on BUSY, then two dummy bytes and the
+ * payload in a fresh window.  The Rx FIFO pop is the one read on this chip that
+ * does NOT work this way — single window, no stat header, no BUSY wait; see
+ * lr20xx_hal_direct_read_fifo().
+ *
+ * The BUSY wait between the two windows is load-bearing, and the failure it
+ * guards is silent rather than loud: clock the second window too early and the
+ * chip answers with its default status / IRQ stream instead of the payload,
+ * which the caller then parses as a plausible-looking short integer rather than
+ * reporting an SPI error.  The status check at the bottom of this function is
+ * the backstop for the residual case where BUSY has not yet risen when the wait
+ * samples it.
  *
  * NULL TX buffers clock the SPI controller's over-read character, NOT zero --
  * Nordic defaults it to 0xff, which the LR2021 reads as a bogus opcode and
  * rejects. Boards using this driver must set overrun-character = <0x00> (the
  * LR2021 NOP) on the SPI node.
  */
+/* Command status field of the stat1 header (DS Table 6-38, bits [2:1]).
+ * 0 FAIL, 1 PERR, 2 CMD_OK, 3 CMD_DATA.  The vendor decoder in
+ * lr20xx_system.c shifts without masking; mask here, the field is 2 bits. */
+#define LR20XX_STAT1_CMD_STATUS(b)	(((b) >> 1) & 0x03)
+#define LR20XX_CMD_STATUS_DATA		0x03
+
+/* Attempts at the two-window read before giving up.  Upstream MeshCore
+ * measured recovery on the first retry in every observed case (4/4 on LR11xx,
+ * 11/11 on LR2021, with the BUSY wait skipped on purpose). */
+#define LR20XX_READ_ATTEMPTS		3
+
 static int lr20xx_spi_read_frame(struct lr20xx_hal_context *ctx, const uint8_t *command,
 				  uint16_t command_length, uint8_t *data, uint16_t data_length)
 {
-	int ret;
+	int ret = 0;
+	uint8_t stat[LR20XX_STAT_LEN];
 
-	/* Phase 1: the command, in its own NSS window. */
-	{
-		const struct spi_buf tx_buf = {
-			.buf = (uint8_t *)command,
-			.len = command_length,
-		};
-		const struct spi_buf_set tx = { .buffers = &tx_buf, .count = 1 };
+	/* Retried as a whole: the chip only streams the answer in the window
+	 * that follows its command, so recovering means re-issuing the command.
+	 * Safe for every caller that lands here — lr20xx_hal_read() serves
+	 * getters and address-based register reads, all idempotent.  The one
+	 * read that is NOT idempotent, the Rx FIFO pop, does not come through
+	 * this path at all (lr20xx_hal_direct_read_fifo(), single NSS window,
+	 * no stat header, no BUSY wait — structurally immune to the race
+	 * below). */
+	for (int attempt = 0; attempt < LR20XX_READ_ATTEMPTS; attempt++) {
+		/* Phase 1: the command, in its own NSS window. */
+		{
+			const struct spi_buf tx_buf = {
+				.buf = (uint8_t *)command,
+				.len = command_length,
+			};
+			const struct spi_buf_set tx = { .buffers = &tx_buf, .count = 1 };
 
-		gpio_pin_set_dt(&ctx->nss, 1);
-		ret = spi_write(ctx->spi_dev, &ctx->spi_cfg, &tx);
-		gpio_pin_set_dt(&ctx->nss, 0);
+			gpio_pin_set_dt(&ctx->nss, 1);
+			ret = spi_write(ctx->spi_dev, &ctx->spi_cfg, &tx);
+			gpio_pin_set_dt(&ctx->nss, 0);
 
-		if (ret < 0) {
+			if (ret < 0) {
+				return ret;
+			}
+		}
+
+		/* The answer is not ready until BUSY drops — without this the second
+		 * window clocks out whatever the chip had, two bytes early. */
+		if (wait_on_busy(ctx) != LR20XX_HAL_STATUS_OK) {
+			return -ETIMEDOUT;
+		}
+
+		/* Phase 2: two dummy bytes absorb the stat header, then the payload.
+		 * The stat header lands in a real buffer rather than being discarded
+		 * with a NULL one: spi_nrfx_spim rejects a transfer whose first TX and
+		 * RX buffers are both NULL (-EINVAL), and TX is legitimately NULL here. */
+		{
+			const struct spi_buf tx_buf = {
+				.buf = NULL,
+				.len = LR20XX_STAT_LEN + data_length,
+			};
+			const struct spi_buf rx_bufs[] = {
+				{ .buf = stat, .len = LR20XX_STAT_LEN },
+				{ .buf = data, .len = data_length },
+			};
+			const struct spi_buf_set tx = { .buffers = &tx_buf, .count = 1 };
+			const struct spi_buf_set rx = { .buffers = rx_bufs, .count = 2 };
+
+			gpio_pin_set_dt(&ctx->nss, 1);
+			ret = spi_transceive(ctx->spi_dev, &ctx->spi_cfg, &tx, &rx);
+			gpio_pin_set_dt(&ctx->nss, 0);
+
+			if (ret < 0) {
+				return ret;
+			}
+		}
+
+		/* Did the chip actually answer US?
+		 *
+		 * wait_on_busy() returns immediately on a BUSY that reads low, and
+		 * cannot tell "the command finished" from "BUSY has not risen yet".
+		 * The gap between releasing NSS above and sampling the pin is two
+		 * GPIO calls, so losing that race is entirely possible; RadioLib
+		 * loses it with a whole microsecond of margin (MeshCore PR #3261).
+		 * When it is lost, phase 2 clocks out the chip's default
+		 * [stat 2B][irq 4B] stream instead of the payload, stat[] absorbs
+		 * the two status bytes, and the caller parses IRQ bits as its
+		 * answer.  Nothing reports an error: for GetRxPacketLength that is
+		 * irq[31:16], which with RX_DONE (bit 18) set is exactly 4, so a
+		 * real frame of any size is read out of the FIFO as a 4-byte one
+		 * and silently dropped upstream as corrupt.
+		 *
+		 * The status separates the two cleanly.  CMD_DATA means "a read was
+		 * processed and data is being transmitted instead of IRQ status" —
+		 * the only correct answer for this window.  A reply produced by the
+		 * race reports CMD_OK instead, i.e. the chip is streaming status,
+		 * not data.  The Rx FIFO is untouched at this point, so re-reading
+		 * recovers the frame rather than losing it. */
+		if (LR20XX_STAT1_CMD_STATUS(stat[0]) == LR20XX_CMD_STATUS_DATA) {
 			return ret;
 		}
 	}
 
-	/* The answer is not ready until BUSY drops — without this the second
-	 * window clocks out whatever the chip had, two bytes early. */
-	if (wait_on_busy(ctx) != LR20XX_HAL_STATUS_OK) {
-		return -ETIMEDOUT;
-	}
-
-	/* Phase 2: two dummy bytes absorb the stat header, then the payload.
-	 * The stat header lands in a real buffer rather than being discarded
-	 * with a NULL one: spi_nrfx_spim rejects a transfer whose first TX and
-	 * RX buffers are both NULL (-EINVAL), and TX is legitimately NULL here. */
-	{
-		uint8_t stat[LR20XX_STAT_LEN];
-		const struct spi_buf tx_buf = {
-			.buf = NULL,
-			.len = LR20XX_STAT_LEN + data_length,
-		};
-		const struct spi_buf rx_bufs[] = {
-			{ .buf = stat, .len = LR20XX_STAT_LEN },
-			{ .buf = data, .len = data_length },
-		};
-		const struct spi_buf_set tx = { .buffers = &tx_buf, .count = 1 };
-		const struct spi_buf_set rx = { .buffers = rx_bufs, .count = 2 };
-
-		gpio_pin_set_dt(&ctx->nss, 1);
-		ret = spi_transceive(ctx->spi_dev, &ctx->spi_cfg, &tx, &rx);
-		gpio_pin_set_dt(&ctx->nss, 0);
-	}
+	/* Out of attempts.  Hand back what came in rather than failing the call:
+	 * that is exactly today's behaviour, so no existing caller regresses on a
+	 * read whose status is legitimately something else.  Tighten to an error
+	 * return only once hardware confirms every read reports CMD_DATA. */
+	LOG_WRN("read op=0x%04x: stat1=0x%02x (cmd_status=%u, want CMD_DATA) after %d attempts",
+		last_opcode, stat[0], LR20XX_STAT1_CMD_STATUS(stat[0]), LR20XX_READ_ATTEMPTS);
 
 	return ret;
 }

@@ -603,6 +603,55 @@ K_WORK_DELAYABLE_DEFINE(tx_drain_work, tx_drain_work_fn);
 K_WORK_DELAYABLE_DEFINE(overflow_retry_work, overflow_retry_work_fn);
 K_WORK_DELAYABLE_DEFINE(adv_slow_work, adv_slow_work_fn);
 
+/* ========== Unpaired-connection timeout ==========
+ *
+ * A connection that never reaches L2 holds the node's only peripheral slot.
+ * With CONFIG_BT_MAX_CONN=1 Zephyr stops advertising while that slot is taken,
+ * and the companion's advertising watchdog (main_companion.cpp) deliberately
+ * skips any state where a connection exists — so a client that connects and
+ * never pairs makes the node invisible to everyone else until it is power
+ * cycled.  A BLE scanner app left connected does it by accident; iOS does it
+ * routinely.  Nothing else times the connection out: pairing here is reactive
+ * by design (Apple §55 — we never send a Security Request, we wait for the
+ * phone to hit ATT insufficient-authentication and start pairing itself), so
+ * "connected but idle forever" is a state the node otherwise accepts happily.
+ *
+ * Dropping it costs a legitimate client nothing: every characteristic on both
+ * services is *_AUTHEN, so an unsecured connection cannot read, write or
+ * subscribe to anything.  The window has to cover discovery plus the phone's
+ * own pairing dialog — 15 s matches upstream MeshCore PR #3263, which measured
+ * a real unpaired connection being dropped at ~13 s. */
+#define BLE_SECURITY_TIMEOUT_MS 15000
+
+static void sec_timeout_conn_cb(struct bt_conn *conn, void *user_data)
+{
+	ARG_UNUSED(user_data);
+
+	if (bt_conn_get_security(conn) >= BT_SECURITY_L2) {
+		return;
+	}
+
+	char addr[BT_ADDR_LE_STR_LEN];
+	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
+	LOG_WRN("security timeout: %s unpaired after %d ms, disconnecting",
+		addr, BLE_SECURITY_TIMEOUT_MS);
+
+	/* recycled() restarts advertising once the stack releases the slot. */
+	bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+}
+
+/* Runs on the system work queue; current_conn belongs to the Bluetooth
+ * callback thread.  The connection is therefore reached through
+ * bt_conn_foreach(), which hands the callback a reference held for its
+ * duration, rather than by dereferencing current_conn across threads. */
+static void sec_timeout_work_fn(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	bt_conn_foreach(BT_CONN_TYPE_LE, sec_timeout_conn_cb, NULL);
+}
+
+K_WORK_DELAYABLE_DEFINE(sec_timeout_work, sec_timeout_work_fn);
+
 /* ========== TX completion callback ========== */
 
 /*
@@ -720,6 +769,10 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	/* Cancel fast→slow transition — already connected, no need to switch */
 	k_work_cancel_delayable(&adv_slow_work);
 
+	/* Arm the unpaired-connection timeout.  Cancelled by security_changed()
+	 * at L2+, and by disconnected() whichever way the connection ends. */
+	k_work_reschedule(&sec_timeout_work, K_MSEC(BLE_SECURITY_TIMEOUT_MS));
+
 	/* DLE is NOT requested here — the phone may start a PHY update LL
 	 * procedure immediately, and BLE allows only one at a time.
 	 * DLE is deferred to le_phy_updated() (after PHY negotiation completes)
@@ -747,6 +800,8 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	char addr[BT_ADDR_LE_STR_LEN];
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 	LOG_INF("disconnected: %s reason 0x%02x", addr, reason);
+
+	k_work_cancel_delayable(&sec_timeout_work);
 
 	if (conn == current_conn) {
 		bt_conn_unref(current_conn);
@@ -802,6 +857,12 @@ static void security_changed(struct bt_conn *conn, bt_security_t level, enum bt_
 		return;
 	}
 	LOG_INF("%s level %u", addr, level);
+
+	/* Paired (or bonded reconnect) — the connection has earned its slot,
+	 * so stand the unpaired-connection timeout down. */
+	if (level >= BT_SECURITY_L2) {
+		k_work_cancel_delayable(&sec_timeout_work);
+	}
 
 	/* Enable TX when we have sufficient security (level 2+ = encrypted).
 	 * This is the ONLY place that sets ble_tx_ready — security_changed is

@@ -216,6 +216,15 @@ lr11xx_hal_status_t lr11xx_hal_write(const void *context, const uint8_t *command
     return wait_on_busy(ctx);
 }
 
+/* Command status field of the stat1 byte (SWDR001, bits [2:1]).
+ * 0 FAIL, 1 PERR, 2 CMD_OK, 3 CMD_DATA.  The vendor decoder in lr11xx_system.c
+ * shifts without masking; mask here, the field is 2 bits. */
+#define LR11XX_STAT1_CMD_STATUS(b)  (((b) >> 1) & 0x03)
+#define LR11XX_CMD_STATUS_DATA      0x03
+
+/* Attempts at the command-then-response read before giving up. */
+#define LR11XX_READ_ATTEMPTS        3
+
 lr11xx_hal_status_t lr11xx_hal_read(const void *context, const uint8_t *command,
                                      const uint16_t command_length,
                                      uint8_t *data, const uint16_t data_length)
@@ -256,26 +265,67 @@ lr11xx_hal_status_t lr11xx_hal_read(const void *context, const uint8_t *command,
         return wait_on_busy(ctx);
     }
 
-    /* Phase 2: wait BUSY, then read response — LR11XX prepends one dummy status byte */
-    if (check_device_ready(ctx) != LR11XX_HAL_STATUS_OK) {
-        return LR11XX_HAL_STATUS_ERROR;
+    /* Phase 2: wait BUSY, then read response — LR11XX prepends one stat1 byte.
+     *
+     * That byte is checked, not discarded.  wait_on_busy() returns immediately
+     * on a BUSY that reads low and cannot tell "the command finished" from
+     * "BUSY has not risen yet", so this window can clock out the chip's default
+     * status / IRQ stream instead of the payload — see the long note in
+     * adapters/radio/lr20xx/lr20xx_hal_zephyr.c and MeshCore PR #3261.  On this
+     * family the miss lands in lr11xx_radio_get_rx_buffer_status(), where the
+     * payload length and buffer offset both come out of IRQ bits: a plausible
+     * short integer, no error reported, and the frame is read out of the buffer
+     * at the wrong length or the wrong offset.
+     *
+     * CMD_DATA ("processed read, data is being transmitted instead of IRQ
+     * status") is the only correct status for this window; a reply produced by
+     * the race reports CMD_OK.  Re-issuing the command is safe for every caller
+     * that reaches here — all are getters or address-based register reads. */
+    uint8_t stat1 = 0;
+
+    for (int attempt = 0; attempt < LR11XX_READ_ATTEMPTS; attempt++) {
+        if (attempt > 0) {
+            /* Recovery means re-issuing the command: the chip only streams the
+             * answer in the window that follows it. */
+            gpio_pin_set_dt(&ctx->nss, 1);
+            ret = spi_write(ctx->spi_dev, &ctx->spi_cfg, &tx);
+            gpio_pin_set_dt(&ctx->nss, 0);
+
+            if (ret < 0) {
+                LOG_ERR("SPI write (cmd retry) failed: %d", ret);
+                return LR11XX_HAL_STATUS_ERROR;
+            }
+        }
+
+        if (check_device_ready(ctx) != LR11XX_HAL_STATUS_OK) {
+            return LR11XX_HAL_STATUS_ERROR;
+        }
+
+        const struct spi_buf rx_bufs[] = {
+            { .buf = &stat1, .len = 1 },  /* leading status byte */
+            { .buf = data, .len = data_length },
+        };
+        const struct spi_buf_set rx = { .buffers = rx_bufs, .count = 2 };
+
+        gpio_pin_set_dt(&ctx->nss, 1);
+        ret = spi_read(ctx->spi_dev, &ctx->spi_cfg, &rx);
+        gpio_pin_set_dt(&ctx->nss, 0);
+
+        if (ret < 0) {
+            LOG_ERR("SPI read failed: %d", ret);
+            return LR11XX_HAL_STATUS_ERROR;
+        }
+
+        if (LR11XX_STAT1_CMD_STATUS(stat1) == LR11XX_CMD_STATUS_DATA) {
+            return LR11XX_HAL_STATUS_OK;
+        }
     }
 
-    uint8_t dummy;
-    const struct spi_buf rx_bufs[] = {
-        { .buf = &dummy, .len = 1 },  /* discard leading status byte */
-        { .buf = data, .len = data_length },
-    };
-    const struct spi_buf_set rx = { .buffers = rx_bufs, .count = 2 };
-
-    gpio_pin_set_dt(&ctx->nss, 1);
-    ret = spi_read(ctx->spi_dev, &ctx->spi_cfg, &rx);
-    gpio_pin_set_dt(&ctx->nss, 0);
-
-    if (ret < 0) {
-        LOG_ERR("SPI read failed: %d", ret);
-        return LR11XX_HAL_STATUS_ERROR;
-    }
+    /* Out of attempts.  Hand back what came in rather than failing the call:
+     * that is exactly the previous behaviour, so no existing caller regresses on
+     * a read whose status is legitimately something else. */
+    LOG_WRN("read op=0x%04x: stat1=0x%02x (cmd_status=%u, want CMD_DATA) after %d attempts",
+            last_opcode, stat1, LR11XX_STAT1_CMD_STATUS(stat1), LR11XX_READ_ATTEMPTS);
 
     return LR11XX_HAL_STATUS_OK;
 }
