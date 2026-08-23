@@ -133,7 +133,13 @@ public:
 	void cadMaintenance() override;
 	/** Deaf-aware AGC unstick + temperature-drift recalibration.
 	 *  Called from Dispatcher::maintenanceLoop(); never on the packet path. */
-	void agcMaintenance() override;
+	void radioMaintenance() override;
+
+private:
+	/* The two unrelated jobs radioMaintenance() drives; see its comment. */
+	void agcIdleMaintenance(uint32_t now);
+	void imageCalMaintenance(uint32_t now);
+public:
 	uint32_t msUntilNextMaintenance() override;
 	int8_t getCadOffset() const override { return _cad_offset; }
 
@@ -188,7 +194,7 @@ protected:
 	virtual uint8_t hwCadPeakMin() { return 0; }
 	virtual uint8_t hwCadPeakMax() { return 0; }
 
-	/* ── Receiver hygiene — see LoRaRadioBase::agcMaintenance() ────── */
+	/* ── Receiver hygiene — see LoRaRadioBase::radioMaintenance() ─── */
 
 	/** Unstick a jammed AGC: warm sleep to drop the analog front end, then
 	 *  recalibrate on the way back up.  Semtech's stated remedy; the
@@ -206,7 +212,25 @@ protected:
 
 	/** Chip junction temperature in whole degrees C, or INT16_MIN when the
 	 *  backend cannot measure it (which disables drift recalibration). */
-	virtual int16_t hwGetChipTempC() { return INT16_MIN; }
+	/* Does this family actually suffer the jammed-AGC fault the reset is a
+	 * remedy for?  Only the SX126x does.  Semtech prescribe warm sleep plus
+	 * recalibration for it, ZephCore inherited the idea from Arduino
+	 * MeshCore's `agc_reset_interval`, and both are SX126x-era.  Neither the
+	 * LR11xx UM nor the LR2021 DS describes such a fault; those parts need
+	 * image/front-end recalibration on temperature drift, which is a
+	 * different operation on a different trigger (hwRecalibrate()).
+	 *
+	 * Running it anyway is not free.  Measured on a T1000-E 2026-08-23: the
+	 * 60 s after an AGC reset carried a 7.4% packet-miss rate against 0.6%
+	 * elsewhere, and one deaf stretch began at one reset and ended at the
+	 * next — the reset was recovering damage it had caused, on a part with
+	 * no AGC fault to fix. */
+	virtual bool hwNeedsAgcReset() { return false; }
+
+	/* Does this family specify a temperature threshold for image/front-end
+	 * recalibration?  LR11xx and LR2021 do; the SX126x datasheet does not,
+	 * and drift recalibration stays inactive there exactly as before. */
+	virtual bool hwHasDriftRecal() { return false; }
 
 	/** Radio deaf time per duty-cycle wake transition (context restore +
 	 *  PLL lock + TCXO startup where fitted), in microseconds.  Counts
@@ -334,12 +358,33 @@ protected:
 
 	uint32_t _dc_last_sleep_us;
 
-	/* agcMaintenance() bookkeeping.  RX activity is inferred by sampling the
+	/* agcIdleMaintenance() bookkeeping.  RX activity is inferred by sampling the
 	 * existing packet counters rather than timestamping in the RX callback,
 	 * so nothing is added to the ISR path. */
 	uint32_t _agc_rx_count_shadow;
 	uint32_t _agc_last_activity_ms;
-	int16_t  _agc_last_cal_temp_c;
+
+	/* Stuck-AGC corroboration.  The noise-floor sampler already produces an
+	 * RSSI every interval; a desensitised front end reports a frozen one.
+	 * Free evidence — no extra command, no extra wake. */
+	int16_t  _agc_rssi_last;
+	uint8_t  _agc_rssi_frozen;
+	int16_t  _image_cal_last_temp_c;
+
+	/* Image-calibration temperature polling.  Deliberately much slower than
+	 * the maintenance cadence — see imageCalMaintenance(). */
+	uint32_t _image_cal_last_ms;
+	uint32_t _image_cal_wait_ms;
+	bool     _image_cal_started;
+	bool     _image_cal_confirming;
+
+	/* Start of the most recent transmit, for the post-TX quiet window the
+	 * temperature poll waits out.  Start-referenced rather than end-
+	 * referenced so it can be stamped at the single startSendRaw() site
+	 * instead of all five _tx_active clear paths; airtime is bounded by
+	 * seconds and the quiet window by a minute, so the difference does not
+	 * matter. */
+	uint32_t _last_tx_start_ms;
 
 	/* Config cache — skip redundant hwConfigure() */
 	struct lora_modem_config _last_cfg;

@@ -53,7 +53,7 @@ public:
 	/** Receiver hygiene: deaf-aware AGC unstick and temperature-drift
 	 *  recalibration.  Both sleep the radio, so this is called only from the
 	 *  maintenance tick, never from a packet path.  Default: no-op. */
-	virtual void agcMaintenance() {}
+	virtual void radioMaintenance() {}
 
 	/* Milliseconds until this radio's periodic work (noise floor sampling,
 	 * CAD probing/decay) next needs a call, or MAINTENANCE_IDLE when it has

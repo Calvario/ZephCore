@@ -286,7 +286,17 @@ lr11xx_hal_status_t lr11xx_hal_read(const void *context, const uint8_t *command,
     for (int attempt = 0; attempt < LR11XX_READ_ATTEMPTS; attempt++) {
         if (attempt > 0) {
             /* Recovery means re-issuing the command: the chip only streams the
-             * answer in the window that follows it. */
+             * answer in the window that follows it.
+             *
+             * Wait on BUSY first, exactly as the first pass does at the top of
+             * this function.  A command clocked into a chip that has not
+             * dropped BUSY is not a retry, it is a malformed frame the chip
+             * answers with CMD_PERR — the failure mode behind the MeshTracker
+             * X1 rejection storm (see check_device_ready() in the LR2021 HAL). */
+            if (check_device_ready(ctx) != LR11XX_HAL_STATUS_OK) {
+                return LR11XX_HAL_STATUS_ERROR;
+            }
+
             gpio_pin_set_dt(&ctx->nss, 1);
             ret = spi_write(ctx->spi_dev, &ctx->spi_cfg, &tx);
             gpio_pin_set_dt(&ctx->nss, 0);

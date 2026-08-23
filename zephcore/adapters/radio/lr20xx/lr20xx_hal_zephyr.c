@@ -307,6 +307,15 @@ static int lr20xx_spi_read_frame(struct lr20xx_hal_context *ctx, const uint8_t *
 	 * no stat header, no BUSY wait — structurally immune to the race
 	 * below). */
 	for (int attempt = 0; attempt < LR20XX_READ_ATTEMPTS; attempt++) {
+		/* Wait on BUSY before re-issuing, exactly as lr20xx_hal_read() does
+		 * before the first pass.  A command clocked into a chip that has not
+		 * dropped BUSY is not a retry, it is a malformed frame the chip
+		 * answers with CMD_PERR — see check_device_ready() above for what
+		 * that cost on the MeshTracker X1. */
+		if (attempt > 0 && check_device_ready(ctx) != LR20XX_HAL_STATUS_OK) {
+			return -ETIMEDOUT;
+		}
+
 		/* Phase 1: the command, in its own NSS window. */
 		{
 			const struct spi_buf tx_buf = {

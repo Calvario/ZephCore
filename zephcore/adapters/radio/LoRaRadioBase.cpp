@@ -61,7 +61,11 @@ LoRaRadioBase::LoRaRadioBase(const struct device *lora_dev, MainBoard &board,
 	  _rx_boost_enabled(true),
 	  _dc_last_rx_us(0), _dc_last_sleep_us(0),
 	  _agc_rx_count_shadow(0), _agc_last_activity_ms(0),
-	  _agc_last_cal_temp_c(INT16_MIN),
+	  _agc_rssi_last(0), _agc_rssi_frozen(0),
+	  _image_cal_last_temp_c(INT16_MIN),
+	  _image_cal_last_ms(0), _image_cal_wait_ms(0),
+	  _image_cal_started(false), _image_cal_confirming(false),
+	  _last_tx_start_ms(0),
 	  _config_cached(false),
 	  _has_radio_override(false),
 	  _override_freq(0), _override_bw(0),
@@ -751,6 +755,7 @@ bool LoRaRadioBase::startSendRaw(const uint8_t *bytes, int len)
 
 	_board->onBeforeTransmit();
 	atomic_set(&_tx_active, 1);
+	_last_tx_start_ms = k_uptime_get_32();
 
 	/* Phase 2: when LBT is enabled, skip the pre-emptive hwCancelReceive()
 	 * and keep _in_recv_mode = 1 so the driver's send_async sees state == RX
@@ -1056,6 +1061,19 @@ void LoRaRadioBase::triggerNoiseFloorCalibrate(int threshold)
 				(rssi <= _noise_floor + CAD_PROBE_RSSI_GUARD);
 	_sample_fresh = true;
 
+	/* Stuck-AGC evidence, gathered from a reading we already took.  A live
+	 * front end dithers by a dB or two between samples even on a quiet
+	 * channel; a desensitised one returns the same number forever.  Costs
+	 * nothing and needs no chip command of its own. */
+	if (rssi == _agc_rssi_last) {
+		if (_agc_rssi_frozen < 0xFF) {
+			_agc_rssi_frozen++;
+		}
+	} else {
+		_agc_rssi_last = rssi;
+		_agc_rssi_frozen = 0;
+	}
+
 	/* First sample after reset (DEFAULT_NOISE_FLOOR == 0): seed directly.
 	 * The lower clamp tracks the active bandwidth — thermal noise is
 	 * 10*log10(BW) so a fixed rail pins narrow-BW presets several dB high
@@ -1139,14 +1157,23 @@ bool LoRaRadioBase::isReceiving()
  *    is working, and it fires no more often on a silent one, where a
  *    desensitised receiver is invisible and nothing else will reveal it.
  *
- *    So trigger on silence instead.  If nothing has been heard for
- *    AGC_IDLE_RESET_MS the receiver is either genuinely idle — in which case
- *    the reset costs nothing, there is no traffic to miss — or it is deaf, in
- *    which case this is the only thing that will recover it.  Self-targeting in
- *    both directions: a busy node essentially never resets, and the resets a
- *    quiet node does perform are free.  Arduino MeshCore's periodic
+ *    So trigger on silence instead.  Arduino MeshCore's periodic
  *    `agc_reset_interval` addressed the same fault and shipped defaulted to 0
  *    (off), which is a fair summary of how well a plain timer serves it.
+ *
+ *    This used to claim the reset was free because an idle node "has no traffic
+ *    to miss".  That is false, and hardware disproved it: the reset fires at the
+ *    END of a silent stretch, which is precisely when traffic resumes, and
+ *    hwResetAgc() takes the radio out of RX for the whole warm-sleep +
+ *    Calibrate(ALL) + image-cal + re-entry sequence.  A packet was measured lost
+ *    to exactly that window on 2026-08-23 (T1000-E, 92 ms after the re-arm).
+ *
+ *    Silence is therefore treated as a prerequisite, not as proof.  Firing also
+ *    requires corroboration from evidence already on hand: the noise-floor
+ *    sampler reads RSSI every interval regardless, and a desensitised front end
+ *    reports a frozen value.  Both conditions together, and the operation
+ *    essentially never runs on a healthy node — which is the only acceptable
+ *    cost for a watchdog guarding a fault nobody has observed in the field.
  *
  *    Deliberately NOT reset here: the noise floor.  The previous periodic
  *    implementation (removed in fe6e585) zeroed it on every fire, forcing a
@@ -1162,13 +1189,46 @@ bool LoRaRadioBase::isReceiving()
  *    block (DS 6.12) only corrects crystal drift from TX self-heating, and it
  *    refuses to run at all when a TCXO is fitted.
  *
- *    AGC_RECAL_TEMP_DELTA_C is deliberately tighter than either datasheet
+ *    IMAGE_CAL_TEMP_DELTA_C is deliberately tighter than either datasheet
  *    figure — cheap insurance, and the reading is a junction temperature that
  *    lags ambient. */
-#define AGC_IDLE_RESET_MS        60000U
-#define AGC_RECAL_TEMP_DELTA_C   5
+/* Silence alone is NOT evidence of a fault — see the rationale block above.
+ * Ten minutes, not one: a genuinely deaf receiver stays deaf, so waiting costs
+ * nothing, whereas a 60 s threshold fired 4-8 times per quarter hour on a
+ * perfectly healthy node (measured 2026-08-23). */
+#define AGC_IDLE_RESET_MS        600000U
 
-void LoRaRadioBase::agcMaintenance()
+/* Consecutive identical noise-floor readings before silence is believed.  At
+ * the default 15 s sampler interval this is two minutes of a frozen front end. */
+#define AGC_STUCK_RSSI_SAMPLES   8U
+
+/* Image-calibration drift threshold.  Nothing to do with the AGC reset above —
+ * this is the front end.  SX126x DS §9.2.1 / LR11xx UM: image calibration is
+ * required after a frequency change > 10 MHz or a temperature change > 10 C.
+ * Half the datasheet figure is used so drift is corrected before it reaches the
+ * point where the datasheet says the calibration is already stale. */
+#define IMAGE_CAL_TEMP_DELTA_C   5
+
+/* Temperature-drift poll cadence.  The maintenance pass itself runs every
+ * CONFIG_ZEPHCORE_NOISE_FLOOR_INTERVAL_MS (15 s by default); reading the
+ * junction temperature that often is 240 chip commands an hour to watch a
+ * quantity that physically cannot move IMAGE_CAL_TEMP_DELTA_C in minutes.
+ * Every one of those commands is an opportunity to collide with a duty-cycled
+ * radio's autonomous sleep transition, so the cheapest read is the one not
+ * issued.  The driver-side BUSY guards make the collision safe; this makes it
+ * rare. */
+#define IMAGE_CAL_POLL_MS        3600000U   /* 1 h between routine reads */
+#define IMAGE_CAL_CONFIRM_MS       15000U   /* re-read before acting on a delta */
+#define IMAGE_CAL_TX_QUIET_MS      60000U   /* let PA self-heating decay first */
+
+/* Two independent jobs share this hook because they share one precondition —
+ * the chip must be idle enough to accept a command — and one cadence source,
+ * the maintenance loop.  They are otherwise unrelated: agcIdleMaintenance()
+ * unsticks a receiver that has stopped hearing anything, imageCalMaintenance()
+ * corrects front-end image calibration against temperature drift.  Keep them in
+ * separate functions so neither's thresholds read as if they governed the
+ * other. */
+void LoRaRadioBase::radioMaintenance()
 {
 	/* Never mid-transmit or mid-receive: both operations warm-sleep the
 	 * chip, which aborts a TX and destroys an in-flight packet.  The RX
@@ -1184,6 +1244,19 @@ void LoRaRadioBase::agcMaintenance()
 
 	uint32_t now = (uint32_t)k_uptime_get_32();
 
+	agcIdleMaintenance(now);
+	imageCalMaintenance(now);
+}
+
+/* Receiver watchdog: a stuck AGC stops the demodulator hearing anything at all,
+ * so prolonged total silence is the symptom.  Nothing here concerns the front
+ * end or temperature. */
+void LoRaRadioBase::agcIdleMaintenance(uint32_t now)
+{
+	if (!hwNeedsAgcReset()) {
+		return;
+	}
+
 	/* Any demodulation activity counts as proof of life, errored frames
 	 * included — a CRC failure still means RF reached the demodulator, which
 	 * is precisely what a stuck AGC would prevent.  Counting only good
@@ -1194,40 +1267,109 @@ void LoRaRadioBase::agcMaintenance()
 	if (rx_total != _agc_rx_count_shadow || _agc_last_activity_ms == 0) {
 		_agc_rx_count_shadow = rx_total;
 		_agc_last_activity_ms = now ? now : 1;
-	} else if ((now - _agc_last_activity_ms) >= AGC_IDLE_RESET_MS) {
-		LOG_INF("agc: %u ms without RX activity — resetting AGC",
-			(unsigned)(now - _agc_last_activity_ms));
+	} else if ((now - _agc_last_activity_ms) >= AGC_IDLE_RESET_MS &&
+		   _agc_rssi_frozen >= AGC_STUCK_RSSI_SAMPLES) {
+		LOG_INF("agc: %u ms silent AND %u frozen floor samples at %d dBm — resetting AGC",
+			(unsigned)(now - _agc_last_activity_ms),
+			(unsigned)_agc_rssi_frozen, (int)_agc_rssi_last);
 		hwResetAgc();
 		/* hwResetAgc() leaves the chip out of RX by contract, so this is
 		 * a genuine re-entry and re-arms the duty cycle if one is set. */
 		startReceive();
 		_agc_last_activity_ms = now ? now : 1;
 	}
+}
 
-	/* Temperature drift.  Sampled every pass because the read is one cheap
-	 * command; the expensive recalibration is gated on the delta. */
-	int16_t temp_c = hwGetChipTempC();
-
-	if (temp_c == INT16_MIN) {
-		return;   /* backend cannot measure — drift handling disabled */
-	}
-	if (_agc_last_cal_temp_c == INT16_MIN) {
-		_agc_last_cal_temp_c = temp_c;   /* first reading is the baseline */
+/* Front-end image calibration against temperature drift.  Separate from the AGC
+ * reset above in every respect: different symptom (degraded image rejection, not
+ * a deaf demodulator), different datasheet section, different remedy
+ * (hwRecalibrate(), not hwResetAgc()). */
+void LoRaRadioBase::imageCalMaintenance(uint32_t now)
+{
+	if (!hwHasDriftRecal()) {
 		return;
 	}
 
-	int delta = (int)temp_c - (int)_agc_last_cal_temp_c;
+	/* Polled on its own slow cadence rather than once per
+	 * maintenance pass — see IMAGE_CAL_POLL_MS.  Backends that cannot measure
+	 * (SX126x/SX127x) answer INT16_MIN from a plain inline with no bus
+	 * traffic, so the early return below costs them nothing. */
+	if (_image_cal_started && (now - _image_cal_last_ms) < _image_cal_wait_ms) {
+		return;
+	}
+
+	/* Wait out our own PA.  The junction is still warm for a while after a
+	 * transmit, and that self-heating is not the ambient drift the
+	 * recalibration exists to track — acting on it would recalibrate against
+	 * a temperature the chip will not be at a minute later.  Deferring
+	 * returns here without stamping, so the retry is the next pass (seconds)
+	 * rather than the next poll window (an hour). */
+	if (_last_tx_start_ms != 0 &&
+	    (now - _last_tx_start_ms) < IMAGE_CAL_TX_QUIET_MS) {
+		return;
+	}
+
+	/* Temperature comes from the BOARD, never from the radio.
+	 *
+	 * Only the delta matters here, never the absolute value, and the MCU die
+	 * sensor tracks the same ambient the front end sits in — so it answers
+	 * the question just as well as the radio's junction sensor while costing
+	 * the radio nothing at all.  Reading it off the chip meant a periodic SPI
+	 * command aimed at a part that spends most of its time in an autonomous
+	 * duty-cycle sleep phase; that read wedged the LR1110 BUSY-high 7 times
+	 * in 47 minutes of measurement on 2026-08-23, each costing 12-18 s of
+	 * deafness, and it cost a packet.  The junction sensor was also the worse
+	 * instrument for the job: it sees PA self-heating, which is exactly the
+	 * transient this path must not react to. */
+	float board_temp = _board ? _board->getMCUTemperature() : NAN;
+
+	if (isnan(board_temp)) {
+		/* No board temperature source — drift handling simply does not run
+		 * on this hardware, as it did not before on families without a
+		 * junction sensor either. */
+		return;
+	}
+
+	int16_t temp_c = (int16_t)lroundf(board_temp);
+
+	_image_cal_started = true;
+	_image_cal_last_ms = now;
+	_image_cal_wait_ms = IMAGE_CAL_POLL_MS;
+
+	if (_image_cal_last_temp_c == INT16_MIN) {
+		_image_cal_last_temp_c = temp_c;   /* first reading is the baseline */
+		return;
+	}
+
+	int delta = (int)temp_c - (int)_image_cal_last_temp_c;
 
 	if (delta < 0) {
 		delta = -delta;
 	}
-	if (delta >= AGC_RECAL_TEMP_DELTA_C) {
-		LOG_INF("agc: chip temp moved %d C (%d -> %d) — recalibrating",
-			delta, (int)_agc_last_cal_temp_c, (int)temp_c);
-		hwRecalibrate();
-		startReceive();
-		_agc_last_cal_temp_c = temp_c;
+	if (delta < IMAGE_CAL_TEMP_DELTA_C) {
+		_image_cal_confirming = false;
+		return;
 	}
+
+	/* Measure twice before acting.  A single reading over the threshold can
+	 * be a transient — residual self-heating the quiet window did not fully
+	 * cover, or a one-off bad sample — and hwRecalibrate() takes the radio
+	 * out of receive.  Re-read shortly and act only if the second reading
+	 * agrees. */
+	if (!_image_cal_confirming) {
+		_image_cal_confirming = true;
+		_image_cal_wait_ms = IMAGE_CAL_CONFIRM_MS;
+		LOG_DBG("imagecal: chip temp delta %d C — confirming before recalibrating",
+			delta);
+		return;
+	}
+
+	_image_cal_confirming = false;
+	LOG_INF("imagecal: chip temp moved %d C (%d -> %d) — recalibrating",
+		delta, (int)_image_cal_last_temp_c, (int)temp_c);
+	hwRecalibrate();
+	startReceive();
+	_image_cal_last_temp_c = temp_c;
 }
 
 void LoRaRadioBase::recoverRxState()

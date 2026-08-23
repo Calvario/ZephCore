@@ -169,17 +169,14 @@ int lr20xx_configure_side_detectors(const struct device *dev,
 uint32_t lr20xx_get_random(const struct device *dev);
 
 /**
- * @brief Unstick a jammed AGC: warm sleep, then recalibrate (no front end).
+ * @brief Redo the frequency-dependent calibrations (temperature drift path).
+ *
+ * Warm sleep, Calibrate, rx-boost re-apply, then CalibFE at the operating
+ * frequency — the front end being what a temperature swing actually
+ * invalidates.  Deliberately not an AGC reset: that fault, and its remedy,
+ * belong to the SX126x.  Defers if the chip is busy (duty-cycle sleep).
  *
  * Leaves the driver out of RX — the caller must startReceive() afterwards.
- *
- * @param dev LoRa device
- */
-void lr20xx_reset_agc(const struct device *dev);
-
-/**
- * @brief As lr20xx_reset_agc(), plus a front-end calibration at the operating
- *        frequency.  For temperature drift, not for the packet path.
  *
  * @param dev LoRa device
  */

@@ -184,7 +184,7 @@ void Dispatcher::maintenanceLoop()
 	/* Receiver hygiene: deaf-aware AGC unstick + temperature-drift
 	 * recalibration.  Both sleep the chip, so they live here rather than on
 	 * any packet path. */
-	_radio->agcMaintenance();
+	_radio->radioMaintenance();
 
 	int8_t cad_off = _radio->getCadOffset();
 

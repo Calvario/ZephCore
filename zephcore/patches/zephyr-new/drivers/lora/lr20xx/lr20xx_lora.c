@@ -979,8 +979,8 @@ static void lr20xx_apply_modem_config(struct lr20xx_data *data,
  *    Calibrate blocks as LF_RC, HF_RC, PLL, AAF, MU and PA_OFF — no image, no
  *    front end.  CalibFE (§6.4.2) owns those and its values survive retention
  *    sleep, so re-running it here would cost ~9 ms to reproduce what is already
- *    on the chip.  The old (dead, never-called) lr20xx_reset_agc() ran it
- *    unconditionally, which is most of why it looked expensive.
+ *    on the chip.  An earlier draft ran CalibFE on every invocation, which is
+ *    most of why this sequence looked expensive.
  *
  * 2. No fixed post-Calibrate delay.  DS §6.4.1: "Upon completion of the
  *    calibration, the chip automatically enters Standby RC mode" — BUSY
@@ -990,7 +990,7 @@ static void lr20xx_apply_modem_config(struct lr20xx_data *data,
  * Budget: 1 ms for the HAL's post-sleep-opcode wait, 1 ms for the warm start
  * (DS Table 3-23 TSPDRCW, "retrieve calibration from retained registers"), plus
  * the Calibrate itself, which the datasheet does not put a number on. */
-static void lr20xx_agc_reset_locked(struct lr20xx_data *data, bool recal_fe)
+static void lr20xx_recalibrate_locked(struct lr20xx_data *data)
 {
 	void *ctx = &data->hal_ctx;
 	lr20xx_system_sleep_cfg_t sleep_cfg = {
@@ -1022,13 +1022,14 @@ static void lr20xx_agc_reset_locked(struct lr20xx_data *data, bool recal_fe)
 	/* Front end only on the drift path.  Image/FE calibration is valid for a
 	 * temperature range rather than forever (DS: "necessary if there is a
 	 * frequency change > 10MHz, or a temperature change > 10 C"), so it is
-	 * exactly what a temperature swing invalidates — and exactly what a stuck
-	 * AGC does not, which is why the AGC path skips its ~9 ms. */
-	if (recal_fe && data->configured) {
+	 * exactly what a temperature swing invalidates.  (This used to be
+	 * conditional, skipped by an "AGC reset" caller that no longer exists —
+	 * that fault belongs to the SX126x, not to this part.) */
+	if (data->configured) {
 		lr20xx_calibrate_front_end(ctx, data->modem_cfg.frequency);
 	}
 
-	/* Contract with LoRaRadioBase::agcMaintenance(): leave the driver OUT of
+	/* Contract with the caller: leave the driver OUT of
 	 * RX.  The chip is parked in STDBY_RC here, and the caller's
 	 * startReceive() must perform a real re-entry — without this the
 	 * idempotent fast paths in recv_async / recv_duty_cycle would see
@@ -1040,18 +1041,17 @@ static void lr20xx_agc_reset_locked(struct lr20xx_data *data, bool recal_fe)
 
 /* ── Extension API: receiver hygiene ─────────────────────────────────── */
 
-void lr20xx_reset_agc(const struct device *dev)
-{
-	struct lr20xx_data *data = dev->data;
-
-	if (!data->configured) {
-		return;
-	}
-	k_mutex_lock(&data->spi_mutex, K_FOREVER);
-	lr20xx_agc_reset_locked(data, false);
-	k_mutex_unlock(&data->spi_mutex);
-}
-
+/* Redo the frequency-dependent calibrations after temperature drift: warm
+ * sleep, Calibrate (LF_RC/HF_RC/PLL/AAF/MU/PA_OFF), rx-boost re-apply, then
+ * CalibFE at the operating frequency.
+ *
+ * Deliberately NOT an "AGC reset".  That is an SX126x remedy for an SX126x
+ * fault; nothing in the LR2021 datasheet describes it on this part, and firing
+ * the sequence speculatively costs packets — measured on the LR1110 sibling as
+ * a 7.4%% miss rate in the 60 s afterwards against 0.6%% elsewhere.  The driver
+ * therefore exposes only the operation the datasheet does call for.
+ *
+ * Leaves the driver out of RX — the caller must startReceive() afterwards. */
 void lr20xx_recalibrate(const struct device *dev)
 {
 	struct lr20xx_data *data = dev->data;
@@ -1059,8 +1059,29 @@ void lr20xx_recalibrate(const struct device *dev)
 	if (!data->configured) {
 		return;
 	}
-	k_mutex_lock(&data->spi_mutex, K_FOREVER);
-	lr20xx_agc_reset_locked(data, true);
+
+	/* Skip rather than wedge — same reasoning as lr11xx_recalibrate().  This
+	 * path had no busy guard while the two incidental pollers beside it
+	 * (lr20xx_is_receiving, lr20xx_get_rssi_inst) both have one, and it is
+	 * the heavier operation of the three.  Waking the chip instead of
+	 * deferring is specifically wrong on this part: check_device_ready()
+	 * documents the NSS-pulse-into-a-busy-chip rejection storm that cost the
+	 * MeshTracker X1 its duty cycle. */
+	if (lr20xx_is_chip_busy(dev)) {
+		LOG_DBG("recalibrate: chip busy (duty-cycle sleep), deferring");
+		return;
+	}
+
+	if (k_mutex_lock(&data->spi_mutex, K_MSEC(50)) != 0) {
+		LOG_DBG("recalibrate: mutex busy, deferring");
+		return;
+	}
+	if (lr20xx_is_chip_busy(dev)) {
+		k_mutex_unlock(&data->spi_mutex);
+		return;
+	}
+
+	lr20xx_recalibrate_locked(data);
 	k_mutex_unlock(&data->spi_mutex);
 }
 

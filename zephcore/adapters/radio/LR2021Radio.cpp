@@ -167,10 +167,11 @@ uint8_t LR2021Radio::hwCadPeakMax()
 	return lr20xx_cad_peak_max();
 }
 
-void LR2021Radio::hwResetAgc()
-{
-	lr20xx_reset_agc(_dev);
-}
+/* No hwResetAgc() override, and no hwNeedsAgcReset(): this part has no
+ * jammed-AGC fault to remedy — that one belongs to the SX126x.  The driver
+ * exposes lr20xx_recalibrate() instead, which is the temperature-drift path
+ * this family genuinely does need, named for what it actually does. */
+
 
 void LR2021Radio::hwRecalibrate()
 {
@@ -179,9 +180,12 @@ void LR2021Radio::hwRecalibrate()
 	lr20xx_recalibrate(_dev);
 }
 
-int16_t LR2021Radio::hwGetChipTempC()
+/* DS 6.4.2 gives an image/FE calibration temperature range (and advises redoing
+ * PLL/AAF beyond +/-20 C), so drift recalibration is active here.  The reading
+ * comes from the board — see LoRaRadioBase::imageCalMaintenance(). */
+bool LR2021Radio::hwHasDriftRecal()
 {
-	return lr20xx_get_chip_temp_c(_dev);
+	return true;
 }
 
 uint32_t LR2021Radio::hwWakeupTimeUs()

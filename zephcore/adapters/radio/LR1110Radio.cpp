@@ -78,19 +78,24 @@ bool LR1110Radio::hwIsReceiving()
 	return lr11xx_is_receiving(_dev);
 }
 
-void LR1110Radio::hwResetAgc()
-{
-	lr11xx_reset_agc(_dev);
-}
+/* No hwResetAgc() override, and no hwNeedsAgcReset(): this part has no
+ * jammed-AGC fault to remedy — that one belongs to the SX126x.  The driver
+ * exposes lr11xx_recalibrate() instead, which is the temperature-drift path
+ * this family genuinely does need, named for what it actually does. */
+
 
 void LR1110Radio::hwRecalibrate()
 {
 	lr11xx_recalibrate(_dev);
 }
 
-int16_t LR1110Radio::hwGetChipTempC()
+/* This family's UM gives an explicit temperature threshold for image
+ * calibration, so drift recalibration is active here.  The temperature itself
+ * comes from the board, not from lr11xx_get_chip_temp_c() — see
+ * LoRaRadioBase::imageCalMaintenance() for why the radio is not asked. */
+bool LR1110Radio::hwHasDriftRecal()
 {
-	return lr11xx_get_chip_temp_c(_dev);
+	return true;
 }
 
 void LR1110Radio::hwSetRxBoost(bool enable)

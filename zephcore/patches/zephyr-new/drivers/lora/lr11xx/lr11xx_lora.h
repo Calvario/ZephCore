@@ -96,19 +96,14 @@ void lr11xx_reset_dc_timeout_restarts(const struct device *dev);
 uint32_t lr11xx_get_random(const struct device *dev);
 
 /**
- * @brief Unstick a jammed AGC: warm sleep, then recalibrate.
- *
- * Leaves the driver out of RX — the caller must startReceive() afterwards.
- *
- * @param dev LoRa device
- */
-void lr11xx_reset_agc(const struct device *dev);
-
-/**
  * @brief Redo the frequency-dependent calibrations (temperature drift path).
  *
- * On this part calibrate(0x3F) already includes image rejection, so this is
- * the same sequence as lr11xx_reset_agc().
+ * Warm sleep, Calibrate(ALL) — which on this part already includes image
+ * rejection — then image calibration at the operating frequency and a rx-boost
+ * re-apply.  Deliberately NOT an AGC reset: that fault, and its remedy, belong
+ * to the SX126x.  Defers if the chip is busy (duty-cycle sleep).
+ *
+ * Leaves the driver out of RX — the caller must startReceive() afterwards.
  *
  * @param dev LoRa device
  */

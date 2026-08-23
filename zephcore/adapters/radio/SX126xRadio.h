@@ -34,6 +34,7 @@ protected:
 	int16_t hwGetCurrentRSSI() override;
 	bool hwIsReceiving() override;
 	void hwSetRxBoost(bool enable) override;
+	bool hwNeedsAgcReset() override;
 	void hwResetAgc() override;
 	void hwRecalibrate() override;
 	bool hwIsChipBusy() override;

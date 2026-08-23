@@ -1455,7 +1455,7 @@ uint32_t lr11xx_get_random(const struct device *dev)
  * exactly what the Arduino helper does.  That makes recal_fe moot on this part:
  * both entry points pay it because the calibration forces it.
  */
-static void lr11xx_agc_reset_locked(struct lr11xx_data *data)
+static void lr11xx_recalibrate_locked(struct lr11xx_data *data)
 {
 	void *ctx = &data->hal_ctx;
 	lr11xx_system_sleep_cfg_t sleep_cfg = {
@@ -1477,34 +1477,83 @@ static void lr11xx_agc_reset_locked(struct lr11xx_data *data)
 						     freq_mhz + 4);
 	}
 
+	/* Let the calibration actually finish before handing the chip back.
+	 *
+	 * Calibrate asserts BUSY for the duration, but the HAL's wait_on_busy()
+	 * samples the pin within a couple of GPIO reads of releasing NSS and
+	 * returns immediately if BUSY has not risen yet — the same "BUSY has not
+	 * risen" race behind the stale-reply guard in the HAL and the GetTemp
+	 * wedge.  Lose it here and the caller's startReceive() issues
+	 * SetRxDutyCycle into a chip that is still calibrating, the command is
+	 * dropped, and the radio never re-enters Rx: deaf until the next reset
+	 * 60 s later.  Measured 2026-08-23: the 60 s window after a reset carried
+	 * a 7.4% miss rate against 0.6% elsewhere, and one deaf stretch began at
+	 * one reset and ended exactly at the next.
+	 *
+	 * A flat settle wait sidesteps the race entirely — this path is already
+	 * a warm sleep plus a full recalibration, so it is nobody's fast path. */
+	k_sleep(K_MSEC(10));
+
 	if (data->rx_boost_enabled) {
 		lr11xx_radio_cfg_rx_boosted(ctx, true);
 		data->rx_boost_applied = true;
 	}
 
-	/* Contract with agcMaintenance(): leave the driver out of RX so the
-	 * caller's startReceive() performs a real re-entry. */
+	/* Contract with the caller: leave the driver out of RX so its
+	 * startReceive() performs a real re-entry. */
 	data->in_rx_mode = false;
 	lr11xx_reset_rx_busy_signals(data);
 }
 
-void lr11xx_reset_agc(const struct device *dev)
+/* Redo the frequency-dependent calibrations after temperature drift.
+ *
+ * This is NOT an "AGC reset".  That is an SX126x remedy for an SX126x fault —
+ * Semtech prescribe warm sleep plus recalibration for a jammed AGC on that part,
+ * and ZephCore inherited the idea from Arduino MeshCore's `agc_reset_interval`.
+ * Neither the LR11xx UM nor anything measured here describes such a fault on
+ * this generation, and running the sequence speculatively cost real packets
+ * (T1000-E, 2026-08-23: 7.4%% miss rate in the 60 s after a fire, against 0.6%%
+ * elsewhere).  So the driver no longer offers one; it offers the operation the
+ * datasheet does call for, under the name of what it actually does.
+ *
+ * Leaves the driver out of RX — the caller must startReceive() afterwards. */
+void lr11xx_recalibrate(const struct device *dev)
 {
 	struct lr11xx_data *data = dev->data;
 
 	if (!data->configured) {
 		return;
 	}
-	k_mutex_lock(&data->spi_mutex, K_FOREVER);
-	lr11xx_agc_reset_locked(data);
-	k_mutex_unlock(&data->spi_mutex);
-}
 
-void lr11xx_recalibrate(const struct device *dev)
-{
-	/* Same sequence: calibrate(0x3F) already carries the image cal on this
-	 * part, so there is nothing extra for the drift path to do. */
-	lr11xx_reset_agc(dev);
+	/* Skip rather than wedge.  This sequence opens with SetSleep, and a
+	 * command issued into the chip's autonomous duty-cycle sleep phase pins
+	 * it BUSY-high — the same failure the pollers guard against, on a path
+	 * that had no guard at all.  sx126x_reset_agc() solves it by poking NSS
+	 * to wake the chip first; that trick is deliberately NOT copied here,
+	 * because on this generation an NSS pulse into a chip that is merely
+	 * mid-command is read as a malformed frame (see the LR2021 HAL's
+	 * check_device_ready() note on the CMD_PERR rejection storm).  Deferring
+	 * is safe: temperature drift is measured in tens of minutes, so losing a
+	 * recalibration to a busy chip costs nothing the next pass cannot fix. */
+	if (gpio_pin_get_dt(&data->hal_ctx.busy)) {
+		LOG_DBG("recalibrate: chip busy (duty-cycle sleep), deferring");
+		return;
+	}
+
+	/* Bounded, for the same reason sx126x_reset_agc() bounds its own: a long
+	 * TX or RX holds this mutex for the full airtime, and K_FOREVER would
+	 * stall the dispatcher thread for all of it. */
+	if (k_mutex_lock(&data->spi_mutex, K_MSEC(50)) != 0) {
+		LOG_DBG("recalibrate: mutex busy, deferring");
+		return;
+	}
+	if (gpio_pin_get_dt(&data->hal_ctx.busy)) {
+		k_mutex_unlock(&data->spi_mutex);
+		return;
+	}
+
+	lr11xx_recalibrate_locked(data);
+	k_mutex_unlock(&data->spi_mutex);
 }
 
 /* Junction temperature in whole degrees C, INT16_MIN if unavailable.
@@ -1520,9 +1569,33 @@ int16_t lr11xx_get_chip_temp_c(const struct device *dev)
 	if (!data->configured) {
 		return INT16_MIN;
 	}
+
+	/* GPIO BUSY read FIRST, exactly as lr11xx_get_rssi_inst() does, and for
+	 * the same reason: GetTemp (0x011A) issued into a chip parked in the
+	 * autonomous SetRxDutyCycle sleep-with-retention phase wedges it
+	 * BUSY-high, and the HAL's wait_on_busy() then blocks 3 s per attempt
+	 * before the wedge watchdog eventually hardware-resets the radio — 12 s+
+	 * of deafness per event.  This is the identical failure the 2026-07-24
+	 * "T1000 goes deaf" fix addressed on the RSSI poller; the temperature
+	 * poller is called from the very same agcMaintenance() pass and was
+	 * simply missed at the time.  Observed on hardware 2026-08-23: two
+	 * wedges in 30 minutes on a duty-cycled T1000-E, both on op=0x011a.
+	 *
+	 * INT16_MIN is the sentinel agcMaintenance() already treats as "no
+	 * reading this pass" — it retries later rather than acting on it.
+	 * Re-checked after the mutex for the same reason as the RSSI path: the
+	 * chip can enter sleep between the two. */
+	if (gpio_pin_get_dt(&data->hal_ctx.busy)) {
+		return INT16_MIN;
+	}
 	if (k_mutex_lock(&data->spi_mutex, K_NO_WAIT) != 0) {
 		return INT16_MIN;
 	}
+	if (gpio_pin_get_dt(&data->hal_ctx.busy)) {
+		k_mutex_unlock(&data->spi_mutex);
+		return INT16_MIN;
+	}
+
 	rc = lr11xx_system_get_temp(&data->hal_ctx, &raw);
 	k_mutex_unlock(&data->spi_mutex);
 

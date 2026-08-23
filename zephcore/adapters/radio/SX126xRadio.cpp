@@ -75,6 +75,14 @@ bool SX126xRadio::hwIsReceiving()
 	return sx126x_is_receiving(_dev);
 }
 
+/* The one family that actually has the jammed-AGC fault — see the patch preamble
+ * in patches/zephyr/0003-lora-sx126x-native.patch, where this remedy and its
+ * trigger are argued out.  The LR parts deliberately do not declare it. */
+bool SX126xRadio::hwNeedsAgcReset()
+{
+	return true;
+}
+
 void SX126xRadio::hwResetAgc()
 {
 	/* Leaves the chip in STANDBY and the driver state at IDLE, so the
@@ -90,11 +98,12 @@ void SX126xRadio::hwRecalibrate()
 	sx126x_reset_agc(_dev);
 }
 
-/* No hwGetChipTempC(): the SX126x exposes no junction-temperature readout —
- * no command in the datasheet, and RadioLib has no getTemperature() for it
- * either.  Drift recalibration is therefore inactive on this family, which
- * costs little: unlike the LR parts, its datasheet gives no temperature
- * threshold for image calibration in the first place. */
+/* No hwHasDriftRecal() override: unlike the LR parts, the SX126x datasheet
+ * gives no temperature threshold for image calibration, so drift-triggered
+ * recalibration stays inactive on this family — unchanged from before, when the
+ * same result came about because the part exposes no junction-temperature
+ * readout for the trigger to read.  (The trigger now reads board temperature,
+ * which every board has, so the family gate has to be explicit.) */
 
 void SX126xRadio::hwSetRxBoost(bool enable)
 {
