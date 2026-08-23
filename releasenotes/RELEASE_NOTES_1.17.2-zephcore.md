@@ -245,11 +245,15 @@ Proposed by **bisbille** ([@bisbille](https://github.com/bisbille)) —
 
 Housekeeping, listed for completeness — nothing here changes how a node behaves day to day.
 
-- **The XIAO nRF54L15 now ships firmware with every release.** The board has been supported for a
-  while but was never part of the published build, so it had to be compiled by hand. Companion and
-  repeater images are now built and listed alongside every other board. Like the ME25LS02 it is a
-  `.hex` flashed over SWD — though the XIAO's own USB cable is enough, since it has a debug bridge
-  built into the board.
+- **Three boards that were supported but never published now ship firmware with every release.** All
+  three have been buildable for a while but were missing from the published build, so they had to be
+  compiled by hand. Companion and repeater images are now built and listed alongside every other
+  board:
+  - **XIAO nRF54L15** — like the ME25LS02, a `.hex` flashed over SWD, though the XIAO's own USB cable
+    is enough since it has a debug bridge built into the board.
+  - **XIAO MG24** — also SWD-only, and the first Silicon Labs board to get published firmware.
+  - **LoRa-E5 mini** — SWD-only. No Bluetooth on this chip, so the companion talks to the app over
+    the USB serial port instead.
 - **The Zephyr operating system underneath was updated** to a newer snapshot, and our radio patches were
   reorganised on top of it: five separate SX126x patches are now one. Same behaviour, fewer things to go
   wrong the next time Zephyr moves.

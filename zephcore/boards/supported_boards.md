@@ -49,7 +49,7 @@ heltec_wireless_tracker/esp32s3/procpu
 heltec_wireless_tracker_v2/esp32s3/procpu
 thinknode_m9/esp32s3/procpu
 ttgo_tbeam/esp32/procpu
-ttgo_lora32/esp32/procpu
+ttgo_lora32/esp32/procpu   # source-only, no published firmware
 ```
 
 > ESP32 boards require `west blobs fetch hal_espressif` before first build.
@@ -76,8 +76,21 @@ ttgo_lora32/esp32/procpu
 > SX1262 in `board.overlay`. Console/CLI are on `uart0` (onboard USB-UART).
 >
 > **TTGO LoRa32** (`ttgo_lora32/esp32/procpu`): classic ESP32 (PICO-D4) with
-> **SX1276** — the SX127x (loramac-node backend) reference board. Console/CLI
-> on `uart0`.
+> **SX1276**. Console/CLI on `uart0`.
+>
+> **Source-only — no published firmware, and not a supported configuration.**
+> It is deliberately absent from `build.sh`, the release workflow and the Mesh
+> America catalog, so no release ever carries a binary for it. It is kept in the
+> tree as the one exercise of the SX127x loramac-node radio path, which is old,
+> lacks RX duty cycle and RX gain boost, and gets none of the work the native
+> SX126x/LR11xx/LR20xx drivers do. Build it yourself if you want it; expect to
+> maintain it yourself too.
+>
+> If you do build the companion, note it is DRAM-bound (~97% of `dram0_0_seg`)
+> and capped at **50 contacts / 32 queued offline messages** — lower than any
+> other companion board. The repeater has no such limit. At the 150/128 this
+> board's config used to declare, it did not link at all. See `board.conf` for
+> the measured budget before raising either number.
 
 ## STM32WL
 

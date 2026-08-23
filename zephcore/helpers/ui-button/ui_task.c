@@ -550,10 +550,14 @@ static void action_deep_sleep(void)
  * because the multi-tap filter passes an unhandled raw KEY_A through per tap
  * before it resolves; swallowing that would leave a double tap still acting.
  *
- * No expiry is needed: on every board using this UI each switch case below is
- * fed by the longpress or multi-tap filter, so a wake is always followed by an
- * action code that clears the flag.  (The two boards with direct joystick codes
- * select ZEPHCORE_UI_JOYSTICK and never reach this callback.)
+ * No expiry is needed, but the flag must only be armed when the wake press was
+ * a raw code that still has an action code coming.  ZEPHCORE_UI_DESIGN_JOYSTICK
+ * depends on ZEPHCORE_ROLE_COMPANION, so the repeater build of a joystick board
+ * (wio_tracker_l1, gat562_30s — both shipped as repeater artifacts) falls back
+ * to ZEPHCORE_UI_DESIGN_BUTTON and *does* reach this callback, with its
+ * joystick GPIOs wired straight to INPUT_KEY_UP/DOWN/LEFT/RIGHT/ENTER and no
+ * filter in between.  There the wake press is already an action code and is
+ * consumed at the wake, so the flag stays clear and the next press acts.
  */
 static bool display_woken_pending;
 
@@ -636,10 +640,17 @@ static void ui_input_cb(struct input_event *evt, void *user_data)
 #ifdef CONFIG_ZEPHCORE_UI_DISPLAY
 	/* If display is off, wake it and consume the event.  The action this
 	 * press resolves to arrives later from the longpress / multi-tap filter;
-	 * display_woken_pending makes the switch below swallow it. */
+	 * display_woken_pending makes the switch below swallow it.
+	 *
+	 * Only arm that flag when this press really does resolve into a *later*
+	 * action code, i.e. when the code we just consumed is a raw one.  Boards
+	 * that wire an action code straight to the GPIO (joystick lines on
+	 * wio_tracker_l1 / gat562_30s in repeater builds) already consumed their
+	 * action here — arming the flag would make the next, genuinely separate
+	 * press get swallowed instead. */
 	if (!mc_display_is_on()) {
 		mc_display_on();
-		display_woken_pending = true;
+		display_woken_pending = !is_ui_action_code(evt->code);
 		schedule_render();
 		return;
 	}

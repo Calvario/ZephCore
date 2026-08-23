@@ -1170,8 +1170,15 @@ bool LoRaRadioBase::isReceiving()
 
 void LoRaRadioBase::agcMaintenance()
 {
-	/* Never mid-transmit: both operations sleep the chip. */
-	if (atomic_get(&_tx_active)) {
+	/* Never mid-transmit or mid-receive: both operations warm-sleep the
+	 * chip, which aborts a TX and destroys an in-flight packet.  The RX
+	 * half cannot be inferred from the activity counters below — those
+	 * only move at RX_DONE/CRC_ERR, so a packet whose preamble is landing
+	 * right now still reads as silence.  isReceiving() is the latch that
+	 * knows (HEADER_VALID promotion + preamble grace); it is the same gate
+	 * checkSend() and the noise-floor sampler use before touching the chip.
+	 * Bailing here just defers the work to the next maintenance pass. */
+	if (atomic_get(&_tx_active) || isReceiving()) {
 		return;
 	}
 

@@ -98,7 +98,9 @@ for `0x1000`, since they use simple-boot in the release build too.
 
 ### SX127x Boards (loramac-node backend)
 
-ZephCore supports SX1272/SX1276/SX1278 via the loramac-node backend — a separate radio path from the native SX126x driver used by all other boards. The TTGO LoRa32 is the reference implementation:
+ZephCore can drive SX1272/SX1276/SX1278 via the loramac-node backend — a separate radio path from the native SX126x driver used by all other boards. The TTGO LoRa32 is the only board exercising it.
+
+**This path is source-only and unsupported.** No release publishes firmware for it, it is not in `build.sh` or the Mesh America catalog, and it has no RX duty cycle and no RX gain boost. Treat it as a starting point to maintain yourself, not as a supported target.
 
 | Board          | Build string                                   | Flash        |
 |----------------|------------------------------------------------|--------------|

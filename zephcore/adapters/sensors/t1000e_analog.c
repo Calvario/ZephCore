@@ -63,10 +63,12 @@ static const uint32_t ntc_res[NTC_TABLE_LEN] = {
  *  Photocell
  *
  *  Seeed maps the divider voltage onto 0-100 with a dead band at each end.
- *  LIGHT_SPAN_MV is deliberately not (LIGHT_MAX_MV - LIGHT_MIN_MV): the
- *  stock firmware divides the 80..2480 mV range by 2400 while subtracting
- *  only the 80 mV floor, and the top of the range is clamped rather than
- *  reached. Reproduced as-is so readings match.
+ *  LIGHT_SPAN_MV happens to equal LIGHT_MAX_MV - LIGHT_MIN_MV today, but it is
+ *  kept as its own constant rather than derived from them: the stock firmware
+ *  treats the divisor as an independent number (subtract the 80 mV floor,
+ *  divide by 2400, clamp at the top rather than reach it). Deriving it would
+ *  let a future tweak to either endpoint silently move the scale factor away
+ *  from what the stock firmware uses, and the readings would stop matching.
  * ================================================================ */
 
 #define LIGHT_MIN_MV  80
@@ -198,6 +200,14 @@ static int t1000e_power(const struct t1000e_config *cfg, bool on)
 	int rc = 0;
 
 	if (on) {
+		/* The rail is shared with the battery divider (one devicetree node,
+		 * two labels: sensor_power / vbat_enable). The regulator core
+		 * refcounts, so if another holder already has it up there is no
+		 * off->on transition to wait out — settling only costs time when we
+		 * are the one turning it on. */
+		bool already_on = (cfg->power_supply != NULL) &&
+				  regulator_is_enabled(cfg->power_supply);
+
 		if (cfg->power_supply != NULL) {
 			rc = regulator_enable(cfg->power_supply);
 			if (rc < 0) {
@@ -210,7 +220,9 @@ static int t1000e_power(const struct t1000e_config *cfg, bool on)
 				return rc;
 			}
 		}
-		k_msleep(cfg->settle_time_ms);
+		if (!already_on) {
+			k_msleep(cfg->settle_time_ms);
+		}
 		return 0;
 	}
 

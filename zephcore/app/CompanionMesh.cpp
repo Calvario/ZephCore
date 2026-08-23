@@ -1117,6 +1117,13 @@ bool CompanionMesh::vcontactHandleFrame(const uint8_t *data, size_t len)
 			if (ack == 0) ack = 1;
 
 			sendPacketSent(MSG_SEND_SENT_DIRECT, ack, 3000);
+			/* One slot, not a queue: a second v-contact message inside
+			 * VCONTACT_CONFIRM_DELAY_MS would overwrite the first ack before
+			 * its work ever ran, so that message stayed un-confirmed until the
+			 * app hit est_timeout and resent it. Flush the pending one first —
+			 * it is already past the sub-millisecond window that made deferring
+			 * necessary, so emitting it now is safe. */
+			vcontactFlushConfirm();
 			_vcontact_confirm_ack = ack;
 			k_work_reschedule(&_vcontact_confirm_work.work,
 					  K_MSEC(VCONTACT_CONFIRM_DELAY_MS));
@@ -2169,6 +2176,11 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 		_contact_iter_active = false;
 		cancelSyncPending();
 		cleanupSignState();
+		/* Drop a deferred v-contact confirm from the previous session: its ack
+		 * matches an outbound message the new session never sent, so delivering
+		 * it here would push an unmatched SEND_CONFIRMED into a fresh app. */
+		_vcontact_confirm_ack = 0;
+		k_work_cancel_delayable(&_vcontact_confirm_work.work);
 
 		/* New session: suppress v-contact notice MSG_WAITING until the initial
 		 * sync (contacts + messages) completes at PACKET_NO_MORE_MSGS. */
