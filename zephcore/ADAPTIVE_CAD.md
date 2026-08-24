@@ -65,7 +65,7 @@ strong signal is present — see the prefilter below). So every probe that
 runs does so in a quiet moment, and the only thing CAD can trip on there
 is a **sub-floor, faint, correlation-only-detectable** signal. That makes
 the entire adaptive loop a **faint-rejection tuner**: the `busy%` you read
-in `get cad` is "how often a quiet moment still held a faint signal", not
+in `get cad.stats` is "how often a quiet moment still held a faint signal", not
 total channel occupancy. Strong signals never enter the statistics — they
 were filtered out before the probe, and in real LBT they trip on their own
 merits.
@@ -153,7 +153,7 @@ neighbour a quarter) so the staircase can read the local curve *slope*:
   busy verdicts are real distant traffic we'd win on capture anyway;
   deferring for all of it starves the node's own airtime. Self-targeting —
   a quiet node's busy rate never reaches the cap, so only a genuinely busy
-  backbone backs off. Shown as `bc:` in `get cad`.
+  backbone backs off. Shown as `bc:` in `get cad.stats`.
 - **Step up** (less sensitive) when the level above is markedly cleaner —
   FP drops ≥5%/level (`CAD_KNEE_SLOPE_PERMILLE`). That means we're on the
   steep part below the knee; climb toward it.
@@ -173,7 +173,7 @@ before a step, so a decision lands roughly every 1–2 hours at the default
 interval.
 
 A step decision requires the operating rung (and, for the direction chosen,
-its neighbour) to be warm; `get cad`'s three-rung window shows exactly those
+its neighbour) to be warm; `get cad.stats`'s three-rung window shows exactly those
 levels, so the slope the controller is acting on is visible directly. The
 offset is persisted to flash whenever it steps.
 
@@ -274,7 +274,7 @@ set cad.auto off
 
 Probing continues (stats keep updating) but the operating offset no
 longer moves. In dry-run the probe sweep covers levels −4…+4 evenly, so
-`get cad` shows the whole false-positive-vs-detPeak curve. Read it
+`get cad.stats` shows the whole false-positive-vs-detPeak curve. Read it
 bottom-up: the level where `fp%%` jumps from ~0 is the knee; sit one step
 above it. Then pin it:
 
@@ -295,7 +295,7 @@ a knee to resolve clearly, longer to capture day/night variation.
 
 | Command | Default | Description |
 |---|---|---|
-| `get cad` | | Status + per-level statistics (see above). |
+| `get cad.stats` | | Status + per-level statistics (see above). |
 | `set cad.auto <on\|off>` | **on** | Staircase controller acts on the stats. Off = observe/hand-tune. |
 | `set cad.offset <n>` | 0 | Operating offset, −8…12. Negative = more sensitive. Applied live. |
 | `set probe.interval <sec>` | 15 | Shared cadence for the noise-floor sample and the CAD probe that consumes it; 0 disables probing (and freezes auto), 10–255 otherwise. |
@@ -311,7 +311,7 @@ works); command *values* like passwords and node names are not, so `on`
 ## Notes and limits
 
 - **SX127x boards** (TTGO LoRa32, T-Beam classic) have no hardware CAD;
-  `get cad` reports `not available` and the settings are inert. Their LBT
+  `get cad.stats` reports `not available` and the settings are inert. Their LBT
   remains the RSSI-based `int.thresh` gate.
 - **The false-positive side is measured; the miss side mostly is not.**
   A too-high detPeak shows up as on-air collisions, which a single node

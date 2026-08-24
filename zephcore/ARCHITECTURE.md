@@ -459,7 +459,7 @@ via `Dispatcher::onCadOffsetChanged()`. The narrowing is not cosmetic: where
 identical and reads sampling noise as curvature. `hwCadPeakMin/Max()` report the
 driver clamp and `cadLevelMinEff()/MaxEff()` derive the usable window, so every
 level the controller can reach is a distinct configuration and the `pk` shown by
-`get cad` is what the chip was actually given. It binds on the LR2021, whose
+`get cad.stats` is what the chip was actually given. It binds on the LR2021, whose
 4-symbol base is 51 at SF5–7 (effective −3…+12) and 54 at SF8 (−6…+12); the
 LR11xx's lowest base of 56 already lands exactly on the 48 floor at −8, so its
 full window is usable and it keeps the static range. AN1200.48 recommends 21–29
@@ -468,7 +468,7 @@ it. Probe +
 offset plumbing is per-driver extension API (`*_cad_probe`,
 `*_cad_set_peak_offset`, `*_cad_base_peak`); LBT CAD runs 4 symbols (set in
 `buildModemConfig`), drivers scale their blocking-CAD timeout to
-`nSym·Tsym + margin`. CLI: `get cad` (3-rung window, `*`=operating, `bc:`=cap),
+`nSym·Tsym + margin`. CLI: `get cad.stats` (3-rung window, `*`=operating, `bc:`=cap),
 `set cad.auto/offset/probe.interval/busycap/reset`. SX127x: unsupported (no HW
 CAD). Full mental model + tuning: `ADAPTIVE_CAD.md`.
 

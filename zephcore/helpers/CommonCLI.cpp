@@ -319,12 +319,18 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         } else if (memcmp(config, "lon", 3) == 0) {
             snprintf(reply, CLI_REPLY_SIZE, "> %.6f", _prefs->node_lon);
         } else if (memcmp(config, "radio.fem.rxgain", 16) == 0) {
-            snprintf(reply, CLI_REPLY_SIZE, "> %d", (int)_prefs->fem_rxgain);
+            /* on/off, not 0/1 -- MeshCore apps parse this as a boolean word. */
+            snprintf(reply, CLI_REPLY_SIZE, "> %s", _prefs->fem_rxgain ? "on" : "off");
         } else if (memcmp(config, "radio.rxgain", 12) == 0) {
-            snprintf(reply, CLI_REPLY_SIZE, "> %d", (int)_prefs->rx_boost);
+            snprintf(reply, CLI_REPLY_SIZE, "> %s", _prefs->rx_boost ? "on" : "off");
         } else if (memcmp(config, "radio", 5) == 0) {
-            snprintf(reply, CLI_REPLY_SIZE, "> %.3f,%.1f,%u,%u",
-                   (double)_prefs->freq, (double)_prefs->bw,
+            /* Arduino renders bw with a trailing-zero-stripped formatter, so
+             * 250 kHz prints as "250", not "250.0".  Match it. */
+            char bw[16];
+            snprintf(bw, sizeof(bw), "%.3f", (double)_prefs->bw);
+            StrHelper::stripTrailingZeros(bw);
+            snprintf(reply, CLI_REPLY_SIZE, "> %.3f,%s,%u,%u",
+                   (double)_prefs->freq, bw,
                    (uint32_t)_prefs->sf, (uint32_t)_prefs->cr);
         } else if (memcmp(config, "rxdelay", 7) == 0) {
             snprintf(reply, CLI_REPLY_SIZE, "> adaptive (rxdelay deprecated)");
@@ -427,8 +433,9 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
              * sample and the CAD probe that consumes it.  0 = probing off. */
             snprintf(reply, CLI_REPLY_SIZE, "> %u",
                      (uint32_t)_prefs->probe_interval);
-        } else if (memcmp(config, "cad", 3) == 0) {
+        } else if (memcmp(config, "cad.stats", 9) == 0) {
             /* Runtime state + per-level probe stats live in the radio.
+             * ZephCore-only; must stay ahead of the "cad" prefix match below.
              * Remote replies get the truncated buffer like meshtimesync. */
             size_t cap = (sender_timestamp == 0) ? CLI_REPLY_SIZE
                                                  : CLI_REMOTE_REPLY_SIZE;
@@ -436,16 +443,21 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
             if (_callbacks->formatCadStatus(reply + n, (int)cap - n) == 0) {
                 strcpy(reply, "not available");
             }
+        } else if (memcmp(config, "cad", 3) == 0) {
+            /* Arduino exposes this as a boolean knob; ZephCore always does CAD,
+             * so the answer is a constant "on".  Apps parse the word. */
+            strcpy(reply, "> on");
         } else if (memcmp(config, "extra.sf", 8) == 0) {
+            /* No "> " prefix, and the empty case is a sentence -- both match
+             * Arduino MeshCore exactly. */
             char* dp = reply;
-            dp += sprintf(dp, "> ");
             int shown = 0;
             for (int i = 0; i < EXTRA_SF_MAX && _prefs->extra_sf[i] != 0; i++) {
                 dp += sprintf(dp, "%s%u", shown++ ? "," : "",
                               (unsigned)_prefs->extra_sf[i]);
             }
             if (shown == 0) {
-                strcpy(reply, "> none");
+                strcpy(reply, "No extra SF configured");
             }
         } else if (memcmp(config, "meshtimesync", 12) == 0) {
             MeshTimeSync* ts = _callbacks->getMeshTimeSync();
