@@ -1,16 +1,19 @@
 # ZephCore 1.17.2-zephcore
 
-A small release. Most of it is fixes, and a few of them only matter on specific boards.
+Fixes across most of the radio types, two new boards, and colour screens on the Wireless Trackers.
 
 > [!NOTE]
-> **Worth updating if you have:** a **XIAO nRF52840** or **Ikoka Nano 30 dBm** (charges twice as fast now),
-> a **T1000-E** (temperature and light sensors work again), a **LilyGo T3S3** (supported for the first
-> time), or **any repeater** (1.17.1 broke guest logins without a password). Everyone else can wait for
-> the next release.
->
 > Upgrading from 1.17.1 is straightforward — your contacts, settings and phone pairing all survive. Note
 > that the **factory default radio settings changed to SF7 / CR 4/5**; this affects fresh flashes and
 > factory resets only, never a node that already has settings.
+
+> [!NOTE]
+> **About testing.** ZephCore supports many more boards than anyone working on it actually owns. Most
+> changes are tried on a handful of real nodes and only compiled for the rest, so a fix proven on one
+> radio is usually taken on trust for every board sharing that radio. Tune your expectations accordingly:
+> the further your board is from the common ones, the more likely you are the first person running a
+> given change on it. If something looks wrong, please say so — that is genuinely how most of these get
+> found.
 
 ---
 
@@ -68,9 +71,26 @@ The development board's RGB indicator and its user button both work, and the con
 USB-C serial port at 115200 baud.
 
 > [!NOTE]
+> **The module's own datasheet and schematic disagree with each other.** They give different pins for
+> three of the radio's control lines, and the datasheet lists one pin twice. ZephCore follows the
+> schematic. Worth knowing if you are wiring this module into something of your own, or comparing
+> against other firmware for it.
+
+> [!NOTE]
 > **The node keeps time less precisely than most boards.** The module has no 32.768 kHz crystal of its
 > own, so ZephCore runs the chip's internal oscillator instead — accurate to about ±250 ppm rather than
 > the ±50 ppm a crystal gives. Everything works normally; the clock simply drifts a little faster.
+
+## The Wireless Trackers get their colour screen
+
+The **Wireless Tracker** and **Wireless Tracker V2** have had a colour screen all along — the same panel
+as the Heltec T096 — but ZephCore was drawing on it in black and white. Both now show what the T096
+shows: coloured status badges, coloured text and the activity graph. The pages and what they say are
+unchanged, only how they are drawn.
+
+The Wireless Tracker V2's button also picks up the gestures the other screen boards already had. One tap
+and two taps still move between pages; **three taps** toggles the LED heartbeat, **four** turns GPS on
+and off, and **five** sends an advert.
 
 ## Commands to your own node get their tick straight away
 
@@ -157,17 +177,21 @@ radio-off time goes from about **31 % to about 35 %**. All radio types benefit.
 
 ## A radio that has gone deaf now recovers on its own
 
-A LoRa receiver can get stuck at the wrong gain and quietly stop hearing anything. Nothing looks wrong —
+An SX126x receiver can get stuck at the wrong gain and quietly stop hearing anything. Nothing looks wrong —
 the node runs, the screen updates, it simply never receives. Until now the only cure was a reboot.
 
-After a full minute with nothing heard at all, the radio now resets its receiver by itself. A busy node
-essentially never does this, because every packet it receives is proof the receiver works; a silent node
-loses nothing by trying, because there was nothing to miss. Radios that can measure their own temperature
-also recalibrate after a 5 °C swing, so a node that boots on a warm afternoon still works through a cold
-night.
+The radio now resets its own receiver, but only on real evidence: a long silence **and** a noise-floor
+reading that has stopped moving. Silence alone is not a fault — a quiet channel is normal — and resetting
+on it cost packets, because the reset lands exactly when traffic resumes. A busy node essentially never
+does this; a genuinely deaf one recovers without a reboot.
 
 This replaces the old `agc.reset.interval` setting, which ran on a timer whether it was needed or not and
 shipped switched off. It is automatic now and needs no configuration.
+
+**SX126x boards only.** This is a fault Semtech describe for that family; the LR1110 and LR2021 do not
+have it, and running the reset on them was losing packets rather than saving any. Those radios instead
+recalibrate their front end after a 5 °C temperature swing — the thing their datasheets *do* ask for —
+using the board's own temperature sensor rather than the radio's, so it costs the radio nothing.
 
 ## Your node can no longer advertise an identity it cannot prove
 
@@ -239,6 +263,83 @@ switched on by a line the radio driver cannot reach. The **RAK3401 1 W** is in t
 Proposed by **bisbille** ([@bisbille](https://github.com/bisbille)) —
 [#74](https://github.com/liquidraver/ZephCore/pull/74).
 
+## T1000-E and other LR1110 nodes: receive duty cycling actually works now
+
+If you run a **T1000-E** with `rxduty` switched on, it was missing most of what it should have heard —
+measured on a bench against an identical node with a different radio, **10 packets against 94** over the
+same 85 minutes. The node looked perfectly healthy the whole time.
+
+The radio's power-saving receive loop ends whenever the host talks to the chip at the wrong moment, and
+nothing noticed or restarted it, so the node simply went deaf until something else happened to wake it.
+Older releases hid this by restarting the receiver on a timer; when that timer was removed the problem
+became visible. The driver now takes charge of the loop directly — it stops it deliberately when it needs
+the radio, and starts it again afterwards. Same bench test after the fix: **10 against 10**.
+
+Two things fixed themselves along the way. The node can now measure its own noise floor — on a duty-cycled
+LR1110 it never could, so the adaptive channel-busy detection had nothing to work with and never
+calibrated. And the check that stops a node transmitting over a packet it is already receiving was
+answering "not receiving" almost always, which quietly disabled it.
+
+**LR1110 boards** (T1000-E, ThinkNode M9, Wio-SX1262 variants and others). If you switched `rxduty` off
+because the node seemed unreliable, it is worth switching back on.
+
+## Contacts survive a power cut, and the flash lasts longer
+
+On boards with no external flash chip — the T1000-E among them — saving your contact list **deleted the
+file first and then wrote it again**. Losing power anywhere in that write left the node with no contact
+list at all, rather than a damaged one. It now writes over the file in place, so the file always exists.
+
+Separately, the contact list was being rewritten in full every time any known contact was simply heard
+again. On a busy mesh that was a full rewrite every few minutes, for information that had not meaningfully
+changed. Those refreshes now wait and get written together — measured on a bench as **six writes down to
+one** for the same traffic. Anything that actually matters (a new contact, a message, a route change) is
+still saved within seconds.
+
+Boards with an external flash chip already wrote contacts safely and continue to; they get the reduced
+write rate too.
+
+## A phone that connects but never pairs no longer blocks everyone else
+
+A node has room for one Bluetooth connection. If something connected and then never completed pairing —
+common with iOS, and easy to do by accident with a scanner app — the node held that slot open forever,
+stopped advertising, and became invisible to everyone including you. A power cycle was the only way back.
+
+Connections that have not paired within 15 seconds are now dropped and advertising resumes. Nothing a
+real client does is affected: every part of the node's Bluetooth service requires pairing anyway, so an
+unpaired connection cannot do anything with the slot it is holding.
+
+## Nodes that report to a map now say whether they relay
+
+A node with a WiFi uplink, and the listen-only observer role, now includes in what it reports whether
+it forwards other people's packets. Map sites use this to tell a repeater apart from a node that only
+listens, and to work out who actually carried a packet — without it they had to guess, and showed a
+dash where the answer should be.
+
+An observer always reports that it does not relay, because it never does. A repeater reports whatever
+`repeat` is set to, so turning forwarding off is reflected on the map.
+
+Nodes bridged to a map through a Raspberry Pi instead of their own WiFi are unaffected by this — that
+comes from the bridge software on the Pi, which needs its own update.
+
+## Command replies match Arduino MeshCore again
+
+Apps read a node's replies literally, and a few of ours were worded differently enough to be misread.
+`clock` answered with `Clock: ` in front of the time, which made some apps flag the node's clock as
+wrong when it was perfectly correct. The prefix is gone — the reply is now just the time, exactly as
+Arduino MeshCore sends it.
+
+Four more replies were brought back into line:
+
+- `get radio.rxgain` and `get radio.fem.rxgain` answer **`on` or `off`**, not `1` or `0`.
+- `get radio` reports a 250 kHz bandwidth as **`250`**, not `250.0`.
+- `get extra.sf` lists the spreading factors on their own, and says `No extra SF configured` when there
+  are none.
+- `get cad` answers **`on`**. ZephCore always listens before transmitting and has no switch for it, so
+  that is simply the truth. The detailed statistics that used to appear here moved to **`get cad.stats`**,
+  unchanged.
+
+Only the wording changed — no setting behaves differently, and nothing needs adjusting after the update.
+
 ---
 
 ## Also in this release
@@ -261,27 +362,11 @@ Housekeeping, listed for completeness — nothing here changes how a node behave
   use this, never normal messaging, and it rejected every route on a node set to a longer path hash.
 - **`get`/`set agc.reset.interval` now reply `Removed - Automatic AGC reset is on`** instead of pointing at
   `rxduty`. The setting has been gone for a while; only the wording changed.
+- **LR1110 and LR2021 radios no longer mis-read a reply from the chip as packet data.** A timing race
+  could hand the driver the chip's status registers instead of the answer it asked for, and the resulting
+  nonsense packet length was thrown away silently. Ported from Arduino MeshCore
+  ([PR #3261](https://github.com/meshcore-dev/MeshCore/pull/3261)).
 - **The repeater command reference was corrected in several places** — `set radio` and `tempradio` take
   comma-separated values, not spaces; `set prv.key` takes the 128-character key; `allow.read.only` and
   `buzzer` are room-server only. The commands themselves did not change, the documentation was simply
   wrong about them.
-
----
-
-## Not fully tested yet
-
-- **The T1000-E sensor readings are confirmed on a real device**; the faster boot time is measured from a
-  before-log only, with no after-log yet.
-- **The identity repair paths have not been tried on hardware.** Every case is covered by tests on a PC,
-  but no real node has been broken and recovered. Normal healthy nodes are unaffected.
-- **Why that one node's identity broke is still unknown.** This release makes sure the same thing can no
-  longer go unnoticed, but the original cause has not been found.
-- **The ME25LS02 has not been run on hardware.** Nobody involved has one yet. Both builds compile, and
-  the pin mapping was taken from the module's own schematic and cross-checked against MinewSemi's working
-  sample firmware — but no packet has been sent or received on a real module. Note also that the module's
-  datasheet contradicts its own schematic about three of the radio's control pins, and lists one pin
-  twice; the schematic is what ZephCore follows.
-- **The antenna amplifier receive setting is compile-checked on every affected board, but has not been
-  measured on hardware in this form.** The 23 dB figure above comes from the original proposal, which
-  reached the same pin by a different route. Leaving the setting alone keeps every node behaving exactly
-  as it did before, so a node nobody deliberately switches over is not affected at all.
