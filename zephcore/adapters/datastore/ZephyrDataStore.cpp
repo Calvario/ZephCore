@@ -38,7 +38,19 @@ static bool atomicWriteTempFile(const char *path, AtomicWriteFn write_fn, void *
 		return false;
 	}
 
-	fs_unlink(tmp_path);
+	/* Best-effort cleanup of a leftover temp from an interrupted write.
+	 *
+	 * Guarded by fs_stat rather than unlinking blind: on the normal path the
+	 * file does not exist, fs_unlink() returns -ENOENT, and Zephyr's FS layer
+	 * logs that at ERR level regardless of us ignoring the return.  That put
+	 * an <err> line on the happy path of every atomic save — 23 of them in a
+	 * 90-minute capture, one per save — which is exactly the noise that makes
+	 * a real filesystem error invisible. */
+	struct fs_dirent tmp_ent;
+
+	if (fs_stat(tmp_path, &tmp_ent) == 0) {
+		fs_unlink(tmp_path);
+	}
 
 	struct fs_file_t file;
 	fs_file_t_init(&file);
@@ -231,7 +243,14 @@ bool ZephyrDataStore::copyFile(const char *src, const char *dst)
 		return false;
 	}
 
-	fs_unlink(tmp_path);
+	/* Guarded for the same reason as atomicWriteTempFile(): a blind unlink of
+	 * a file that is normally absent logs -ENOENT at ERR level from the FS
+	 * layer, on the success path. */
+	struct fs_dirent tmp_ent;
+
+	if (fs_stat(tmp_path, &tmp_ent) == 0) {
+		fs_unlink(tmp_path);
+	}
 
 	struct fs_file_t src_file, dst_file;
 	fs_file_t_init(&src_file);
