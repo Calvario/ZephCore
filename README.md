@@ -1,4 +1,4 @@
-<h1>ZephCore — MeshCore for Zephyr RTOS&nbsp;<img src="img/kite-network-logo-bright.svg" alt="ZephCore logo" width="85" align="middle"></h1>
+<h1>ZephCore — MeshCore for Zephyr RTOS&nbsp;<img src="img/kite-network-logo-thick-bright.svg" alt="ZephCore logo" width="85" align="middle"></h1>
 
 A port of [MeshCore](https://github.com/meshcore-dev/MeshCore/) LoRa mesh firmware from Arduino to [Zephyr RTOS](https://zephyrproject.org/). Aiming for full protocol compatibility with the original Arduino firmware and the MeshCore mobile apps.
 
@@ -15,63 +15,20 @@ Other benefits:
 
 ## Supported Boards
 
-### nRF52840
+nRF52840, ESP32, nRF54L15, MG24, and STM32WL boards, covering SX126x, LR1110,
+LR2021, and SX127x radios. ZephCore also runs as a **native Linux process** on
+SBCs (Femtofox / Luckfox Pico Mini, Raspberry Pi + RAK6421 HAT) with a real
+SX1262 on SPI/GPIO and the companion app connecting over TCP — see
+[LINUX_NATIVE.md](docs/LINUX_NATIVE.md).
 
-| Board | Radio | Extras |
-|-------|-------|--------|
-| **Wio Tracker L1** | SX1262 | GPS (L76KB), OLED (SH1106), joystick, buzzer, QSPI flash |
-| **Seeed T1000-E** | LR1110 | GPS (AG3335), LEDs, button |
-| **RAK4631** / **RAK WisMesh Pocket** | SX1262 | Same `rak4631` build. GPS (u-blox MAX-7Q), optional WisBlock OLED (SSD1306), I2C sensors (SHTC3, LPS22HB, BME680) |
-| **RAK3401 1W** | SX1262 + SKY66122 (30 dBm) | GPS (u-blox MAX-7Q, optional), I2C sensors |
-| **RAK WisMesh Tag** | SX1262 | GPS (AT6558R), accelerometer, buzzer |
-| **ThinkNode M1** | SX1262 | GPS, e-paper display (SSD1681), QSPI flash, buzzer, RGB LEDs |
-| **ThinkNode M3** | LR1110 | GPS, buzzer, two buttons, RGB LEDs |
-| **ThinkNode M6** | SX1262 | GPS (L76K), QSPI flash, RGB LEDs |
-| **LilyGo T-Echo** | SX1262 (TCXO 1.8V) | GPS (L76K), 1.54" e-paper (SSD1681), BME280, QSPI flash, touch-button backlight |
-| **Heltec T114** | SX1262 | 1.14" TFT (ST7789V); screenless build via `no_display.conf` |
-| **Heltec Mesh Node T096** | SX1262 + KCT8103L PA/FEM | UC6580 GNSS, ST7735S 160×80 TFT, button, LED, battery ADC |
-| **Ikoka Nano 30dBm** | SX1262 (E22-900M30S, 30 dBm PA) | RGB LEDs |
-| **GAT562 30S Mesh Kit** | SX1262 (30 dBm / 1 W PA) | RAK4631 core module. OLED (SSD1306), 5-way joystick, buzzer, GPS, BME280 pad, 2×18650 + solar |
-| **SenseCAP Solar** | SX1262 | GPS (L76K), QSPI flash, battery monitor |
-| **XIAO nRF52840 + Wio-SX1262** | SX1262 | Bare XIAO + Wio-SX1262 expansion |
-| **ProMicro SX1262** | SX1262 (E22-900M30S) | GPS, battery ADC, button, LED |
-| **muzi works R1 Neo** | SX1262 | GPS, RTC, buzzer, button, LEDs, soft power-off |
-
-### ESP32
-
-| Board | MCU | Radio | Extras |
-|-------|-----|-------|--------|
-| **XIAO ESP32-C3** | ESP32-C3 | SX1262 | BLE 5.0 |
-| **XIAO ESP32-C6** | ESP32-C6 | SX1262 | BLE 5.0, Wi-Fi 6 |
-| **XIAO ESP32-S3** | ESP32-S3 | SX1262 | BLE 5.0, 8MB flash, 8MB PSRAM |
-| **Station G2** | ESP32-S3 | SX1262 + PA (~20 dB gain) | OLED (SH1106), GPS, 16MB flash, 8MB PSRAM |
-| **LilyGo TLoRa C6** | ESP32-C6 | SX1262 | BLE 5.0, Wi-Fi 6 |
-| **LilyGo T3S3** | ESP32-S3 | SX1262 | OLED (SSD1306), button, TX LED, battery ADC, 4MB flash, 2MB PSRAM. **SX1262 variant only** — the SX1276/SX1280/LR1121 versions of this board are not supported |
-| **Heltec V3** | ESP32-S3 | SX1262 | OLED (SSD1306), 8MB flash |
-| **Heltec V4.2** | ESP32-S3 | SX1262 + GC1109 PA | OLED (SSD1306), 16MB flash, 2MB PSRAM |
-| **Heltec V4.3** | ESP32-S3 | SX1262 + KCT8103L PA | OLED (SSD1306), 16MB flash, 2MB PSRAM |
-| **Heltec Wireless Tracker V1.1** | ESP32-S3 | SX1262 | ST7735R 160×80 TFT, UC6580 GPS |
-| **Heltec Wireless Tracker V2** | ESP32-S3FN8 | SX1262 + KCT8103L PA/FEM | ST7735R 160x80 TFT, UC6580 GNSS, battery ADC |
-| **ThinkNode M9** | ESP32-S3 | LR1110 | ST7789 320x240 TFT, CC1167Q GPS, PCF8563 RTC, buzzer, 16MB flash, 8MB PSRAM |
-| **LilyGo T-Beam v1.2** | ESP32 (PICO-D4) | SX1262 | AXP2101 PMU, GNSS, USB-UART CLI |
-| **TTGO LoRa32** | ESP32 (PICO-D4) | **SX1276** (loramac-node backend) | SX127x reference board — **source-only, no published firmware** |
-
-### Other
-
-| Board | MCU | Radio | Extras |
-|-------|-----|-------|--------|
-| **XIAO nRF54L15 + Wio-SX1262** | nRF54L15 | SX1262 | FLPR multicore, RRAM storage |
-| **XIAO MG24 + Wio-SX1262** | EFR32MG24 | SX1262 | BLE (SiLabs blob) |
-| **Seeed LoRa-E5 mini** | STM32WL (STM32WLE5JC) | Integrated sub-GHz (SX1262-class) | No BLE/USB — companion + CLI over USART1 |
-
-ZephCore also runs as a **native Linux process** on SBCs (Femtofox / Luckfox Pico Mini, Raspberry Pi + RAK6421 HAT) with a real SX1262 on SPI/GPIO and the companion app connecting over TCP — see [LINUX_NATIVE.md](zephcore/LINUX_NATIVE.md).
-
-For exact `west build -b` board strings, flash methods, and special setup, see the [supported boards list](zephcore/boards/supported_boards.md) and the [Board Porting Guide](zephcore/boards/example_board/README.md).
+For the full board list with exact `west build -b` strings, radios, and
+hardware notes, see the [supported boards list](docs/supported_boards.md) and
+the [Board Porting Guide](zephcore/boards/example_board/README.md).
 
 ## Device Roles
 
-- **Companion** (default) -- connects to MeshCore mobile apps via BLE. Contacts, channels, offline message queue.
-- **Repeater** -- forwards packets, configured via USB serial CLI. See the [Repeater CLI Command Reference](zephcore/Repeater_CLI_commands.md) for all available commands.
+- **Companion** (default) -- connects to MeshCore mobile apps via BLE/USB. Contacts, channels, offline message queue.
+- **Repeater** -- forwards packets, configured via USB serial CLI. See the [Repeater CLI Command Reference](docs/Repeater_CLI_commands.md) for all available commands.
 - **Room Server** -- store-and-forward shared message room (a "BBS"). Clients log in with an admin or guest password and post messages; the server pushes each new post to every other logged-in client. No BLE; configured via the same USB serial CLI as the repeater.
 - **Observer** (ESP32 only) -- listen-only node that publishes received LoRa packets to MQTT over WiFi STA. Configured at runtime via serial CLI.
 
@@ -193,7 +150,6 @@ The old `txdelay`, `rxdelay`, and `direct.txdelay` commands are still accepted f
 ## Power Saving
 
 - **LoRa RX duty cycle**: chip-autonomous receive windowing (sniff mode) reduces LoRa RX current from ~10-15mA to ~3-5mA. Off by default; toggle at runtime with `set rxduty on/off` (SX126x only — unsupported on LR1110 due to a mid-preamble lock issue, and on SX127x). Window timing is auto-sized per SF/BW/preamble from the SX126x datasheet constraints.
-- **Adaptive Power Control (APC)**: compiled in by default but disabled at runtime. Enable per-node with `set tx apc` -- automatically reduces TX power when echo SNR shows excess margin, ramping back up if echoes drop. See [apc.md](zephcore/apc.md).
 - **Production by default**: No logging, no asserts, reboot-on-fatal. Add `debug.conf` to enable logging.
 - **GPIO-gated GPS**: Powered on only during fix acquisition
 
@@ -263,7 +219,7 @@ zephcore/
 
 ## License
 
-MIT License — see [`zephcore/LICENSE`](zephcore/LICENSE). Same license as the
+MIT License — see [`LICENSE`](LICENSE). Same license as the
 upstream MeshCore project, which this work relies heavily on (see the
 [official meshcore repo](https://github.com/meshcore-dev/MeshCore/)).
 

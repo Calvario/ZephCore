@@ -19,10 +19,12 @@ sensecap_solar
 xiao_nrf52840
 lilygo_techo
 promicro_sx1262
+promicro_lr2021
 heltec_t114
 heltec_t096
 gat562_30s
 muziworks_r1neo
+lilygo_timpulse_plus
 ```
 
 > **RAK WisMesh Pocket** (WisBlock pocket): use `-b rak4631` — same board string and firmware as **RAK4631**.
@@ -32,6 +34,10 @@ muziworks_r1neo
 > **SenseCAP MeshTracker X1** (`meshtracker_x1`): nRF52840 + LR2021, AG3335M dual-band L1+L5 GNSS, SPA06 barometer, DRV2605L vibration, YSN8900 RTC, 8 MB QSPI flash (`/ext`), RGB LED, buzzer. Untested on hardware — first ZephCore board to use a real LR2021. The RTC is treated as an RX8900 second-source; boot-time discovery validates that before trusting it.
 >
 > **Heltec Mesh Node T096** (`heltec_t096`): nRF52840 with SX1262 + KCT8103L PA/FEM, UC6580 GNSS, and ST7735S 160x80 TFT companion display. The external SPI flash footprint is documented in the board notes but left disabled until the device parameters are confirmed.
+>
+> **LilyGo T-Impulse Plus** (`lilygo_timpulse_plus`): nRF52840 wristband/tracker with SX1262 (GPIO antenna switch, not DIO2), SSD1315 64x32 OLED, u-blox MIA-M10Q GPS, 4 MB QSPI flash (`/ext`), touch button, haptic motor. Builds and ships in releases, but several parameters are inferred from vendor sources and not bench-verified (TCXO voltage, battery divider ratio, OLED offsets) — see the board README. Early hardware testing also showed occasional spontaneous reboots, untriaged.
+>
+> **ProMicro LR2021** (`promicro_lr2021`): nRF52840 SuperMini + Semtech LR2021, the first ZephCore board bring-up for that radio. Source-only — **not in `build.sh`, the release workflow, or the Mesh America catalog**, so no release carries a binary for it. The bring-up module was destroyed by an accidental 5V feed (LR2021 VBAT max ~3.7V); build it yourself if you want to continue testing on a fresh module.
 
 ## ESP32
 
@@ -129,4 +135,4 @@ me25ls02/nrf54l15/cpuapp
 
 Not `west build -b` boards — `EXTRA_CONF_FILE` presets on top of `native_sim`
 for SBCs (Femtofox / Luckfox Pico Mini, Raspberry Pi + RAK6421 HAT). See
-[LINUX_NATIVE.md](../LINUX_NATIVE.md) for build commands and wiring.
+[LINUX_NATIVE.md](LINUX_NATIVE.md) for build commands and wiring.

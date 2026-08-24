@@ -59,7 +59,7 @@ Quiet sites end up *more* sensitive than the old fixed default (fewer stomped pa
 off until the false alarms stop. CAD also now uses 4 detection symbols everywhere, which improves detection
 of an in-progress packet's payload (not just its preamble). Full guide, including the honest limitation
 that the "missed detection" side isn't locally observable, is in
-**[ADAPTIVE_CAD.md](https://github.com/liquidraver/ZephCore/blob/master/zephcore/ADAPTIVE_CAD.md)**.
+**[ADAPTIVE_CAD.md](https://github.com/liquidraver/ZephCore/blob/master/docs/ADAPTIVE_CAD.md)**.
 (SX127x boards have no hardware CAD and keep their RSSI-based gate.)
 
 ### New: V-Contact — admin your companion from the chat app, no cable

@@ -161,7 +161,7 @@ that empty slot. Unused slots are now skipped, so those messages are simply igno
 
 If your node keeps finding the channel busy and can never transmit, it now says so after four seconds and
 flags it as an error. Before, a node that could hear everyone but never got heard back looked completely
-idle, with nothing in the log to explain it.
+idle, with nothing in the log to explain it. (in debug logs)
 
 All roles, all boards.
 
@@ -232,12 +232,6 @@ instead of once. Now it does it once, halving the time it spends unable to hear 
 
 LR2021 boards only.
 
-## An LR1110 too old to reach the mesh now says so
-
-An LR1110 running firmware older than 0x0303 cannot be moved off the public LoRa channel. It transmits
-and receives perfectly well, but nobody on your mesh can see it. That now appears in the log instead of
-looking like a broken radio.
-
 ## New setting: switch the antenna amplifier's receive gain off
 
 Some boards carry an extra amplifier chip between the radio and the antenna. It boosts what the node
@@ -248,13 +242,6 @@ The new `set radio.fem.rxgain 0` switches off only the receive side, to save the
 amplifier draws. Transmitting is untouched: every packet the node sends still goes out through the
 amplifier at full strength. `set radio.fem.rxgain 1` puts it back, and `get radio.fem.rxgain` shows where
 it stands. The node keeps the setting across reboots.
-
-> [!WARNING]
-> **This costs range, and a lot of it.** With the receive side off the node goes substantially deafer —
-> on a Wireless Tracker V2 the measured noise floor moves by about 23 dB between the two settings. Distant
-> and weak neighbours simply stop being heard, while the node's own transmissions carry exactly as far as
-> before, so from the outside it still looks perfectly healthy. Only worth doing on a battery-powered node
-> where you already know every neighbour is close and strong.
 
 Supported on the **Heltec T096**, **Wireless Tracker V2**, **WiFi LoRa 32 V4** and **WiFi LoRa 32 V4.3**.
 Everything else replies `Error: unsupported` — either the board has no such amplifier, or its amplifier is
@@ -280,7 +267,7 @@ LR1110 it never could, so the adaptive channel-busy detection had nothing to wor
 calibrated. And the check that stops a node transmitting over a packet it is already receiving was
 answering "not receiving" almost always, which quietly disabled it.
 
-**LR1110 boards** (T1000-E, ThinkNode M9, Wio-SX1262 variants and others). If you switched `rxduty` off
+**LR1110 boards** (T1000-E, ThinkNode M9, Wio variants and others). If you switched `rxduty` off
 because the node seemed unreliable, it is worth switching back on.
 
 ## Contacts survive a power cut, and the flash lasts longer

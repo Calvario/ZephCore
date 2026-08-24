@@ -73,8 +73,10 @@ rtt_*.txt
 # JLink scripts and outputs
 *.jlink
 
-# Documentation that was moved/deleted
-/docs/
+# Internal working docs: per-topic audit indexes, handovers, handoffs, and
+# other local-only scratch notes (see the HANDOVER_*/​*_AUDIT_INDEX rules below,
+# kept for pre-2026-08-24 history/muscle memory even though this covers them).
+/devdocs/
 
 # Temporary/scratch files
 *.tmp

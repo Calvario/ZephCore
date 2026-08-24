@@ -84,4 +84,4 @@ adverts take tens of minutes to accumulate after a reboot, so an operator
 syncing right after login always wins.
 
 For the design details (consensus algorithm, security model, why the limits
-are what they are), see [ARCHITECTURE.md](zephcore/ARCHITECTURE.md) section 4.9.
+are what they are), see [ARCHITECTURE.md](ARCHITECTURE.md) section 4.9.
