@@ -85,12 +85,31 @@ bool mc_display_is_on(void);
  */
 bool mc_display_is_epd(void);
 
-/* Color overlay support is compiled only when the devicetree has a raw
- * RGB565 TFT under the `tft` nodelabel (the runtime probe still verifies
- * pixel format and readiness).  Boards without one get constant-false /
- * mono-fallback inlines so every color code path — including the ~3.8 KB
- * overlay op queue in display.c — is dropped at compile time. */
-#define MC_DISPLAY_COLOR_PANEL DT_NODE_EXISTS(DT_NODELABEL(tft))
+/* Color overlay support is compiled only when the devicetree points at a raw
+ * RGB565 TFT (the runtime probe still verifies pixel format and readiness).
+ * Boards without one get constant-false / mono-fallback inlines so every
+ * color code path — including the ~3.8 KB overlay op queue in display.c —
+ * is dropped at compile time.
+ *
+ * Two ways to name the panel, in priority order:
+ *
+ *   1. chosen { zephcore,color-tft = <&some_panel>; }
+ *   2. the `tft` nodelabel on the panel node
+ *
+ * (1) exists for boards whose panel node lives in an upstream Zephyr DTS:
+ * an overlay cannot add a nodelabel to an existing node, but it can always
+ * set a chosen property.  (2) is kept because every in-tree board that had
+ * color before this indirection names its panel `tft:` — they need no edit.
+ */
+#if DT_HAS_CHOSEN(zephcore_color_tft)
+#define MC_DISPLAY_COLOR_NODE DT_CHOSEN(zephcore_color_tft)
+#elif DT_NODE_EXISTS(DT_NODELABEL(tft))
+#define MC_DISPLAY_COLOR_NODE DT_NODELABEL(tft)
+#else
+#define MC_DISPLAY_COLOR_NODE DT_INVALID_NODE
+#endif
+
+#define MC_DISPLAY_COLOR_PANEL DT_NODE_EXISTS(MC_DISPLAY_COLOR_NODE)
 
 /**
  * @return true when a raw RGB565-capable color panel is available for

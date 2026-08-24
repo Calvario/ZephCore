@@ -18,6 +18,12 @@
 		/* Mono-TFT wrapper: presents PIXEL_FORMAT_MONO01 to CFB and converts
 		 * each row to RGB565 for the ST7735R colour TFT. */
 		zephyr,display = &mono_tft;
+
+		/* Same panel drawn a second way: the colour overlay renderer writes
+		 * raw RGB565 straight to the ST7735R, bypassing the mono wrapper.
+		 * Identical panel and init sequence to the T096, so the same badges,
+		 * coloured text and activity graph apply here. */
+		zephcore,color-tft = &st7735r_160x80;
 	};
 
 	mono_tft: mono-tft {
@@ -27,7 +33,19 @@
 		height = <80>;
 	};
 
-	/* Button chain: short tap scrolls pages, double tap goes back, long press enters. */
+	/*
+	 * Button chain: long press enters, taps drive the gesture ladder below.
+	 *
+	 *   1 tap  (400ms wait) → KEY_1    = page next
+	 *   2 taps (400ms wait) → KEY_LEFT = page previous
+	 *   3 taps (400ms wait) → KEY_B    = LED heartbeat toggle
+	 *   4 taps (400ms wait) → KEY_C    = GPS on/off
+	 *   5 taps (immediate)  → KEY_E    = flood advert
+	 *
+	 * This is the T096 variant of the 5-tap ladder — page-prev stays at slot
+	 * 2 because this board has a screen.  Screenless boards use KEY_B there
+	 * instead, where page-prev would be a no-op.
+	 */
 	user_btn_longpress {
 		compatible = "zephyr,input-longpress";
 		input = <&buttons>;
@@ -40,7 +58,7 @@
 	page_btn_multitap {
 		compatible = "zephcore,input-multi-tap";
 		input-codes = <INPUT_KEY_A>;
-		tap-codes = <INPUT_KEY_1 INPUT_KEY_LEFT>;
+		tap-codes = <INPUT_KEY_1 INPUT_KEY_LEFT INPUT_KEY_B INPUT_KEY_C INPUT_KEY_E>;
 		tap-delay-ms = <400>;
 	};
 };

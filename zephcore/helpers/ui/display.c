@@ -96,7 +96,7 @@ static uint8_t color_op_count;
 static uint16_t color_line[COLOR_MAX_WIDTH];
 
 static const struct device *color_dev =
-	DEVICE_DT_GET_OR_NULL(DT_NODELABEL(tft));
+	DEVICE_DT_GET_OR_NULL(MC_DISPLAY_COLOR_NODE);
 #endif /* MC_DISPLAY_COLOR_PANEL */
 
 /* Optional symmetric inset (pixels).  Shrinks reported width/height and

@@ -40,6 +40,13 @@
 		 * and converts each row to RGB565 for the ST7735R.  Direct RGB565 to CFB
 		 * causes random noise because CFB doesn't drive colour TFTs correctly. */
 		zephyr,display = &mono_tft;
+
+		/* Same panel drawn a second way: the colour overlay renderer writes
+		 * raw RGB565 straight to the ST7735R, bypassing the mono wrapper.
+		 * A chosen property rather than a `tft` nodelabel because the panel
+		 * node lives in the upstream Zephyr DTS, which an overlay cannot
+		 * relabel. */
+		zephcore,color-tft = &st7735r_160x80;
 	};
 
 	/* Monochrome wrapper around the ST7735R 160x80 colour TFT */
