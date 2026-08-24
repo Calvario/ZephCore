@@ -387,12 +387,24 @@ void CompanionMesh::onChannelAdded(ChannelDetails *)
 	markChannelsDirty();
 }
 
-void CompanionMesh::markContactsDirty()
+void CompanionMesh::markContactsDirty(bool substantive)
 {
+	int64_t deadline = _ms->getMillis() +
+			   (substantive ? LAZY_WRITE_DELAY_MS
+					: LAZY_WRITE_LIVENESS_MS);
+
 	/* Only set the timer on first dirty — don't keep pushing
 	 * the deadline forward or a busy mesh never flushes. */
 	if (!_dirty_contacts_expiry) {
-		_dirty_contacts_expiry = _ms->getMillis() + LAZY_WRITE_DELAY_MS;
+		_dirty_contacts_expiry = deadline;
+		return;
+	}
+
+	/* ...but a substantive change must not have to sit out a liveness wait
+	 * that is already pending.  Pulling the deadline IN cannot starve the
+	 * flush, only hasten it. */
+	if (substantive && deadline < _dirty_contacts_expiry) {
+		_dirty_contacts_expiry = deadline;
 	}
 }
 
@@ -727,8 +739,13 @@ void CompanionMesh::onDiscoveredContact(ContactInfo &contact, bool is_new, uint8
 	LOG_INF("onDiscoveredContact: '%s' is_new=%d path_len=%d num_contacts=%d",
 		contact.name, is_new, path_len, getNumContacts());
 
-	// Mark contacts dirty for lazy save
-	markContactsDirty();
+	/* A re-heard advert from a contact we already have is liveness only —
+	 * the base class has just refreshed last_advert_timestamp and lastmod,
+	 * and nothing else typically moved.  Persist it lazily rather than
+	 * spending a full-file rewrite per advert; a genuinely new contact, a
+	 * path change (onContactPathUpdated) or a message all still flush on the
+	 * short deadline. */
+	markContactsDirty(is_new);
 
 	// Update advert path table
 	if (path && mesh::Packet::isValidPathLen(path_len)) {

@@ -1084,12 +1084,27 @@ void ZephyrDataStore::loadContacts(DataStoreHost *host)
 void ZephyrDataStore::saveContacts(DataStoreHost *host)
 {
 	const char *path = contactsFile();
+
+	/* Atomic replace ONLY where there is external flash — deliberately, and
+	 * not to be "fixed" later.
+	 *
+	 * atomicWriteTempFile() needs room for a second full copy before the
+	 * rename.  contacts3 is by far the largest store here (152 B per record,
+	 * ~47 KB at 313 contacts) and internal /lfs on these boards is 128 KB
+	 * total, shared with identity, prefs and channels2.  Two copies would sit
+	 * at ~94 KB of 128 KB before LittleFS metadata, so the atomic path could
+	 * fail with ENOSPC exactly when it is most needed — a worse failure than
+	 * the one it prevents.
+	 *
+	 * channels2, identity and prefs are atomic everywhere because they are
+	 * small enough for the second copy to be free.  Only contacts is gated.
+	 *
+	 * The non-atomic branch below is therefore the constrained-board path,
+	 * and it writes in place and truncates rather than unlinking first — see
+	 * the note there. */
 	bool use_atomic = _has_ext_fs;
 	const char *save_mode = use_atomic ? "atomic" : "direct";
 
-	if (!use_atomic && exists(path)) {
-		fs_unlink(path);
-	}
 
 	struct fs_file_t file;
 	uint8_t rec[CONTACT_DATA_SZ];
@@ -1126,6 +1141,21 @@ void ZephyrDataStore::saveContacts(DataStoreHost *host)
 		};
 		write_ok = atomicWriteTempFile(path, atomic_contacts_writer, &ctx, "saveContacts");
 	} else {
+		/* Overwrite in place, then truncate — never unlink first.
+		 *
+		 * This branch runs on boards with no external flash, i.e. the ones
+		 * that cannot afford the atomic temp-file dance.  It used to
+		 * fs_unlink() the contacts file before recreating it, which left a
+		 * window spanning the whole ~47 KB write where contacts3 did not
+		 * exist at all: a power cut there lost every contact rather than
+		 * corrupting some.  The unlink was only ever a way to truncate.
+		 *
+		 * Truncating afterwards is the same guarantee without the window —
+		 * the file is always present, and at worst briefly longer than its
+		 * new contents (stale records past the end, which the truncate then
+		 * removes).  FS_O_TRUNC is NOT usable here: Zephyr's LittleFS
+		 * backend maps only CREATE/READ/WRITE/APPEND and drops TRUNC
+		 * silently, so asking for it would leave the stale tail in place. */
 		fs_file_t_init(&file);
 		int rc = fs_open(&file, path, FS_O_CREATE | FS_O_WRITE);
 		if (rc < 0) {
@@ -1133,6 +1163,20 @@ void ZephyrDataStore::saveContacts(DataStoreHost *host)
 			return;
 		}
 		write_ok = write_contacts(&file);
+
+		int trunc_rc = 0;
+
+		if (write_ok) {
+			trunc_rc = fs_truncate(&file,
+					       (off_t)written * CONTACT_DATA_SZ);
+			if (trunc_rc < 0) {
+				LOG_ERR("saveContacts: truncate to %u failed: %d",
+					(unsigned)(written * CONTACT_DATA_SZ),
+					trunc_rc);
+				write_ok = false;
+			}
+		}
+
 		int sync_rc = fs_sync(&file);
 		fs_close(&file);
 		if (!write_ok || sync_rc < 0) {

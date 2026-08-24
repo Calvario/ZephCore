@@ -417,9 +417,25 @@ private:
 	int64_t _dirty_channels_expiry;
 	static constexpr int64_t LAZY_WRITE_DELAY_MS = 5000;  /* 5 seconds, matches Arduino */
 
+	/* Deadline for liveness-only contact updates — a re-heard advert from a
+	 * contact we already know, where the only fields that moved are
+	 * last_advert_timestamp and lastmod.
+	 *
+	 * saveContacts() rewrites the WHOLE file (fixed 152-byte records, no
+	 * incremental path), which on a board without external flash is ~47 KB
+	 * into a 128 KB LittleFS partition.  Measured on a T1000-E 2026-08-24:
+	 * 21 full rewrites in 90 minutes, one per advert arrival, because every
+	 * re-advert marked the file dirty on the same 5 s deadline as a real
+	 * change.  That is a flash-wear problem on a battery tracker.
+	 *
+	 * Liveness still persists — it just waits, so an hour of re-adverts
+	 * costs one write instead of fourteen.  A substantive change (new
+	 * contact, message, path update) still pulls the deadline back in. */
+	static constexpr int64_t LAZY_WRITE_LIVENESS_MS = 600000;  /* 10 minutes */
+
 	void onLoginSent(const ContactInfo &contact) override;
 	void onChannelAdded(ChannelDetails *ch) override;
-	void markContactsDirty();
+	void markContactsDirty(bool substantive = true);
 	void markChannelsDirty();
 	void flushDirtyContacts();
 	void flushDirtyChannels();
