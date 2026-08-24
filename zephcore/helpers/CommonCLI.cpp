@@ -205,7 +205,7 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         uint32_t now = getRTCClock()->getCurrentTime();
         time_t t = (time_t)now;
         struct tm *tm = gmtime(&t);
-        snprintf(reply, CLI_REPLY_SIZE, "Clock: %02d:%02d - %d/%d/%d UTC",
+        snprintf(reply, CLI_REPLY_SIZE, "%02d:%02d - %d/%d/%d UTC",
                  tm->tm_hour, tm->tm_min, tm->tm_mday, tm->tm_mon + 1, tm->tm_year + 1900);
     } else if (memcmp(command, "time ", 5) == 0) {
         uint32_t secs = _atoi(&command[5]);
