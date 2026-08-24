@@ -62,6 +62,8 @@ LoRaRadioBase::LoRaRadioBase(const struct device *lora_dev, MainBoard &board,
 	  _dc_last_rx_us(0), _dc_last_sleep_us(0),
 	  _agc_rx_count_shadow(0), _agc_last_activity_ms(0),
 	  _agc_rssi_last(0), _agc_rssi_frozen(0),
+	  _rssi_reads_ok(0), _rssi_reads_busy(0), _rssi_bursts_abandoned(0),
+	  _silence_last_report_ms(0),
 	  _image_cal_last_temp_c(INT16_MIN),
 	  _image_cal_last_ms(0), _image_cal_wait_ms(0),
 	  _image_cal_started(false), _image_cal_confirming(false),
@@ -999,9 +1001,16 @@ void LoRaRadioBase::triggerNoiseFloorCalibrate(int threshold)
 		samples[i] = hwGetCurrentRSSI();
 		if (samples[i] == -128) {
 			/* Chip busy or RSSI read contended — keep the short
-			 * retry deadline set above and try again shortly. */
+			 * retry deadline set above and try again shortly.
+			 *
+			 * Counted, not yet tolerated: whether to accept a partial
+			 * burst depends on how these reads fail, which is exactly
+			 * what the counters are here to establish. */
+			_rssi_reads_busy++;
+			_rssi_bursts_abandoned++;
 			return;
 		}
+		_rssi_reads_ok++;
 	}
 
 	/* A full sample landed: next one is a full interval away. */
@@ -1202,6 +1211,9 @@ bool LoRaRadioBase::isReceiving()
  * the default 15 s sampler interval this is two minutes of a frozen front end. */
 #define AGC_STUCK_RSSI_SAMPLES   8U
 
+/* How often to report an ongoing RX silence.  Diagnostic only. */
+#define SILENCE_REPORT_MS        120000U
+
 /* Image-calibration drift threshold.  Nothing to do with the AGC reset above —
  * this is the front end.  SX126x DS §9.2.1 / LR11xx UM: image calibration is
  * required after a frequency change > 10 MHz or a temperature change > 10 C.
@@ -1243,6 +1255,36 @@ void LoRaRadioBase::radioMaintenance()
 	}
 
 	uint32_t now = (uint32_t)k_uptime_get_32();
+
+	/* Deafness telemetry, every family, no action taken.
+	 *
+	 * agcIdleMaintenance() used to be the only thing that noticed a long
+	 * silence, and it is now family-gated — so on the LR parts nothing
+	 * reports it at all.  A silence marker on both boards is what lets a
+	 * side-by-side capture say WHICH radio stopped hearing, and the
+	 * accompanying counters say what the sampler was seeing at the time. */
+	uint32_t rx_now = (uint32_t)atomic_get(&_packets_recv) +
+			  (uint32_t)atomic_get(&_packets_recv_errors);
+
+	if (rx_now != _agc_rx_count_shadow || _agc_last_activity_ms == 0) {
+		_silence_last_report_ms = 0;   /* traffic — reset the reporter */
+	} else {
+		uint32_t silent_ms = now - _agc_last_activity_ms;
+
+		if (silent_ms >= SILENCE_REPORT_MS &&
+		    (_silence_last_report_ms == 0 ||
+		     (now - _silence_last_report_ms) >= SILENCE_REPORT_MS)) {
+			_silence_last_report_ms = now ? now : 1;
+			LOG_INF("silence: %u s no RX | in_rx=%d dc=%d rssi_ok=%u rssi_busy=%u abandoned=%u floor=%d",
+				(unsigned)(silent_ms / 1000U),
+				(int)atomic_get(&_in_recv_mode),
+				(int)_rx_duty_cycle_enabled,
+				(unsigned)_rssi_reads_ok,
+				(unsigned)_rssi_reads_busy,
+				(unsigned)_rssi_bursts_abandoned,
+				(int)_noise_floor);
+		}
+	}
 
 	agcIdleMaintenance(now);
 	imageCalMaintenance(now);
@@ -1836,8 +1878,14 @@ int LoRaRadioBase::formatCadStatus(char *buf, int cap)
 		      (int)base + _cad_offset, base,
 		      spread_mean10 / 10U, spread_mean10 % 10U, degen_pct);
 	if (room_for_count) {
-		n += snprintf(buf + n, cap > n ? cap - n : 0, "(%u)",
-			      (unsigned)_rssi_bursts);
+		/* bursts(ok reads/busy reads/abandoned bursts) — the busy and
+		 * abandoned figures are what distinguish a sampler that is losing
+		 * the odd read from one that is being refused outright. */
+		n += snprintf(buf + n, cap > n ? cap - n : 0, "(%u r%u/b%u/a%u)",
+			      (unsigned)_rssi_bursts,
+			      (unsigned)_rssi_reads_ok,
+			      (unsigned)_rssi_reads_busy,
+			      (unsigned)_rssi_bursts_abandoned);
 	}
 	n += snprintf(buf + n, cap > n ? cap - n : 0, " bc:%u%%",
 		      (unsigned)_cad_busycap_pct);

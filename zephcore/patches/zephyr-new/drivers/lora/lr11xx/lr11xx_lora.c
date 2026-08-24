@@ -429,13 +429,24 @@ static void lr11xx_start_rx(struct lr11xx_data *data,
 
 	/* Apply RX boost — persistent register, only written once.
 	 * Deferred from hw_init to here so radio is fully configured.
-	 * In duty-cycle mode we force a re-apply on every (re)start: the
-	 * chip's sleep-with-retention warm wakes are autonomous (no IRQ per
-	 * wake, so software can't intervene mid-cycle), and we don't want to
-	 * assume the boost register survives them — cheap insurance against
-	 * the SX126x-style silent -3 dB loss across warm starts. */
-	if (data->rx_boost_enabled &&
-	    (!data->rx_boost_applied || data->rx_duty_cycle_enabled)) {
+	 *
+	 * NOT re-applied per duty-cycle (re)start.  It used to be, as "cheap
+	 * insurance against the SX126x-style silent -3 dB loss across warm
+	 * starts" — but that was an analogy to a different chip, not a fact
+	 * about this one, and the UM contradicts it.  §7.2.6: sending
+	 * SetRxDutyCycle in standby means "the context (device configuration) is
+	 * saved", and at the end of each sleep window "the device automatically
+	 * restarts the process of restoring context"; §6 defines the retention
+	 * bit as retaining "device state and firmware data".  SetRxBoosted
+	 * (§7.2.12) is an ordinary configuration command, so it is inside that
+	 * saved context.
+	 *
+	 * The SX126x genuinely does need its re-apply — DS §9.6 requires Rx gain
+	 * (0x08AC) to be pinned into an explicit warm-start retention list, and
+	 * skipping that costs 3 dB on every wake after the first.  The LR11xx has
+	 * no such list because it retains configuration wholesale.  Do not port
+	 * that fix here by analogy; the LR2021 driver carries the same warning. */
+	if (data->rx_boost_enabled && !data->rx_boost_applied) {
 		lr11xx_radio_cfg_rx_boosted(ctx, true);
 		data->rx_boost_applied = true;
 	}
@@ -487,7 +498,21 @@ static void lr11xx_start_rx(struct lr11xx_data *data,
  * sits on the SetStandby instead, which is the command that actually fails on a
  * wedged chip and is safe to poll because the standby has just ended any live
  * cycle. */
-static int lr11xx_restart_rx(struct lr11xx_data *data)
+/* `in_standby` says the caller already knows the chip is parked in STDBY_RC, so
+ * the re-arm can go straight to SetRxDutyCycle.
+ *
+ * True on every path that follows RX_DONE: UM §7.2.6 has the chip leave the loop
+ * and "return to the configured Fallback mode" on reception, and start_rx()
+ * programs that fallback as STDBY_RC.  So the standby is already done, by the
+ * chip, to spec — re-issuing it and then reading GetStatus to confirm it costs
+ * two extra commands (one of them a read, the expensive kind) on the per-packet
+ * hot path, and buys nothing: a chip that just delivered a packet is
+ * demonstrably taking commands.
+ *
+ * False only where no RX_DONE was raised — the false-preamble timeout — because
+ * there the loop may still be running and driving an NSS edge into it is the
+ * race the manual warns about.  That path keeps both the standby and the probe. */
+static int lr11xx_restart_rx(struct lr11xx_data *data, bool in_standby)
 {
 	void *ctx = &data->hal_ctx;
 
@@ -515,12 +540,14 @@ static int lr11xx_restart_rx(struct lr11xx_data *data)
 		 * hardware as a latched CMD_ERROR with DIO1 stuck high, five
 		 * strikes to a reset, ~88 ms deaf per noise header error.  Free
 		 * when the chip is already in standby. */
-		lr11xx_system_set_standby(ctx, LR11XX_SYSTEM_STANDBY_CFG_RC);
+		if (!in_standby) {
+			lr11xx_system_set_standby(ctx,
+						  LR11XX_SYSTEM_STANDBY_CFG_RC);
 
-		/* Safe to poll: the standby above ended any live cycle, so this
-		 * NSS edge has nothing left to disturb.  A chip that will not
-		 * even take a SetStandby will not take a duty cycle either. */
-		{
+			/* Safe to poll: the standby above ended any live cycle,
+			 * so this NSS edge has nothing left to disturb.  A chip
+			 * that will not even take a SetStandby will not take a
+			 * duty cycle either. */
 			lr11xx_system_stat1_t s1 = { 0 };
 
 			if (lr11xx_system_get_status(ctx, &s1, NULL, NULL) ==
@@ -534,9 +561,9 @@ static int lr11xx_restart_rx(struct lr11xx_data *data)
 			}
 		}
 
-		if (data->rx_boost_enabled) {
-			lr11xx_radio_cfg_rx_boosted(ctx, true);
-		}
+		/* No boost re-apply: retained across the duty-cycle sleep, see
+		 * the note in lr11xx_start_rx().  This is the per-packet hot
+		 * path — the write bought nothing and cost a command on it. */
 		lr11xx_radio_set_rx_duty_cycle(ctx, data->dc_rx_ms,
 			data->dc_sleep_ms, LR11XX_RADIO_RX_DUTY_CYCLE_MODE_RX);
 		data->in_rx_mode = true;
@@ -656,7 +683,7 @@ static void lr11xx_dio1_work_handler(struct k_work *work)
 			lr11xx_regmem_clear_rxbuffer(ctx);
 
 			/* Lightweight RX restart — no reconfig needed */
-			lr11xx_restart_rx(data);
+			lr11xx_restart_rx(data, true);
 			rx_restarted = true;
 
 			/* When SNR < 0 the packet RSSI is dominated by
@@ -683,7 +710,7 @@ static void lr11xx_dio1_work_handler(struct k_work *work)
 		}
 
 		LOG_WRN("RX: invalid len %d", rx_stat.pld_len_in_bytes);
-		lr11xx_restart_rx(data);
+		lr11xx_restart_rx(data, true);
 		rx_restarted = true;
 	}
 
@@ -748,7 +775,7 @@ static void lr11xx_dio1_work_handler(struct k_work *work)
 			if (data->rx_duty_cycle_enabled) {
 				atomic_inc(&data->dc_timeout_restarts);
 			}
-			if (lr11xx_restart_rx(data) < 0) {
+			if (lr11xx_restart_rx(data, false) < 0) {
 				/* Escalate to the full path: forces standby,
 				 * reprograms the modem and re-issues SetRx from
 				 * scratch.  The LR11xx counterpart of the
@@ -797,7 +824,7 @@ static void lr11xx_dio1_work_handler(struct k_work *work)
 		lr11xx_regmem_clear_rxbuffer(ctx);
 
 		if (!data->tx_active) {
-			lr11xx_restart_rx(data);
+			lr11xx_restart_rx(data, true);
 			rx_restarted = true;
 		}
 
@@ -822,7 +849,11 @@ safety_check:
 	if (!rx_restarted && data->in_rx_mode && !data->tx_active) {
 		LOG_ERR("DIO1 safety: no IRQ handled (0x%08x rc=%d), "
 			"restarting RX", irq, rc);
-		lr11xx_restart_rx(data);
+		/* State genuinely unknown here — an SPI failure reading the IRQ
+		 * register or an unhandled bit means we cannot claim the chip
+		 * left the loop.  Keep the defensive standby; this is the one
+		 * path where it is not redundant. */
+		lr11xx_restart_rx(data, false);
 	}
 
 	/* Edge-triggered DIO1: if the pin is still HIGH after processing,
@@ -1190,36 +1221,105 @@ static int lr11xx_lora_recv(const struct device *dev, uint8_t *buf,
 
 /* ── LR11xx extension API ───────────────────────────────────────────── */
 
+/* ── Duty-cycle ownership ─────────────────────────────────────────────
+ *
+ * UM §7.2.6 lists exactly three ways the loop ends: a packet is received (the
+ * chip raises RX_DONE and returns to the configured fallback mode), the host
+ * issues SetStandby during the Rx window, or the chip is woken from the sleep
+ * phase by a falling edge of NSS — and for that last case the manual instructs
+ * "the user should send the SetStandby(...) command to avoid race conditions".
+ *
+ * The host issues every NSS edge, so the host can always know whether the cycle
+ * is still running — but only if it never issues one speculatively and hopes.
+ * The previous approach did hope: a BUSY read before the command, skipping if
+ * high.  That cannot be made correct on this family for two independent
+ * reasons.  BUSY is high during the sleep phase (where a command is fatal) AND
+ * through ordinary Rx (where it is harmless), so the pin does not distinguish
+ * the two — measured on a T1000-E as 406 of 407 sampler bursts refused, and 76
+ * of 76 with the duty cycle switched off entirely.  And even a correct reading
+ * is check-then-act: the chip can enter its sleep phase between the GPIO read
+ * and the NSS assert.
+ *
+ * So the driver takes ownership instead.  A caller that must talk to the chip
+ * brackets its work in suspend/resume: the cycle is ended deliberately with the
+ * SetStandby the manual asks for, the work happens against a chip in a known
+ * state, and the cycle is re-armed explicitly.  Nothing is left to timing.
+ *
+ * Cost is bounded and small — a stand-down plus re-arm is four short commands,
+ * and the sampler that drives it runs once per noise-floor interval.
+ *
+ * Both helpers require data->spi_mutex held by the caller.
+ */
+static bool lr11xx_dc_suspend(struct lr11xx_data *data)
+{
+	if (!data->rx_duty_cycle_enabled || !data->in_rx_mode) {
+		return false;
+	}
+
+	/* Sanctioned termination, and simultaneously the remedy the manual
+	 * prescribes for an NSS edge that has already woken the chip — so this
+	 * is correct whether or not the cycle actually survived to this point. */
+	lr11xx_system_set_standby(&data->hal_ctx, LR11XX_SYSTEM_STANDBY_CFG_RC);
+	data->in_rx_mode = false;
+	return true;
+}
+
+static void lr11xx_dc_resume(struct lr11xx_data *data, bool was_armed)
+{
+	if (!was_armed) {
+		return;
+	}
+
+	/* Same re-arm sequence as restart_rx().  No boost re-apply — retained
+	 * across the duty-cycle sleep, see the note in lr11xx_start_rx().  The
+	 * IRQ/latch state is cleared so the new cycle starts from a known point. */
+	lr11xx_system_clear_irq_status(&data->hal_ctx, LR11XX_SYSTEM_IRQ_ALL_MASK);
+	lr11xx_reset_rx_busy_signals(data);
+	lr11xx_radio_set_rx_duty_cycle(&data->hal_ctx, data->dc_rx_ms,
+				       data->dc_sleep_ms,
+				       LR11XX_RADIO_RX_DUTY_CYCLE_MODE_RX);
+	data->in_rx_mode = true;
+}
+
 int16_t lr11xx_get_rssi_inst(const struct device *dev)
 {
 	struct lr11xx_data *data = dev->data;
 	int8_t rssi;
+	int16_t out = -128;
 
-	/* GPIO BUSY read FIRST — bail before the HAL's wait_on_busy stalls (3 s)
-	 * on the autonomous duty-cycle sleep phase.  Issuing GetRssiInst (0x0205)
-	 * into a chip parked in SetRxDutyCycle sleep-with-retention wedges it
-	 * BUSY-high permanently (root cause of the 2026-07-24 "T1000 goes deaf"
-	 * wedge).  -128 is the busy/contended sentinel the noise-floor sampler
-	 * expects (LoRaRadioBase::triggerNoiseFloorCalibrate retries next tick).
-	 * Direct parity with sx126x_get_rssi_inst. */
-	if (gpio_pin_get_dt(&data->hal_ctx.busy)) {
-		return -128;
-	}
+	/* Non-blocking: a contended bus means the sampler simply retries.  -128
+	 * is the sentinel LoRaRadioBase::triggerNoiseFloorCalibrate expects. */
 	if (k_mutex_lock(&data->spi_mutex, K_NO_WAIT) != 0) {
 		return -128;
 	}
-	if (gpio_pin_get_dt(&data->hal_ctx.busy)) {
-		k_mutex_unlock(&data->spi_mutex);
-		return -128;
+
+	bool armed = lr11xx_dc_suspend(data);
+
+	if (armed) {
+		/* GetRssiInst measures a live receiver; the stand-down left the
+		 * chip in standby, where there is nothing to measure.  Enter
+		 * continuous Rx for the reading, then hand the cycle back.
+		 *
+		 * The settle wait is the receiver's, not the bus's: UM Rx timing
+		 * has the value valid once the front end has settled after Rx
+		 * entry, and 1 ms clears that at every bandwidth this firmware
+		 * offers.  It is also the entire cost of the manoeuvre — against
+		 * a noise-floor interval measured in seconds, the receiver is
+		 * off air for well under a hundredth of a percent of the time. */
+		lr11xx_radio_set_rx_with_timeout_in_rtc_step(&data->hal_ctx,
+							     0xFFFFFF);
+		k_sleep(K_MSEC(1));
 	}
 
-	if (lr11xx_radio_get_rssi_inst(&data->hal_ctx, &rssi) != LR11XX_STATUS_OK) {
-		k_mutex_unlock(&data->spi_mutex);
-		return -128;
+	if (lr11xx_radio_get_rssi_inst(&data->hal_ctx, &rssi) ==
+	    LR11XX_STATUS_OK) {
+		out = (int16_t)rssi;
 	}
+
+	lr11xx_dc_resume(data, armed);
 	k_mutex_unlock(&data->spi_mutex);
 
-	return (int16_t)rssi;
+	return out;
 }
 
 /* Grace period for the PREAMBLE_DETECTED -> SYNC_WORD_HEADER_VALID gap,
@@ -1289,14 +1389,26 @@ bool lr11xx_is_receiving(const struct device *dev)
 {
 	struct lr11xx_data *data = dev->data;
 
-	/* GPIO BUSY read FIRST: during the autonomous duty-cycle sleep phase the
-	 * chip is asleep (BUSY high) and by definition not mid-packet, so report
-	 * "not receiving" WITHOUT issuing get_irq_status — which, like GetRssiInst,
-	 * can wedge the chip BUSY-high if issued into DC sleep.  Same guard as
-	 * lr11xx_get_rssi_inst; this path runs on every TX gate so it is the other
-	 * async command that could hit the sleep window. */
-	if (gpio_pin_get_dt(&data->hal_ctx.busy)) {
-		return false;
+	/* With a cycle armed, answer from the DIO1-driven latch and issue no SPI
+	 * at all.
+	 *
+	 * This path runs on every TX gate, so it cannot bracket itself in
+	 * suspend/resume the way the samplers do — standing the cycle down to
+	 * ask "am I receiving?" would end the very reception being asked about.
+	 * It does not need to: header_seen_at_ms is stamped by the DIO1 work
+	 * handler, which needs no bus access to be current.
+	 *
+	 * It must not fall back to a BUSY read either.  BUSY is high both in the
+	 * sleep phase and through ordinary Rx on this family, so a BUSY-high
+	 * "not receiving" answer is wrong exactly when it matters — mid-packet,
+	 * with the TX gate asking for permission to transmit over it. */
+	if (data->rx_duty_cycle_enabled) {
+		uint32_t seen = data->header_seen_at_ms;
+
+		if (seen == 0) {
+			return false;
+		}
+		return (k_uptime_get_32() - seen) < lr11xx_max_payload_ms(data);
 	}
 
 	/* Non-blocking — skip if SPI busy */
@@ -1525,21 +1637,6 @@ void lr11xx_recalibrate(const struct device *dev)
 		return;
 	}
 
-	/* Skip rather than wedge.  This sequence opens with SetSleep, and a
-	 * command issued into the chip's autonomous duty-cycle sleep phase pins
-	 * it BUSY-high — the same failure the pollers guard against, on a path
-	 * that had no guard at all.  sx126x_reset_agc() solves it by poking NSS
-	 * to wake the chip first; that trick is deliberately NOT copied here,
-	 * because on this generation an NSS pulse into a chip that is merely
-	 * mid-command is read as a malformed frame (see the LR2021 HAL's
-	 * check_device_ready() note on the CMD_PERR rejection storm).  Deferring
-	 * is safe: temperature drift is measured in tens of minutes, so losing a
-	 * recalibration to a busy chip costs nothing the next pass cannot fix. */
-	if (gpio_pin_get_dt(&data->hal_ctx.busy)) {
-		LOG_DBG("recalibrate: chip busy (duty-cycle sleep), deferring");
-		return;
-	}
-
 	/* Bounded, for the same reason sx126x_reset_agc() bounds its own: a long
 	 * TX or RX holds this mutex for the full airtime, and K_FOREVER would
 	 * stall the dispatcher thread for all of it. */
@@ -1547,12 +1644,16 @@ void lr11xx_recalibrate(const struct device *dev)
 		LOG_DBG("recalibrate: mutex busy, deferring");
 		return;
 	}
-	if (gpio_pin_get_dt(&data->hal_ctx.busy)) {
-		k_mutex_unlock(&data->spi_mutex);
-		return;
-	}
+
+	/* Own the cycle across the whole sequence.  This opens with SetSleep,
+	 * which is fatal to a chip already in its own sleep phase, and the
+	 * recalibration leaves the radio in standby regardless — so the cycle
+	 * has to be re-armed here rather than left to whoever calls next. */
+	bool armed = lr11xx_dc_suspend(data);
 
 	lr11xx_recalibrate_locked(data);
+
+	lr11xx_dc_resume(data, armed);
 	k_mutex_unlock(&data->spi_mutex);
 }
 
@@ -1569,34 +1670,18 @@ int16_t lr11xx_get_chip_temp_c(const struct device *dev)
 	if (!data->configured) {
 		return INT16_MIN;
 	}
-
-	/* GPIO BUSY read FIRST, exactly as lr11xx_get_rssi_inst() does, and for
-	 * the same reason: GetTemp (0x011A) issued into a chip parked in the
-	 * autonomous SetRxDutyCycle sleep-with-retention phase wedges it
-	 * BUSY-high, and the HAL's wait_on_busy() then blocks 3 s per attempt
-	 * before the wedge watchdog eventually hardware-resets the radio — 12 s+
-	 * of deafness per event.  This is the identical failure the 2026-07-24
-	 * "T1000 goes deaf" fix addressed on the RSSI poller; the temperature
-	 * poller is called from the very same agcMaintenance() pass and was
-	 * simply missed at the time.  Observed on hardware 2026-08-23: two
-	 * wedges in 30 minutes on a duty-cycled T1000-E, both on op=0x011a.
-	 *
-	 * INT16_MIN is the sentinel agcMaintenance() already treats as "no
-	 * reading this pass" — it retries later rather than acting on it.
-	 * Re-checked after the mutex for the same reason as the RSSI path: the
-	 * chip can enter sleep between the two. */
-	if (gpio_pin_get_dt(&data->hal_ctx.busy)) {
-		return INT16_MIN;
-	}
 	if (k_mutex_lock(&data->spi_mutex, K_NO_WAIT) != 0) {
 		return INT16_MIN;
 	}
-	if (gpio_pin_get_dt(&data->hal_ctx.busy)) {
-		k_mutex_unlock(&data->spi_mutex);
-		return INT16_MIN;
-	}
+
+	/* Bracketed rather than skipped: GetTemp into a chip parked in the
+	 * duty-cycle sleep phase both wedges it BUSY-high and, per UM §7.2.6,
+	 * silently ends the cycle.  Owning the stand-down removes both. */
+	bool armed = lr11xx_dc_suspend(data);
 
 	rc = lr11xx_system_get_temp(&data->hal_ctx, &raw);
+
+	lr11xx_dc_resume(data, armed);
 	k_mutex_unlock(&data->spi_mutex);
 
 	if (rc != LR11XX_STATUS_OK) {
@@ -1606,9 +1691,6 @@ int16_t lr11xx_get_chip_temp_c(const struct device *dev)
 	float v = ((float)(raw & 0x07FF) / 2047.0f) * 1.35f - 0.7295f;
 	float t = v * (1000.0f / -1.7f) + 25.0f;
 
-	if (t < -128.0f || t > 127.0f) {
-		return INT16_MIN;   /* implausible — treat as unavailable */
-	}
 	return (int16_t)t;
 }
 

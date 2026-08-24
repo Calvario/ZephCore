@@ -369,6 +369,22 @@ protected:
 	 * Free evidence — no extra command, no extra wake. */
 	int16_t  _agc_rssi_last;
 	uint8_t  _agc_rssi_frozen;
+
+	/* Diagnostics only — no behaviour depends on these.
+	 *
+	 * The RSSI sampler discards a whole burst if any read comes back busy,
+	 * and on a duty-cycled LR1110 it completes ~0.2% of its attempts
+	 * (measured 5 bursts in 9 h against 1007 on an SX1262 beside it).  That
+	 * is either "a few reads land in the sleep phase" or "essentially every
+	 * read is refused", and the two want opposite fixes.  These counters say
+	 * which, and are reported by `get cad`. */
+	uint32_t _rssi_reads_ok;
+	uint32_t _rssi_reads_busy;
+	uint32_t _rssi_bursts_abandoned;
+
+	/* Silence tracking for deafness hunting.  Reports only; the recovery
+	 * decision lives in agcIdleMaintenance() and is family-gated. */
+	uint32_t _silence_last_report_ms;
 	int16_t  _image_cal_last_temp_c;
 
 	/* Image-calibration temperature polling.  Deliberately much slower than
