@@ -196,6 +196,7 @@ void RepeaterMesh::publishUplinkStatus(const char *status)
         (unsigned)(getTotalAirTime() / 1000),
         (unsigned)(getReceiveAirTime() / 1000),
         (unsigned)radio_driver.getPacketsRecvErrors(),
+        _prefs.disable_fwd == 0,                         /* repeat */
     };
     int json_len = meshcore_build_status_json(json_buf, json_cap, &sj);
 

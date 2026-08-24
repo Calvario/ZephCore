@@ -151,6 +151,7 @@ void ObserverMesh::buildStatusJson(const char *status, char *out, size_t out_siz
 		0u,                                              /* tx_air_secs */
 		0u,                                              /* rx_air_secs */
 		((LoRaRadioBase *)_radio)->getPacketsRecvErrors(),
+		false,                                           /* repeat: observer never forwards */
 	};
 	meshcore_build_status_json(out, out_size, &sj);
 }

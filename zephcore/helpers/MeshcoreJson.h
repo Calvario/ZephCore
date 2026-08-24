@@ -87,6 +87,12 @@ struct MeshcoreStatusJson {
 	unsigned    tx_air_secs;
 	unsigned    rx_air_secs;
 	unsigned    recv_errors;
+	/* Whether this node relays packets, published as the top-level
+	 * "repeat" field.  CoreScope's ingestor reads it only at the top
+	 * level (never nested under "stats") and maps it to
+	 * observers.can_relay: false marks the node listener-only and
+	 * excludes it from path-hop candidate sets. */
+	bool        repeat;
 };
 
 static inline int meshcore_build_status_json(char *out, size_t out_size,
@@ -111,6 +117,7 @@ static inline int meshcore_build_status_json(char *out, size_t out_size,
 		"\"model\":\"%s\","
 		"\"firmware_version\":\"%s\","
 		"\"client_version\":\"zephcoretomqtt/1.1\","
+		"\"repeat\":\"%s\","
 		"\"stats\":{"
 			"\"battery_mv\":%u,"
 			"\"uptime_secs\":%u,"
@@ -124,6 +131,7 @@ static inline int meshcore_build_status_json(char *out, size_t out_size,
 		"}",
 		s->status, ts_buf, s->origin, s->origin_id, s->radio,
 		s->model, s->firmware_version,
+		s->repeat ? "on" : "off",
 		s->battery_mv, s->uptime_secs, s->debug_flags, s->queue_len,
 		s->noise_floor, s->tx_air_secs, s->rx_air_secs, s->recv_errors);
 }
