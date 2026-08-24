@@ -1,4 +1,4 @@
-# ZephCore — MeshCore for Zephyr RTOS
+<h1>ZephCore — MeshCore for Zephyr RTOS&nbsp;<img src="img/zephcore_logo.svg" alt="ZephCore logo" width="85" align="middle"></h1>
 
 A port of [MeshCore](https://github.com/meshcore-dev/MeshCore/) LoRa mesh firmware from Arduino to [Zephyr RTOS](https://zephyrproject.org/). Aiming for full protocol compatibility with the original Arduino firmware and the MeshCore mobile apps.
 
@@ -269,6 +269,9 @@ upstream MeshCore project, which this work relies heavily on (see the
 
 A few vendored dependencies carry their own (compatible) licenses — see the
 notice at the bottom of `LICENSE` for details (Monocypher, Zephyr patches).
+
+Logo by [recrof](https://github.com/recrof), licensed under the
+[WTFPL](https://en.wikipedia.org/wiki/WTFPL).
 
 ![aXa0YNLq_700w_0](https://github.com/user-attachments/assets/ddce17fd-7b83-4dc7-999f-0519593fcc3d)
 

@@ -22,7 +22,8 @@ SOFTWARE.
 
 ---
 
-This repository vendors third-party code under separate, compatible licenses:
+This repository vendors third-party code and assets under separate,
+compatible licenses:
 
 - `lib/monocypher/` — Monocypher, by Loup Vaillant. Dual-licensed
   BSD-2-Clause OR CC0-1.0 (see file headers).
@@ -30,3 +31,6 @@ This repository vendors third-party code under separate, compatible licenses:
   patches are applied to, and remain part of, the separately-licensed Zephyr
   source tree fetched via `west update`; they are not distributed as
   standalone files under this project's MIT license.
+- `img/zephcore_logo.svg` (at the repository root, one level above this file)
+  — ZephCore logo, by recrof (https://github.com/recrof). Licensed under the
+  WTFPL.
