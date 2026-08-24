@@ -31,6 +31,6 @@ compatible licenses:
   patches are applied to, and remain part of, the separately-licensed Zephyr
   source tree fetched via `west update`; they are not distributed as
   standalone files under this project's MIT license.
-- `img/zephcore_logo.svg` (at the repository root, one level above this file)
-  — ZephCore logo, by recrof (https://github.com/recrof). Licensed under the
-  WTFPL.
+- `img/kite-network-logo-*.svg` (at the repository root, one level above this
+  file) — ZephCore logo, by recrof (https://github.com/recrof). Licensed under
+  the WTFPL.
