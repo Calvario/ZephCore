@@ -24,9 +24,9 @@ env:
   # Release artifacts are still built and attached, so a manual download and
   # flash works exactly as usual.
   #
-  # 1.17.1: normal release. (1.17.0 was bumped but never pushed to master, so it
-  # was never published — 1.17.1 is the first release since 1.16.8 and its notes
-  # carry the 1.17.0 content forward.)
+  # "false" is the normal state. It is easy to leave this on "true" and then
+  # silently keep shipping nothing to the configurator, so check it when cutting
+  # a release rather than assuming.
   prerelease: "false"
 
 jobs:
