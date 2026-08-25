@@ -51,22 +51,28 @@ bool sx126x_is_receiving(const struct device *dev);
 void sx126x_set_rx_boost(const struct device *dev, bool enable);
 
 /**
- * @brief Enable/disable an external FEM's LNA in the RX direction
+ * @brief Select an external FEM's LNA or its bypass path for RX
  *
- * Boards with an external front-end module wire its chip-enable to
- * antenna-enable-gpios (KCT8103L CSD, SKY66122 CSD+CPS).  The driver normally
- * asserts that line for both RX and TX.  Passing false withholds it for RX
- * only: the FEM's LNA and its supply current (~6.5 mA on SKY66122) drop out,
- * at the cost of the FEM's RX gain (~16 dB on the same part).  TX always
- * asserts the line, and sleep/idle always clears it, so neither the transmit
- * path nor the driver's idle gating is affected.
+ * Acts on lna-bypass-gpios, the FEM's receive-path select -- KCT8103L CTX on
+ * the Heltec boards, where DIO2 into the FEM's CPS pin does the TX/RX
+ * switching and leaves this line meaning nothing but "LNA or bypass".
+ * Passing false routes RX around the LNA: its gain (~17 dB measured) and its
+ * supply current both drop out, but the antenna stays connected to the
+ * receiver.  TX and the driver's idle/sleep gating are unaffected.
  *
- * Default is enabled.
+ * This is deliberately NOT antenna-enable-gpios.  That line is the FEM's chip
+ * enable, owned by the RX/TX/sleep state machine; deasserting it during RX
+ * shuts the part down, and a shut-down FEM passes nothing -- the node goes
+ * deaf by tens of dB rather than losing the LNA's share.  ZephCore 1.17.2
+ * shipped that mistake; see the KCT8103L handling in MeshCore's
+ * variants/heltec_v4/LoRaFEMControl.cpp for the reference behaviour.
+ *
+ * Default is enabled (LNA in the path).
  *
  * @param dev    LoRa device
- * @param enable true to keep the FEM active during RX
- * @return true if this board has an antenna-enable line to gate, false if it
- *         has none (in which case the call did nothing)
+ * @param enable true for the LNA path, false for the bypass path
+ * @return true if this board wires a receive-path select, false if it has
+ *         none (in which case the call did nothing)
  */
 bool sx126x_set_fem_rx_enable(const struct device *dev, bool enable);
 

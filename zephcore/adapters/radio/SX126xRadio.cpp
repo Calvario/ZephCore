@@ -112,11 +112,13 @@ void SX126xRadio::hwSetRxBoost(bool enable)
 
 bool SX126xRadio::setFemRxEnable(bool enable)
 {
-	/* Pure driver-side flag -- no SPI, no chip state.  It takes effect at the
-	 * next RX/TX/sleep transition, and startReceive() goes through one, so
-	 * there is nothing to re-apply here.  Returns false when this board wires
-	 * no antenna-enable line, so the CLI reports "unsupported" rather than
-	 * acknowledging a setting that cannot do anything. */
+	/* Pure driver-side -- no SPI, no chip state.  The driver applies it to
+	 * lna-bypass-gpios straight away when the radio is parked in RX, and
+	 * otherwise at the next RX/TX/sleep transition.  Returns false when this
+	 * board wires no receive-path select, so the CLI reports "unsupported"
+	 * rather than acknowledging a setting that cannot do anything -- note the
+	 * gate is that line, not antenna-enable-gpios, so a board with a FEM whose
+	 * only control is the chip enable (heltec_wifi_lora32_v4) lands here too. */
 	if (!sx126x_set_fem_rx_enable(_dev, enable)) {
 		return false;
 	}

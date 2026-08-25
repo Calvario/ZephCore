@@ -1,10 +1,13 @@
 Subject: [PATCH] lora: sx126x: ZephCore native driver
 
 Sole owner of every ZephCore change under drivers/lora/native/sx126x/ --
-sx126x.c, sx126x.h, sx126x_hal.c, sx126x_hal_common.c and sx126x_regs.h.  No
-other patch in this directory touches those files; see "Why this is one patch"
-at the end.  The extension-API header sx126x_ext.h is not patched in, it is
-copied from patches/zephyr-new/.
+sx126x.c, sx126x.h, sx126x_hal.c, sx126x_hal.h, sx126x_hal_common.c,
+sx126x_hal_stm32wl.c and sx126x_regs.h -- plus the driver's devicetree binding
+dts/bindings/lora/semtech,sx126x-base.yaml, which it extends with
+lna-bypass-gpios (see "FEM receive-path select" below).  No other patch in this
+directory touches those files; see "Why this is one patch" at the end.  The
+extension-API header sx126x_ext.h is not patched in, it is copied from
+patches/zephyr-new/.
 
 == Base driver ==
 
@@ -38,24 +41,16 @@ top of upstream:
     C++ caller.  sx126x_lora_recv_async() has an idempotent fast path, so the
     failure-path startReceive() on that side is a no-op.
 
-  * External FEM/LNA RX gating -- sx126x_set_fem_rx_enable() plus the
-    fem_rx_off flag it sets.  antenna-enable-gpios is the chip-enable line of
-    the external FEM on the boards that route it there (KCT8103L CSD on
-    heltec_t096, heltec_wireless_tracker_v2 and heltec_wifi_lora32_v43;
-    GC1109 CSD on heltec_wifi_lora32_v4), and the driver asserts it for RX and
-    TX alike.  With the flag set, sx126x_set_rf_path() withholds it in the RX
-    direction only, so the FEM's LNA and its supply current drop out while TX
-    still gets the PA path and sleep/idle keeps clearing the line as before.
-    The setter returns false where the board declares no antenna-enable line,
-    so the CLI can report that rather than acknowledging a no-op -- that is
-    the rak3401_1watt case, where the SKY66122 enable is a standalone
-    regulator-boot-on rail outside the radio node.
-
-    The pin stays driver-owned throughout.  Taking it over from devicetree
-    instead would cost the idle gating, drop the ESP32 sleep-hold flags those
-    nodes carry, and on the boards whose CTX net is a separate tx-enable-gpios
-    it would desynchronise the external switch from DIO2.  Backs
-    `set radio.fem.rxgain` (default on = historical behaviour).
+  * External FEM receive-path select -- the lna-bypass-gpios devicetree
+    property, sx126x_set_fem_rx_enable() and the fem_rx_off flag it sets.
+    The line is the FEM's LNA-or-bypass select (KCT8103L CTX on heltec_t096,
+    heltec_wireless_tracker_v2 and heltec_wifi_lora32_v43), driven as
+    (tx || fem_rx_off) and deliberately independent of the chip enable.
+    Backs `set radio.fem.rxgain` (default on = LNA in the path = historical
+    behaviour).  Read the "FEM receive-path select" section below before
+    touching any of it: this is emphatically NOT antenna-enable-gpios, and
+    an earlier implementation that gated that pin instead shipped in 1.17.2
+    and cost roughly 69 dB of receive sensitivity.
 
   * Extension API for the C++ adapter (sx126x_ext.h): sx126x_is_chip_busy,
     sx126x_is_receiving, sx126x_set_rx_boost, sx126x_set_fem_rx_enable,
@@ -387,6 +382,85 @@ transmit side.  The branch is now gated on state != SX126X_STATE_TX; a Tx
 timeout falls through to the tail, which sleeps the chip (restoring REST_STATE)
 and reports -ETIMEDOUT, and the C++ failure path re-arms RX.
 
+== FEM receive-path select (lna-bypass-gpios) ==
+
+Adds a devicetree property, lna-bypass-gpios, and the driver plumbing behind
+sx126x_set_fem_rx_enable() -- the radio.fem.rxgain CLI knob.  This replaces the
+first implementation of that knob, which acted on the wrong pin and shipped in
+1.17.2.
+
+Three of our boards carry a KCT8103L (t096, wireless_tracker_v2,
+wifi_lora32_v43), and MeshCore's LoRaFEMControl.cpp for each of them is the
+reference for what its two MCU lines mean:
+
+  CSD  chip enable.  HIGH whenever the radio is up; LOW only in sleep --
+       MeshCore's setSleepModeEnable() drives exactly this pin and nothing
+       else.
+  CTX  receive-path select.  LOW routes RX through the LNA, HIGH bypasses it
+       (variants/heltec_v4/LoRaFEMControl.cpp spells both branches out in
+       comments).  Held HIGH during TX, where the receive branch is inert.
+  CPS  TX/RX path select -- not an MCU GPIO on any KCT8103L board.  It is the
+       SX1262 DIO2 net, which is why every one of MeshCore's KCT8103L targets
+       sets SX126X_DIO2_AS_RF_SWITCH=true and defines no CPS pin at all
+       (t096 CSD=12/CTX=41, tracker_v2 CSD=4/CTX=5, heltec_v4 CSD=2/CTX=5),
+       and why we set dio2-tx-enable on all three.
+
+Beware the naming inversion between the two Heltec front ends: on the GC1109
+(V4.2) it is *CTX* that hangs off DIO2 and *CPS* that is an MCU pin (GPIO46,
+"HIGH=full PA, LOW=bypass", don't-care in RX), which is why heltec_wifi_lora32_v4
+keeps GPIO46 on tx-enable-gpios and has no LNA knob.  On the KCT8103L the two
+names swap roles.  Where GPIO46 still appears as "PA_CPS" in a Heltec pin map
+for a KCT8103L board, it is a carry-over from that V4.2 map, not a FEM control:
+MeshCore's tracker_v2 target does not define or drive it.
+
+Because DIO2/CPS does the path switching in hardware, CTX enables nothing.  Its
+only software-visible job is LNA-or-bypass.  Binding it as tx-enable-gpios
+produced the right waveform by coincidence -- tx_enable is driven (enable &&
+tx), which matches "HIGH in TX, LOW in RX with the LNA" -- and that coincidence
+is what sent the first implementation of the knob to the other pin: with CTX
+apparently spoken for, "FEM RX gain off" became
+
+  sx126x_hal_set_antenna_enable(dev, enable && (tx || !data->fem_rx_off));
+
+i.e. CSD low during RX.  That is MeshCore's setSleepModeEnable(), not its
+LNA-off state.  A shut-down FEM has no through path: the loss is the LNA's gain
+plus the off-state isolation of the part, measured on a V4.3 at roughly 69 dB
+(-17 dBm to -86 dBm on a 4 m link) against the ~17 dB the bypass path costs.
+Reported by a user who could not raise their own repeater from more than 50 m
+away after turning the knob off.
+
+So the pin moves to a property named for what it is.  antenna_enable goes back
+to plain `enable` -- the RX/TX/sleep state machine owns it -- and the driver
+drives lna_bypass as (tx || fem_rx_off), deliberately independent of `enable`:
+while CSD is deasserted this line only decides which path the FEM will select
+when it comes back, and leaving it in the receive state across sleep is what
+lets an ESP32 GPIO sleep-hold keep the RX path intact.
+
+Support is per-board and automatic: sx126x_set_fem_rx_enable() reports false
+when lna_bypass.port is NULL, so the CLI answers "Error: unsupported" on every
+board whose FEM gain is not software-selectable.  That correctly includes
+wifi_lora32_v4 (GC1109, whose CPS is don't-care in RX -- MeshCore's
+LoRaFEMControl leaves lna_can_control false on that branch) and excludes, by
+construction, boards with a genuine TXEN on tx-enable-gpios (lilygo_tlora_c6,
+lilygo_timpulse_plus), where asserting a line during RX would key the PA into a
+receive window.
+
+Audited against MeshCore 2026-08-25.  It ships LoRaFEMControl for six variants;
+exactly four expose an LNA knob -- heltec_t096, heltec_tracker_v2, heltec_v4
+(KCT8103L branch only) and heltec_v4_r8, all KCT8103L, plus station_g3_esp32 on
+a different part (P_PRIMARY_LNA_EN).  heltec_tower_v2 uses a KCT8103L but keeps
+the same net as a plain TX/RX select and exposes nothing.  Our three
+lna-bypass-gpios boards map onto MeshCore's KCT8103L set exactly; we ship no
+board where we claim the knob and MeshCore does not, so there is nothing to
+scrub.  heltec_v4_r8, heltec_tower_v2 and station_g3 have no ZephCore board.
+
+The knob also applies immediately now, under data->lock -- the same lock
+sx126x_set_rf_path()'s callers hold, since this runs on the CLI thread and an
+unlocked state read of RX can be overtaken by send_async() taking the chip to
+TX.  It is a bare GPIO with no SPI and no chip state behind it, and a node
+parked in continuous RX may not make an RX/TX/sleep transition for minutes --
+long enough for the CLI to acknowledge a change the radio had not made.
+
 == Why this is one patch ==
 
 Five of the sections above shipped as separate files (0011 band-rssi-cal, 0012
@@ -423,12 +497,13 @@ filenames into the section headings above.
 
 Regenerate with:
 
-  git -C zephyr diff -- drivers/lora/native/sx126x/
+  git -C zephyr diff -- drivers/lora/native/sx126x/ \
+      'dts/bindings/lora/semtech,sx126x-base.yaml'
 
 appended to this preamble.
 
 diff --git a/drivers/lora/native/sx126x/sx126x.c b/drivers/lora/native/sx126x/sx126x.c
-index 30243ba5dc7..3a8bc017a52 100644
+index 30243ba5dc7..0e870e37468 100644
 --- a/drivers/lora/native/sx126x/sx126x.c
 +++ b/drivers/lora/native/sx126x/sx126x.c
 @@ -6,72 +6,218 @@
@@ -1110,7 +1185,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  	LOG_INF("SX126x initialized");
  	return 0;
  }
-@@ -398,7 +892,7 @@ static void sx126x_dio1_callback(const struct device *dev)
+@@ -398,15 +892,44 @@ static void sx126x_dio1_callback(const struct device *dev)
  {
  	struct sx126x_data *data = dev->data;
  
@@ -1119,18 +1194,27 @@ index 30243ba5dc7..3a8bc017a52 100644
  }
  
  static void sx126x_set_rf_path(const struct device *dev, bool enable, bool tx)
-@@ -406,7 +900,26 @@ static void sx126x_set_rf_path(const struct device *dev, bool enable, bool tx)
+ {
  	const struct sx126x_hal_config *config = dev->config;
 +	struct sx126x_data *data = dev->data;
  
--	sx126x_hal_set_antenna_enable(dev, enable);
+ 	sx126x_hal_set_antenna_enable(dev, enable);
 -	if (!config->dio2_tx_enable) {
-+	/* An external FEM's enable line is asserted for TX unconditionally.  For
-+	 * RX it follows fem_rx_off (the radio.fem.rxgain pref, applied through
-+	 * sx126x_set_fem_rx_enable): clearing it drops the FEM's LNA and its
-+	 * supply current, at the cost of that gain.  `enable` still wins, so
-+	 * sleep and idle keep gating the line exactly as they did before. */
-+	sx126x_hal_set_antenna_enable(dev, enable && (tx || !data->fem_rx_off));
++
++	/* FEM receive-path select, on boards that wire one (lna-bypass-gpios).
++	 * HIGH = bypass, LOW = through the LNA.  Deliberately independent of
++	 * `enable`: the FEM's own chip-enable is antenna_enable, so while that
++	 * is deasserted this line only decides which path the part will select
++	 * when it comes back.  Leaving it in the receive state across sleep is
++	 * what lets an ESP32 GPIO sleep-hold keep the RX path intact.
++	 *
++	 * TX drives it HIGH for the same reason the FEM vendors do: with the
++	 * TX/RX path itself selected elsewhere (DIO2 into CPS), bypass is the
++	 * inert state for the receive branch while the PA is keyed. */
++	if (config->lna_bypass.port != NULL) {
++		gpio_pin_set_dt(&config->lna_bypass, tx || data->fem_rx_off);
++	}
++
 +	if (config->dio2_tx_enable) {
 +		/* DIO2 handles TX enable in hardware -- but rx-enable-gpios
 +		 * (e.g. E22-900M30S RXEN) and some board-specific tx-enable
@@ -1148,7 +1232,25 @@ index 30243ba5dc7..3a8bc017a52 100644
  		sx126x_hal_set_rf_switch(dev, enable, tx);
  	}
  }
-@@ -455,6 +962,228 @@ static int sx126x_reconnect_rf_gpios(const struct device *dev)
+@@ -426,6 +949,7 @@ static void sx126x_disconnect_rf_gpios(const struct device *dev)
+ 	sx126x_disconnect_gpio(&config->antenna_enable);
+ 	sx126x_disconnect_gpio(&config->tx_enable);
+ 	sx126x_disconnect_gpio(&config->rx_enable);
++	sx126x_disconnect_gpio(&config->lna_bypass);
+ }
+ 
+ static int sx126x_reconnect_rf_gpios(const struct device *dev)
+@@ -451,10 +975,238 @@ static int sx126x_reconnect_rf_gpios(const struct device *dev)
+ 		return ret;
+ 	}
+ 
++	ret = sx126x_hal_configure_gpio(&config->lna_bypass,
++					GPIO_OUTPUT_INACTIVE, "FEM LNA bypass");
++	if (ret < 0) {
++		return ret;
++	}
++
+ 	return 0;
  }
  #endif /* CONFIG_PM_DEVICE */
  
@@ -1377,7 +1479,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  static int sx126x_set_sleep(const struct device *dev)
  {
  	struct sx126x_data *data = dev->data;
-@@ -533,8 +1262,16 @@ static void sx126x_handle_irq_rx_done(const struct device *dev, uint16_t irq_sta
+@@ -533,8 +1285,16 @@ static void sx126x_handle_irq_rx_done(const struct device *dev, uint16_t irq_sta
  	struct sx126x_data *data = dev->data;
  	struct sx126x_rx_result result = { 0 };
  	uint8_t payload_len = 0, offset = 0;
@@ -1394,7 +1496,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  	/* Get received packet info */
  	ret = sx126x_get_rx_buffer_status(dev, &payload_len, &offset);
  	if (ret < 0) {
-@@ -544,9 +1281,26 @@ static void sx126x_handle_irq_rx_done(const struct device *dev, uint16_t irq_sta
+@@ -544,9 +1304,26 @@ static void sx126x_handle_irq_rx_done(const struct device *dev, uint16_t irq_sta
  		/* Get signal quality */
  		sx126x_get_packet_status(dev, &result.rssi, &result.snr);
  
@@ -1424,7 +1526,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  			result.status = -EIO;
  		} else {
  			/* Read payload into shared buffer */
-@@ -564,23 +1318,55 @@ static void sx126x_handle_irq_rx_done(const struct device *dev, uint16_t irq_sta
+@@ -564,23 +1341,55 @@ static void sx126x_handle_irq_rx_done(const struct device *dev, uint16_t irq_sta
  		}
  	}
  
@@ -1493,7 +1595,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  		sx126x_set_sleep(dev);
  		k_msgq_put(&data->rx_msgq, &result, K_NO_WAIT);
  	}
-@@ -589,8 +1375,83 @@ static void sx126x_handle_irq_rx_done(const struct device *dev, uint16_t irq_sta
+@@ -589,8 +1398,83 @@ static void sx126x_handle_irq_rx_done(const struct device *dev, uint16_t irq_sta
  static void sx126x_handle_irq_timeout(const struct device *dev)
  {
  	struct sx126x_data *data = dev->data;
@@ -1577,7 +1679,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  	sx126x_set_sleep(dev);
  
  	if (data->tx_async_signal != NULL) {
-@@ -633,10 +1494,54 @@ static void sx126x_irq_work_handler(struct k_work *work)
+@@ -633,10 +1517,54 @@ static void sx126x_irq_work_handler(struct k_work *work)
  		sx126x_handle_irq_rx_done(dev, irq_status);
  	}
  
@@ -1632,7 +1734,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  	/* Re-enable the DIO1 interrupt for the next event (unless sleeping) */
  	if (atomic_get(&data->state) != SX126X_REST_STATE) {
  		sx126x_hal_dio1_irq_enable(dev);
-@@ -648,6 +1553,7 @@ static int sx126x_lora_config(const struct device *dev,
+@@ -648,6 +1576,7 @@ static int sx126x_lora_config(const struct device *dev,
  {
  	struct sx126x_data *data = dev->data;
  	const struct sx126x_hal_config *hal_config = dev->config;
@@ -1640,7 +1742,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  	bool ldro;
  	int ret;
  
-@@ -679,25 +1585,45 @@ static int sx126x_lora_config(const struct device *dev,
+@@ -679,25 +1608,45 @@ static int sx126x_lora_config(const struct device *dev,
  		goto out;
  	}
  
@@ -1688,7 +1790,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  	/* Set sync word */
  	ret = sx126x_set_sync_word(dev, config->public_network);
  	if (ret < 0) {
-@@ -721,6 +1647,10 @@ out:
+@@ -721,6 +1670,10 @@ out:
  	return ret;
  }
  
@@ -1699,7 +1801,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  static int sx126x_lora_send_async(const struct device *dev,
  				  uint8_t *data_buf, uint32_t data_len,
  				  struct k_poll_signal *async)
-@@ -738,11 +1668,27 @@ static int sx126x_lora_send_async(const struct device *dev,
+@@ -738,11 +1691,27 @@ static int sx126x_lora_send_async(const struct device *dev,
  		return -EINVAL;
  	}
  
@@ -1729,7 +1831,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  	k_mutex_lock(&data->lock, K_FOREVER);
  
  	ret = sx126x_ensure_ready(dev);
-@@ -752,6 +1698,59 @@ static int sx126x_lora_send_async(const struct device *dev,
+@@ -752,6 +1721,59 @@ static int sx126x_lora_send_async(const struct device *dev,
  		return ret;
  	}
  
@@ -1789,7 +1891,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  	data->tx_async_signal = async;
  	k_msgq_purge(&data->tx_msgq);
  
-@@ -777,8 +1776,99 @@ static int sx126x_lora_send_async(const struct device *dev,
+@@ -777,8 +1799,99 @@ static int sx126x_lora_send_async(const struct device *dev,
  	/* Enable antenna and set TX path */
  	sx126x_set_rf_path(dev, true, true);
  
@@ -1891,7 +1993,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  	if (ret < 0) {
  		goto out_error;
  	}
-@@ -847,6 +1937,8 @@ static int sx126x_lora_recv(const struct device *dev, uint8_t *data_buf,
+@@ -847,6 +1960,8 @@ static int sx126x_lora_recv(const struct device *dev, uint8_t *data_buf,
  	}
  
  	data->rx_cb = NULL;
@@ -1900,7 +2002,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  	k_msgq_purge(&data->rx_msgq);
  
  	/* Set packet parameters for variable length reception */
-@@ -918,6 +2010,8 @@ static int sx126x_lora_recv_async(const struct device *dev,
+@@ -918,6 +2033,8 @@ static int sx126x_lora_recv_async(const struct device *dev,
  		/* Stop async reception */
  		data->rx_cb = NULL;
  		data->rx_cb_user_data = NULL;
@@ -1909,7 +2011,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  		if (atomic_cas(&data->state, SX126X_STATE_RX, SX126X_STATE_IDLE)) {
  			sx126x_set_standby(dev, SX126X_STANDBY_RC);
  			sx126x_set_sleep(dev);
-@@ -932,6 +2026,19 @@ static int sx126x_lora_recv_async(const struct device *dev,
+@@ -932,6 +2049,19 @@ static int sx126x_lora_recv_async(const struct device *dev,
  		return -EINVAL;
  	}
  
@@ -1929,7 +2031,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  	if (!atomic_cas(&data->state, SX126X_REST_STATE, SX126X_STATE_RX)) {
  		LOG_ERR("Busy");
  		k_mutex_unlock(&data->lock);
-@@ -945,8 +2052,18 @@ static int sx126x_lora_recv_async(const struct device *dev,
+@@ -945,8 +2075,18 @@ static int sx126x_lora_recv_async(const struct device *dev,
  		return ret;
  	}
  
@@ -1948,7 +2050,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  
  	/* Set packet parameters */
  	ret = sx126x_set_packet_params(dev,
-@@ -959,6 +2076,7 @@ static int sx126x_lora_recv_async(const struct device *dev,
+@@ -959,6 +2099,7 @@ static int sx126x_lora_recv_async(const struct device *dev,
  				       SX126X_LORA_IQ_INVERTED : SX126X_LORA_IQ_STANDARD);
  	if (ret < 0) {
  		data->rx_cb = NULL;
@@ -1956,7 +2058,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  		sx126x_set_sleep(dev);
  		k_mutex_unlock(&data->lock);
  		return ret;
-@@ -971,11 +2089,21 @@ static int sx126x_lora_recv_async(const struct device *dev,
+@@ -971,11 +2112,21 @@ static int sx126x_lora_recv_async(const struct device *dev,
  	ret = sx126x_set_rx(dev, 0);
  	if (ret < 0) {
  		data->rx_cb = NULL;
@@ -1978,7 +2080,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  	k_mutex_unlock(&data->lock);
  	return 0;
  }
-@@ -993,7 +2121,9 @@ static uint32_t sx126x_lora_airtime(const struct device *dev, uint32_t data_len)
+@@ -993,7 +2144,9 @@ static uint32_t sx126x_lora_airtime(const struct device *dev, uint32_t data_len)
  	}
  
  	/* Calculate symbol time in microseconds */
@@ -1989,7 +2091,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  	sf = data->config.datarate;
  
  	/* Symbol time = 2^SF / BW (seconds) */
-@@ -1051,7 +2181,7 @@ static int sx126x_lora_test_cw(const struct device *dev, uint32_t frequency,
+@@ -1051,7 +2204,7 @@ static int sx126x_lora_test_cw(const struct device *dev, uint32_t frequency,
  
  	/* Set PA config and TX power */
  	ret = sx126x_hal_configure_tx_params(dev, tx_power, frequency,
@@ -1998,7 +2100,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  	if (ret < 0) {
  		sx126x_set_sleep(dev);
  		k_mutex_unlock(&data->lock);
-@@ -1083,14 +2213,828 @@ static int sx126x_lora_test_cw(const struct device *dev, uint32_t frequency,
+@@ -1083,14 +2236,855 @@ static int sx126x_lora_test_cw(const struct device *dev, uint32_t frequency,
  	return 0;
  }
  
@@ -2158,15 +2260,42 @@ index 30243ba5dc7..3a8bc017a52 100644
 +	struct sx126x_data *data = dev->data;
 +	const struct sx126x_hal_config *config = dev->config;
 +
-+	/* Stored inverted so the zero-initialised default is "FEM on in RX",
-+	 * which is what the driver did before this knob existed.  No SPI and no
-+	 * chip state: sx126x_set_rf_path() reads it on the next RX/TX/sleep
-+	 * transition, and every RX (re)start passes through there. */
++	/* False when the board wires no receive-path select: there is no FEM
++	 * RX gain to trade away, so the caller can say so instead of
++	 * acknowledging a no-op.  Boards whose only FEM line is the chip
++	 * enable land here too -- dropping that would not lower the gain, it
++	 * would shut the part down and open the receive path entirely. */
++	if (config->lna_bypass.port == NULL) {
++		/* Still record it: a board can gain the line later without the
++		 * caller having to re-apply the pref. */
++		data->fem_rx_off = !enable;
++		return false;
++	}
++
++	/* Under data->lock, which is what sx126x_set_rf_path()'s callers hold.
++	 * This runs on the CLI thread: without it, a state read of RX can be
++	 * overtaken by send_async() taking the chip to TX and driving the line
++	 * HIGH, after which the write below pulls it back LOW and leaves the
++	 * FEM's LNA in circuit for the whole transmission. */
++	k_mutex_lock(&data->lock, K_FOREVER);
++
++	/* Stored inverted so the zero-initialised default is "LNA in the RX
++	 * path", which is what the driver did before this knob existed. */
 +	data->fem_rx_off = !enable;
 +
-+	/* False when the board wires no antenna-enable line: there is no FEM to
-+	 * gate, so the caller can say so instead of acknowledging a no-op. */
-+	return config->antenna_enable.port != NULL;
++	/* Apply now rather than at the next sx126x_set_rf_path().  This is a
++	 * bare GPIO with no SPI and no chip state behind it, and a node parked
++	 * in continuous RX may not transition for minutes -- long enough for
++	 * the CLI to have acknowledged a change the radio had not made.  Only
++	 * in RX: every other state either drives the line itself on the way in
++	 * (TX) or wants it left where sleep parked it. */
++	if (atomic_get(&data->state) == SX126X_STATE_RX) {
++		gpio_pin_set_dt(&config->lna_bypass, data->fem_rx_off);
++	}
++
++	k_mutex_unlock(&data->lock);
++
++	return true;
 +}
 +
 +void sx126x_reset_agc(const struct device *dev)
@@ -2834,7 +2963,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  };
  
  #ifdef CONFIG_PM_DEVICE
-@@ -1112,6 +3040,7 @@ static int sx126x_pm_action(const struct device *dev,
+@@ -1112,6 +3106,7 @@ static int sx126x_pm_action(const struct device *dev,
  static int sx126x_init(const struct device *dev)
  {
  	struct sx126x_data *data = dev->data;
@@ -2842,7 +2971,7 @@ index 30243ba5dc7..3a8bc017a52 100644
  	int ret;
  
  	/* Initialize data structures */
-@@ -1121,9 +3050,33 @@ static int sx126x_init(const struct device *dev)
+@@ -1121,9 +3116,33 @@ static int sx126x_init(const struct device *dev)
  	k_msgq_init(&data->rx_msgq, (char *)&data->rx_result,
  		    sizeof(struct sx126x_rx_result), 1);
  	k_work_init(&data->irq_work, sx126x_irq_work_handler);
@@ -2876,11 +3005,29 @@ index 30243ba5dc7..3a8bc017a52 100644
  
  	/* Initialize HAL */
  	ret = sx126x_hal_init(dev);
+@@ -1185,6 +3204,8 @@ static int sx126x_init(const struct device *dev)
+ 						      {0}),			\
+ 		.rx_enable = GPIO_DT_SPEC_INST_GET_OR(inst, rx_enable_gpios,	\
+ 						      {0}),			\
++		.lna_bypass = GPIO_DT_SPEC_INST_GET_OR(inst, lna_bypass_gpios,	\
++						       {0}),			\
+ 		.dio2_tx_enable = DT_INST_PROP(inst, dio2_tx_enable),		\
+ 		.dio3_tcxo_enable = DT_INST_NODE_HAS_PROP(inst, dio3_tcxo_voltage), \
+ 		.dio3_tcxo_voltage = DT_INST_PROP_OR(inst, dio3_tcxo_voltage, 0), \
+@@ -1239,6 +3260,8 @@ DT_INST_FOREACH_STATUS_OKAY_VARGS(SX126X_INIT, true)
+ 						      {0}),			\
+ 		.rx_enable = GPIO_DT_SPEC_INST_GET_OR(inst, rx_enable_gpios,	\
+ 						      {0}),			\
++		.lna_bypass = GPIO_DT_SPEC_INST_GET_OR(inst, lna_bypass_gpios,	\
++						       {0}),			\
+ 		.dio2_tx_enable = DT_INST_PROP(inst, dio2_tx_enable),		\
+ 		.dio3_tcxo_enable = DT_INST_NODE_HAS_PROP(inst, dio3_tcxo_voltage), \
+ 		.dio3_tcxo_voltage = DT_INST_PROP_OR(inst, dio3_tcxo_voltage, 0), \
 diff --git a/drivers/lora/native/sx126x/sx126x.h b/drivers/lora/native/sx126x/sx126x.h
-index 9dbf3f26586..b6df07ce7ab 100644
+index 9dbf3f26586..675f3eca8a7 100644
 --- a/drivers/lora/native/sx126x/sx126x.h
 +++ b/drivers/lora/native/sx126x/sx126x.h
-@@ -56,13 +56,104 @@ struct sx126x_data {
+@@ -56,13 +56,107 @@ struct sx126x_data {
  	/* Async RX callback */
  	lora_recv_cb rx_cb;
  	void *rx_cb_user_data;
@@ -2898,12 +3045,15 @@ index 9dbf3f26586..b6df07ce7ab 100644
 +	bool rx_duty_cycle_enabled;
 +	bool rx_boost_enabled;
 +
-+	/* External FEM/LNA gating for the RX direction, set by
-+	 * sx126x_set_fem_rx_enable().  Negative logic so the zero-initialised
-+	 * default preserves the historical behaviour -- antenna-enable-gpios
-+	 * asserted for both RX and TX.  When set, sx126x_set_rf_path() drops
-+	 * the line for RX only: TX still asserts it and sleep/idle still
-+	 * clears it, so the driver keeps sole ownership of the pin. */
++	/* External FEM receive-path select, set by sx126x_set_fem_rx_enable()
++	 * and acted on through lna-bypass-gpios.  Negative logic so the
++	 * zero-initialised default is the LNA path, which is what every board
++	 * wants and what the driver did before the knob existed.
++	 *
++	 * NOT the FEM chip enable.  antenna-enable-gpios stays owned by the
++	 * RX/TX/sleep state machine: deasserting it in RX would shut the part
++	 * down, which on the KCT8103L boards costs the LNA gain *and* the
++	 * through path -- tens of dB, not the ~17 dB the bypass costs. */
 +	bool fem_rx_off;
 +
 +	/* AgcSensiAdjust value for the configured band (DS Table 6-4), cached
@@ -2986,7 +3136,7 @@ index 9dbf3f26586..b6df07ce7ab 100644
  
  #endif /* ZEPHYR_DRIVERS_LORA_SX126X_SX126X_INTERNAL_H_ */
 diff --git a/drivers/lora/native/sx126x/sx126x_hal.c b/drivers/lora/native/sx126x/sx126x_hal.c
-index 34f7089584f..6f4e2a4434c 100644
+index 34f7089584f..394578956de 100644
 --- a/drivers/lora/native/sx126x/sx126x_hal.c
 +++ b/drivers/lora/native/sx126x/sx126x_hal.c
 @@ -150,7 +150,13 @@ int sx126x_hal_init(const struct device *dev)
@@ -3004,7 +3154,22 @@ index 34f7089584f..6f4e2a4434c 100644
  	if (ret < 0) {
  		LOG_ERR("Failed to configure DIO1 GPIO: %d", ret);
  		return ret;
-@@ -220,15 +226,54 @@ int sx126x_hal_configure_tx_params(const struct device *dev, int8_t power,
+@@ -183,6 +189,14 @@ int sx126x_hal_init(const struct device *dev)
+ 		return ret;
+ 	}
+ 
++	/* Inactive = LOW = FEM LNA in the receive path, which is the state
++	 * every board using this line wants by default. */
++	ret = sx126x_hal_configure_gpio(&config->lna_bypass, GPIO_OUTPUT_INACTIVE,
++					"FEM LNA bypass");
++	if (ret < 0) {
++		return ret;
++	}
++
+ 	LOG_DBG("HAL initialized");
+ 	return 0;
+ }
+@@ -220,15 +234,54 @@ int sx126x_hal_configure_tx_params(const struct device *dev, int8_t power,
  		}
  		tx_power = CLAMP(power, SX1261_MIN_POWER, SX1261_MAX_POWER_TX_PARAM);
  	} else {
@@ -3063,6 +3228,21 @@ index 34f7089584f..6f4e2a4434c 100644
  	}
  
  	uint8_t buf[2] = { (uint8_t)tx_power, ramp_time };
+diff --git a/drivers/lora/native/sx126x/sx126x_hal.h b/drivers/lora/native/sx126x/sx126x_hal.h
+index e4b26ba60bd..558890ad54c 100644
+--- a/drivers/lora/native/sx126x/sx126x_hal.h
++++ b/drivers/lora/native/sx126x/sx126x_hal.h
+@@ -29,6 +29,10 @@ struct sx126x_hal_config {
+ 	struct gpio_dt_spec antenna_enable;
+ 	struct gpio_dt_spec tx_enable;
+ 	struct gpio_dt_spec rx_enable;
++	/* ZephCore: external FEM receive-path select (lna-bypass-gpios).  Not
++	 * an RF switch -- LOW selects the FEM's LNA, HIGH its bypass path.  See
++	 * the binding, and sx126x_set_fem_rx_enable() for the runtime knob. */
++	struct gpio_dt_spec lna_bypass;
+ 	uint16_t tcxo_startup_delay_ms;
+ 	uint8_t dio3_tcxo_voltage;
+ 	bool dio2_tx_enable;
 diff --git a/drivers/lora/native/sx126x/sx126x_hal_common.c b/drivers/lora/native/sx126x/sx126x_hal_common.c
 index b2dfc0d75b5..8ab8a0f5738 100644
 --- a/drivers/lora/native/sx126x/sx126x_hal_common.c
@@ -3100,6 +3280,26 @@ index b2dfc0d75b5..8ab8a0f5738 100644
  	}
  
  	return 0;
+diff --git a/drivers/lora/native/sx126x/sx126x_hal_stm32wl.c b/drivers/lora/native/sx126x/sx126x_hal_stm32wl.c
+index c99a7204a72..08d20e44ae4 100644
+--- a/drivers/lora/native/sx126x/sx126x_hal_stm32wl.c
++++ b/drivers/lora/native/sx126x/sx126x_hal_stm32wl.c
+@@ -246,6 +246,15 @@ int sx126x_hal_init(const struct device *dev)
+ 		return ret;
+ 	}
+ 
++	/* No STM32WL board here wires one today, but sx126x_set_rf_path() will
++	 * drive the pin if a board declares it -- configure it so that is never
++	 * a write to an unconfigured GPIO.  Inactive = LOW = LNA path. */
++	ret = sx126x_hal_configure_gpio(&config->lna_bypass, GPIO_OUTPUT_INACTIVE,
++					"FEM LNA bypass");
++	if (ret < 0) {
++		return ret;
++	}
++
+ 	LOG_DBG("STM32WL HAL initialized");
+ 	return 0;
+ }
 diff --git a/drivers/lora/native/sx126x/sx126x_regs.h b/drivers/lora/native/sx126x/sx126x_regs.h
 index 7f55c9b96e2..155d7dc2d81 100644
 --- a/drivers/lora/native/sx126x/sx126x_regs.h
@@ -3174,3 +3374,32 @@ index 7f55c9b96e2..155d7dc2d81 100644
  #define SX126X_TX_TIMEOUT_NONE              0x000000
  
  /* Convert milliseconds to timeout ticks */
+diff --git a/dts/bindings/lora/semtech,sx126x-base.yaml b/dts/bindings/lora/semtech,sx126x-base.yaml
+index 2d13d758695..04390be84e5 100644
+--- a/dts/bindings/lora/semtech,sx126x-base.yaml
++++ b/dts/bindings/lora/semtech,sx126x-base.yaml
+@@ -35,6 +35,24 @@ properties:
+       Antenna switch RX enable GPIO. If set, the driver tracks the
+       state of the radio and controls the RF switch.
+ 
++  lna-bypass-gpios:
++    type: phandle-array
++    description: |
++      Receive-path select of an external front-end module whose RX gain is
++      software-selectable, such as the KCT8103L CTX pin on Heltec boards.
++      LOW routes the receive path through the FEM's LNA, HIGH bypasses it.
++
++      This is NOT an RF switch control. It belongs only on a FEM where the
++      TX/RX path is selected by something else -- on the KCT8103L boards,
++      DIO2 into the FEM's CPS pin -- which is what leaves this line free to
++      mean "LNA or bypass". Never point it at a PA or TXEN enable: the
++      driver asserts it during receive whenever the LNA is switched off,
++      which on a real TXEN would key the amplifier into a receive window.
++
++      Held HIGH while transmitting; in receive it follows
++      sx126x_set_fem_rx_enable() -- LOW for the LNA (the default), HIGH to
++      trade its gain for its supply current.
++
+   dio1-gpios:
+     type: phandle-array
+     description: |

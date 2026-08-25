@@ -333,15 +333,17 @@
 
 		/*
 		 * KCT8103L PA/FEM control:
-		 * - PA_CSD P0.12 -> CSD, active-HIGH FEM enable.
-		 * - PA_CTX P1.09 -> CTX, HIGH for TX in the existing ZephCore
-		 *   SX1262 tx-enable model. MeshCore uses the same net for
-		 *   TX/LNA-bypass control.
+		 * - PA_CSD P0.12 -> CSD, active-HIGH FEM enable, low only in sleep.
+		 * - PA_CTX P1.09 -> CTX, the receive-path select: LOW routes RX
+		 *   through the LNA, HIGH bypasses it.  Held HIGH in TX, where
+		 *   the receive branch is inert.  This is lna-bypass-gpios, not
+		 *   tx-enable-gpios — it enables nothing.
 		 * - PA_CPS is not an MCU GPIO on T096; it is the SX1262 DIO2
-		 *   net into the KCT8103L CPS pin, so use dio2-tx-enable.
+		 *   net into the KCT8103L CPS pin, so use dio2-tx-enable.  That
+		 *   is what does the TX/RX switching and leaves CTX free.
 		 */
 		antenna-enable-gpios = <&gpio0 12 GPIO_ACTIVE_HIGH>; /* PA_CSD */
-		tx-enable-gpios = <&gpio1 9 GPIO_ACTIVE_HIGH>;       /* PA_CTX */
+		lna-bypass-gpios = <&gpio1 9 GPIO_ACTIVE_HIGH>;      /* PA_CTX */
 		dio2-tx-enable;                                      /* PA_CPS */
 
 		dio3-tcxo-voltage = <SX126X_DIO3_TCXO_1V8>;

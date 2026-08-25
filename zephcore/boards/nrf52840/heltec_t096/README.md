@@ -31,7 +31,7 @@ Sources: official Heltec Mesh Node T096 datasheet/schematic, with MeshCore `vari
 | LoRa DIO1 | P0.21 | DIO1 | `dio1-gpios` |
 | SX1262 DIO2 / FEM CPS | SX1262 DIO2 | PA_CPS | `dio2-tx-enable` |
 | FEM enable | P0.12 | PA_CSD | `antenna-enable-gpios` |
-| FEM TX select | P1.09 | PA_CTX | `tx-enable-gpios` |
+| FEM RX path select | P1.09 | PA_CTX | `lna-bypass-gpios` |
 | FEM rail enable | P0.30 | VFEM_Ctrl | fixed regulator `vfem_enable` |
 | GNSS UART RX into MCU | P0.23 | GNSS_TX | `uart0` RX |
 | GNSS UART TX from MCU | P0.25 | GNSS_RX | `uart0` TX |

@@ -43,8 +43,9 @@ esptool.py --chip esp32s3 --port /dev/ttyACM0 write_flash \
 | SX1262 DIO3 TCXO | SX1262 DIO3 | `dio3-tcxo-voltage = 1.8V` | MeshCore |
 | VFEM_Ctrl | GPIO7 | `fem_power` regulator | Heltec schematic, MeshCore |
 | PA_CSD | GPIO4 | `antenna-enable-gpios` | Heltec schematic, MeshCore |
-| PA_CTX | GPIO5 | `tx-enable-gpios` | Heltec schematic, MeshCore |
-| PA_CPS | GPIO46 | Unused/unclaimed | Heltec schematic/pin map |
+| PA_CTX | GPIO5 | `lna-bypass-gpios` | Heltec schematic, MeshCore |
+| PA_CPS | SX1262 DIO2 | `dio2-tx-enable` | MeshCore (`SX126X_DIO2_AS_RF_SWITCH`) |
+| GPIO46 | — | Unused/unclaimed (V4.2 pin-map carry-over, see notes) | Heltec pin map |
 | UC6580 GNSS UART | RX GPIO33, TX GPIO34 | `&uart2`, `gnss-nmea-generic` | Heltec schematic, MeshCore |
 | GNSS_RST | GPIO35 | `gps-enable` alias, active-high run | Heltec schematic, MeshCore |
 | GNSS PPS | GPIO36 | Unused input | Heltec schematic |
@@ -72,8 +73,10 @@ esptool.py --chip esp32s3 --port /dev/ttyACM0 write_flash \
   physical Wireless Tracker V2.
 - Battery ADC is on ESP32-S3 ADC unit 1 (`&adc0`) channel 0, GPIO1. ADC unit 2
   channel 0 is GPIO11 and must stay disabled because GPIO11 is LoRa MISO.
-- MeshCore's V2 target drives `PA_CSD` and `PA_CTX` but does not drive
-  `PA_CPS`/GPIO46. ZephCore leaves GPIO46 unclaimed pending hardware validation
-  of that KCT8103L control path.
+- MeshCore's V2 target drives `PA_CSD` and `PA_CTX` only, defines no `PA_CPS`
+  GPIO, and sets `SX126X_DIO2_AS_RF_SWITCH=true`. On a KCT8103L the CPS pin is
+  the SX1262 DIO2 net, so it is not an MCU line here; GPIO46 carries the
+  `PA_CPS` label only as a carry-over from the V4.2/GC1109 pin map, where the
+  two FEM pin names swap roles. ZephCore leaves GPIO46 unclaimed.
 - `GNSS_RST` is exposed through ZephCore's `gps-enable` alias as an active-high
   logical "run" line: high releases reset, low holds UC6580 off.

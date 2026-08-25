@@ -35,10 +35,61 @@ function(zephcore_apply_patches PATCH_DIR TARGET_DIR LABEL)
         file(READ "${_stamp}" _existing_hash)
         string(STRIP "${_existing_hash}" _existing_hash)
         if(_existing_hash STREQUAL _stamp_hash)
-            message(STATUS "  [${LABEL}] Patches already applied, skipping.")
-            return()
+            # The stamp hashes HEAD + patch contents and says nothing about the
+            # working tree.  A `git reset --hard` / `git checkout -- .` in the
+            # target tree reverts our patched files but leaves this stamp behind
+            # (it is untracked), and `west update` at an already-current
+            # revision does not move HEAD -- so the hash still matches and the
+            # build would skip patching and compile a pristine tree.  Depending
+            # on which patch was lost that is either a confusing configure-time
+            # failure or, worse, a silently unpatched binary.
+            #
+            # Verify instead of trusting: every patch here modifies tracked
+            # files only (none create or delete), so a patch that is applied
+            # always leaves its own paths dirty against HEAD.  Paths clean
+            # against HEAD therefore means "not applied" exactly.  Note this
+            # deliberately does NOT compare tree content to the patch: a dirty
+            # path is left alone, so the edit-the-driver-then-regenerate-the-
+            # patch workflow still builds your in-progress edits untouched.
+            set(_stamp_stale FALSE)
+            foreach(_pf ${PATCH_FILES})
+                execute_process(
+                    COMMAND git apply --numstat "${_pf}"
+                    WORKING_DIRECTORY "${TARGET_DIR}"
+                    OUTPUT_VARIABLE _vfy_numstat
+                    ERROR_QUIET
+                )
+                string(REGEX MATCHALL "[^\t\n]+\t[^\t\n]+\t[^\t\n]+"
+                       _vfy_lines "${_vfy_numstat}")
+                set(_vfy_paths "")
+                foreach(_line ${_vfy_lines})
+                    string(REGEX REPLACE "^[^\t]+\t[^\t]+\t" "" _p "${_line}")
+                    list(APPEND _vfy_paths "${_p}")
+                endforeach()
+                if(_vfy_paths)
+                    execute_process(
+                        COMMAND git diff --quiet -- ${_vfy_paths}
+                        WORKING_DIRECTORY "${TARGET_DIR}"
+                        RESULT_VARIABLE _vfy_clean
+                        OUTPUT_QUIET ERROR_QUIET
+                    )
+                    if(_vfy_clean EQUAL 0)
+                        get_filename_component(_vfy_name "${_pf}" NAME)
+                        message(STATUS
+                            "  [${LABEL}] Stamp says applied but ${_vfy_name} "
+                            "is missing from the tree — re-applying all.")
+                        set(_stamp_stale TRUE)
+                        break()
+                    endif()
+                endif()
+            endforeach()
+            if(NOT _stamp_stale)
+                message(STATUS "  [${LABEL}] Patches already applied, skipping.")
+                return()
+            endif()
+        else()
+            message(STATUS "  [${LABEL}] Patch set changed, re-applying...")
         endif()
-        message(STATUS "  [${LABEL}] Patch set changed, re-applying...")
     endif()
     foreach(PATCH_FILE ${PATCH_FILES})
         get_filename_component(PATCH_NAME ${PATCH_FILE} NAME)

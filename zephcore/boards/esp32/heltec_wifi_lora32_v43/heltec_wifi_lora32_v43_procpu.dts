@@ -223,29 +223,41 @@
 
 		/* External PA/FEM control (KCT8103L, V4.3):
 		 *   GPIO2 = CSD (chip enable): driven HIGH during radio, LOW in sleep
-		 *   GPIO5 = CTX (TX/RX select): HIGH during TX, LOW during RX/LNA
-		 * V4.3 CHANGE: CTX moved from GPIO46 (GC1109 CPS) to GPIO5 (KCT8103L CTX). */
+		 *   GPIO5 = CTX (receive-path select): LOW = through the LNA,
+		 *           HIGH = bypass.  Held HIGH during TX, where the branch
+		 *           is inert because DIO2/CPS has selected the TX path.
+		 * V4.3 CHANGE: CTX moved from GPIO46 (GC1109 CPS) to GPIO5 (KCT8103L CTX).
+		 * CTX is lna-bypass-gpios, NOT tx-enable-gpios: it enables nothing,
+		 * and binding it as a TX enable is what made `set radio.fem.rxgain
+		 * off` gate CSD instead in 1.17.2, shutting the FEM down and taking
+		 * the receive path with it (~69 dB, measured). */
 		/*
 		 * ESP32_GPIO_SLEEP_HOLD_EN on both: light sleep powers down
 		 * RTC_PERIPH (see boards/common/pm_esp32.overlay for the full
 		 * chain), and GPIO2/GPIO5 are RTC-capable pads (0-21), so their
 		 * state is not retained across a sleep unless explicitly held.
 		 * These two lines are the FEM's entire control surface — CSD low
-		 * disables the PA and the LNA with it, CTX low parks the part in
-		 * its receive path — so losing them means transmitting through a
-		 * bypassed PA, tens of dB down, with RX sensitivity gone too,
-		 * while the node otherwise looks healthy and keeps relaying.
+		 * disables the PA and the LNA with it, CTX high bypasses the LNA —
+		 * so losing them means transmitting through a bypassed PA, tens of
+		 * dB down, with RX sensitivity gone too, while the node otherwise
+		 * looks healthy and keeps relaying.
 		 * The flag is ignored when CONFIG_PM=n, so this is inert on
 		 * builds that never light-sleep.
 		 */
 		antenna-enable-gpios = <&gpio0 2 (GPIO_ACTIVE_HIGH |
 						 ESP32_GPIO_SLEEP_HOLD_EN)>;   /* KCT8103L CSD = GPIO2 */
-		tx-enable-gpios      = <&gpio0 5 (GPIO_ACTIVE_HIGH |
+		lna-bypass-gpios     = <&gpio0 5 (GPIO_ACTIVE_HIGH |
 						 ESP32_GPIO_SLEEP_HOLD_EN)>;   /* KCT8103L CTX = GPIO5 */
 
-		/* DIO2 drives the SX1262 internal RF switch (TX path select).
-		 * Combined with tx-enable-gpios, this keeps both the internal and
-		 * external PA switch in sync with no software intervention needed. */
+		/* DIO2 drives the SX1262 RF switch output, which on a KCT8103L
+		 * board is the part's CPS pin — the TX/RX path select. MeshCore's
+		 * heltec_v4 target defines CSD=2 and CTX=5 for the KCT8103L, no
+		 * CPS GPIO, and SX126X_DIO2_AS_RF_SWITCH=true; same on t096 and
+		 * tracker_v2. Note the V4.2 GC1109 inverts these two pin names —
+		 * there CPS is GPIO46 (an MCU pin, see heltec_wifi_lora32_v4) and
+		 * DIO2 drives the pin that part calls CTX. On the KCT8103L, DIO2
+		 * doing the path select is what leaves CTX free to mean nothing
+		 * but LNA-or-bypass. */
 		dio2-tx-enable;
 
 		/* TCXO 1.8V via DIO3 — same as V4.2 */
