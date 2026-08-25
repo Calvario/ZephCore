@@ -8,6 +8,9 @@
 #include "led_gate.h"
 #include "buzzer_gate.h"
 #include <helpers/ui/ui_task.h>
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DISPLAY)
+#include <helpers/ui/display.h>
+#endif
 #include <helpers/MeshTimeSync.h>
 #include <helpers/time_sync.h>
 #include <adapters/clock/ZephyrRTCDiscover.h>
@@ -417,6 +420,17 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
             }
         } else if (memcmp(config, "rxduty", 6) == 0) {
             snprintf(reply, CLI_REPLY_SIZE, "> %d", (int)_prefs->rx_duty_cycle);
+        } else if (memcmp(config, "display.rotate", 14) == 0) {
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DISPLAY) && MC_DISPLAY_ROTATE_SUPPORTED
+            // Report the live panel state, not the stored byte: they only
+            // differ if a rotation was refused, and that is exactly the case
+            // worth seeing.
+            snprintf(reply, CLI_REPLY_SIZE, "> %d", mc_display_is_rotated() ? 1 : 0);
+#else
+            strcpy(reply, "> unsupported (panel cannot rotate)");
+#endif
+        } else if (memcmp(config, "input.rotate", 12) == 0) {
+            snprintf(reply, CLI_REPLY_SIZE, "> %d", zephcore_input_is_flipped() ? 1 : 0);
         } else if (memcmp(config, "gps diag", 8) == 0) {
             // What the last module-configuration attempt actually did.
             reply[0] = '>'; reply[1] = ' ';
@@ -1007,6 +1021,53 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                 _prefs->rx_duty_cycle = (uint8_t)val;
                 savePrefs();
                 snprintf(reply, CLI_REPLY_SIZE, "OK - rxduty=%d (reboot to apply)", _prefs->rx_duty_cycle);
+            } else {
+                strcpy(reply, "Error: must be 0, 1, on, or off");
+            }
+        } else if (memcmp(config, "display.rotate ", 15) == 0) {
+            // Rotate the panel 180 degrees for cases that mount it upside down.
+            // Applied immediately -- the SSD1306/SH1106 remap is two bytes on
+            // the wire and the next frame comes out flipped, no redraw needed.
+            const char* arg = &config[15];
+            int val = -1;
+            if (memcmp(arg, "on", 2) == 0) val = 1;
+            else if (memcmp(arg, "off", 3) == 0) val = 0;
+            else if (arg[0] == '0' || arg[0] == '1') val = atoi(arg);
+            if (val != 0 && val != 1) {
+                strcpy(reply, "Error: must be 0, 1, on, or off");
+            } else {
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DISPLAY)
+                int ret = mc_display_set_rotated(val == 1);
+                if (ret == 0) {
+                    // Persist only what the panel actually did, so a stored
+                    // value can never disagree with what the screen shows.
+                    _prefs->display_rotate = (uint8_t)val;
+                    savePrefs();
+                    snprintf(reply, CLI_REPLY_SIZE, "OK - display.rotate=%d", val);
+                } else if (ret == -ENOTSUP) {
+                    strcpy(reply, "Error: this panel cannot rotate");
+                } else {
+                    snprintf(reply, CLI_REPLY_SIZE, "Error: rotate failed (%d)", ret);
+                }
+#else
+                strcpy(reply, "Error: no display");
+#endif
+            }
+        } else if (memcmp(config, "input.rotate ", 13) == 0) {
+            // Swap the joystick/D-pad axes to match an upside-down mount.
+            // Deliberately separate from display.rotate: a case can flip the
+            // screen without flipping the stick, and boards whose panel cannot
+            // rotate can still need the axis swap.
+            const char* arg = &config[13];
+            int val = -1;
+            if (memcmp(arg, "on", 2) == 0) val = 1;
+            else if (memcmp(arg, "off", 3) == 0) val = 0;
+            else if (arg[0] == '0' || arg[0] == '1') val = atoi(arg);
+            if (val == 0 || val == 1) {
+                zephcore_input_set_flipped(val == 1);
+                _prefs->input_rotate = (uint8_t)val;
+                savePrefs();
+                snprintf(reply, CLI_REPLY_SIZE, "OK - input.rotate=%d", val);
             } else {
                 strcpy(reply, "Error: must be 0, 1, on, or off");
             }

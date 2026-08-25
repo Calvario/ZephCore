@@ -95,6 +95,15 @@ public:
 	void adjustBrightness(int delta);
 	bool getWakeOnMsg() const { return _wake_on_msg; }
 	void toggleWakeOnMsg();
+	/* Physical mounting orientation. Both persist to prefs; kept separate
+	 * because a case can flip the screen without flipping the stick.
+	 * Display rotation is only offered where the panel can do it in hardware
+	 * (MC_DISPLAY_ROTATE_SUPPORTED) — toggleDisplayRotate() is a no-op that
+	 * reports failure elsewhere, so the caller can leave the row out. */
+	bool getDisplayRotate() const;
+	bool toggleDisplayRotate();
+	bool getInputRotate() const;
+	void toggleInputRotate();
 	/* Path-hash-mode: 0/1/2 → 1/2/3 bytes per hop appended to outbound flood
 	 * path. Cycles through the three valid settings; persists to prefs. */
 	uint8_t getPathHashBytes() const { return _prefs ? (uint8_t)(_prefs->path_hash_mode + 1) : 1; }

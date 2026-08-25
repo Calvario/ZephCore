@@ -111,6 +111,87 @@ bool mc_display_is_epd(void);
 
 #define MC_DISPLAY_COLOR_PANEL DT_NODE_EXISTS(MC_DISPLAY_COLOR_NODE)
 
+/*
+ * The panel node mc_display_init() will bind to, resolved at compile time in
+ * the same priority order the runtime lookup uses.  Only needed to ask
+ * compile-time questions about the panel; the device handle itself still
+ * comes from the runtime lookup.
+ */
+#if DT_HAS_CHOSEN(zephyr_display)
+#define MC_DISPLAY_NODE DT_CHOSEN(zephyr_display)
+#elif DT_NODE_EXISTS(DT_NODELABEL(sh1106))
+#define MC_DISPLAY_NODE DT_NODELABEL(sh1106)
+#elif DT_NODE_EXISTS(DT_NODELABEL(ssd1306))
+#define MC_DISPLAY_NODE DT_NODELABEL(ssd1306)
+#else
+#define MC_DISPLAY_NODE DT_INVALID_NODE
+#endif
+
+/*
+ * 180-degree rotation support, decided at compile time from the panel.
+ *
+ * Deliberately an allow-list of the two families where the rotation is a
+ * hardware remap the driver actually implements: display_ssd1306.c flips
+ * SEGMENT_MAP + COM_OUTPUT_SCAN (two bytes on the wire, framebuffer
+ * untouched, no per-frame cost), and that driver backs both solomon,ssd1306
+ * and sinowealth,sh1106.
+ *
+ * Other panel families are excluded on purpose rather than probed:
+ *   - st7735r/st7789v (our mono-tft boards) return -ENOTSUP upstream for
+ *     anything but NORMAL, so a probe would just fail;
+ *   - ssd16xx e-paper *accepts* ROTATED_180 but implements it by flipping
+ *     the RAM entry mode only, which reverses byte order without reversing
+ *     bit order inside each byte — the 8 pixels a byte spans stay in their
+ *     original order.  It would report success and render wrong, which is
+ *     worse than reporting unsupported.
+ *
+ * The geometry test on top of the family check matters as much as the family
+ * check itself.  Both remaps reverse the controller's *entire* addressable
+ * range, not the part a given panel happens to use, so the flip only lands
+ * back on the glass when the visible window is centred in that range:
+ *
+ *   - Vertically, that means the panel uses the full multiplex height from
+ *     page 0.  Boards that window a small panel into a larger controller do
+ *     not: lilygo_timpulse_plus is a 64x32 glass on a 128x64 SSD1306 driven
+ *     at page-offset 4 with multiplex-ratio 63, so its content sits on COM
+ *     32..63.  Reversing the COM scan moves it to COM 31..0 — off the bonded
+ *     region entirely, i.e. a blank screen.  `page-offset == 0` and
+ *     `height == multiplex-ratio + 1` is exactly the "uses the whole
+ *     controller" condition, and it excludes that board.
+ *   - Horizontally the surviving boards are already centred: the SSD1306
+ *     ones are a full 128 columns at segment-offset 0, and the SH1106 ones
+ *     are 128 columns at segment-offset 2 in 132 columns of RAM — the
+ *     standard 2-either-side layout these modules ship with.
+ */
+#if DT_NODE_HAS_COMPAT(MC_DISPLAY_NODE, solomon_ssd1306) || \
+	DT_NODE_HAS_COMPAT(MC_DISPLAY_NODE, sinowealth_sh1106)
+#define MC_DISPLAY_ROTATE_SUPPORTED                             \
+	(DT_PROP_OR(MC_DISPLAY_NODE, page_offset, 1) == 0 &&        \
+	 DT_PROP_OR(MC_DISPLAY_NODE, height, 0) ==                  \
+		 DT_PROP_OR(MC_DISPLAY_NODE, multiplex_ratio, 0) + 1)
+#else
+#define MC_DISPLAY_ROTATE_SUPPORTED 0
+#endif
+
+/**
+ * Rotate the panel 180 degrees, for cases that mount the screen upside down
+ * (e.g. the Meshnology N37E kit for the Wio Tracker L1).
+ *
+ * Takes effect on the next frame; the caller does not need to redraw.  On
+ * panels outside MC_DISPLAY_ROTATE_SUPPORTED this is a no-op that reports
+ * the failure instead of pretending to have rotated.
+ *
+ * @param rotated true for 180 degrees, false for the panel's native orientation
+ * @return 0 on success, -ENOTSUP if the panel cannot rotate, -ENODEV if no
+ *         display was initialized, or the driver's negative errno
+ */
+int mc_display_set_rotated(bool rotated);
+
+/**
+ * @return true if the panel is currently rotated 180 degrees.
+ */
+bool mc_display_is_rotated(void);
+
 /**
  * @return true when a raw RGB565-capable color panel is available for
  * optional color overlays. Monochrome displays return false.

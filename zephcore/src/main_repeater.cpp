@@ -57,6 +57,9 @@ extern "C" void bt_ctlr_assert_handle(char *file, uint32_t line)
 
 /* UI subsystem (display, buttons, buzzer) */
 #include "ui_task.h"
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DISPLAY)
+#include "display.h"
+#endif
 
 /* Headless repeaters link the weak no-op ui_* stubs (ui_headless_stubs.c), so
  * the periodic UI refresh in the maintenance pass is pure work for nothing on
@@ -761,6 +764,18 @@ int main(void)
 			LOG_WRN("extra.sf %u SFs rejected for current SF/BW — side detectors off", n);
 		}
 	}
+
+	/* Physical mounting orientation, from prefs.  Both are immediate and
+	 * cheap: the panel rotation is a two-byte SEGMENT_MAP/COM_SCAN remap and
+	 * the axis swap is a flag the input callbacks read per event.  A panel
+	 * that cannot rotate logs a warning and stays in its native orientation
+	 * rather than failing the boot. */
+	zephcore_input_set_flipped(prefs->input_rotate != 0);
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DISPLAY)
+	if (prefs->display_rotate) {
+		mc_display_set_rotated(true);
+	}
+#endif
 
 	/* Feed initial UI state from loaded prefs */
 	ui_set_node_name(prefs->node_name);

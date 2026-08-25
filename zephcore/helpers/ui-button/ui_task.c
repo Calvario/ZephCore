@@ -605,11 +605,18 @@ static void ui_input_cb(struct input_event *evt, void *user_data)
 		return;
 	}
 
+	/* Joystick axis flip for upside-down mounts.  Mapped into a local rather
+	 * than written back into the event: the input event is shared with every
+	 * other INPUT_CALLBACK_DEFINE consumer on the bus, and this remap is a
+	 * UI-layer convention, not a hardware fact.  Non-directional codes pass
+	 * through untouched, so the tap-code and longpress paths are unaffected. */
+	const uint16_t code = zephcore_input_map_code(evt->code);
+
 #ifdef CONFIG_ZEPHCORE_EASTER_EGG_DOOM
 	/* When Doom is running, intercept ALL input (presses AND releases) */
 	if (doom_game_is_running()) {
 		/* Double-click ENTER to exit: detect two presses within 500ms */
-		if (evt->code == INPUT_KEY_ENTER && evt->value) {
+		if (code == INPUT_KEY_ENTER && evt->value) {
 			static uint32_t doom_last_enter;
 			uint32_t now = k_uptime_get_32();
 
@@ -625,7 +632,7 @@ static void ui_input_cb(struct input_event *evt, void *user_data)
 		}
 
 		/* Forward all key events (press + release) to Doom */
-		doom_game_input(evt->code, evt->value);
+		doom_game_input(code, evt->value);
 		return;
 	}
 #endif
@@ -633,7 +640,7 @@ static void ui_input_cb(struct input_event *evt, void *user_data)
 	/* GPS hardware switch (toggle switch, not momentary button).
 	 * Needs both press (ON) and release (OFF) events,
 	 * so handle before the release-event filter below. */
-	if (evt->code == INPUT_KEY_G) {
+	if (code == INPUT_KEY_G) {
 		bool gps_on = (evt->value != 0);
 		LOG_INF("GPS switch → %s", gps_on ? "on" : "off");
 		if (gps_is_available()) {
@@ -664,7 +671,7 @@ static void ui_input_cb(struct input_event *evt, void *user_data)
 	 * press get swallowed instead. */
 	if (!mc_display_is_on()) {
 		mc_display_on();
-		display_woken_pending = !is_ui_action_code(evt->code);
+		display_woken_pending = !is_ui_action_code(code);
 		schedule_render();
 		return;
 	}
@@ -693,7 +700,7 @@ static void ui_input_cb(struct input_event *evt, void *user_data)
 #ifdef CONFIG_ZEPHCORE_UI_DISPLAY
 	/* This is the action the wake-up press resolved to — swallow it so the
 	 * press only woke the display, on whatever page it was showing. */
-	if (display_woken_pending && is_ui_action_code(evt->code)) {
+	if (display_woken_pending && is_ui_action_code(code)) {
 		display_woken_pending = false;
 		return;
 	}
@@ -713,7 +720,7 @@ static void ui_input_cb(struct input_event *evt, void *user_data)
 	 * Since INPUT_CALLBACK_DEFINE(NULL) sees events from all devices,
 	 * the raw KEY_A events fall through to default: break.
 	 */
-	switch (evt->code) {
+	switch (code) {
 	/* ===== Multi-tap outputs ===== */
 	case INPUT_KEY_1:
 		/* First tap-codes entry (400ms delayed): page next */

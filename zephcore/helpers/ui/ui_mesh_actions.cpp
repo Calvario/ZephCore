@@ -46,6 +46,8 @@ LOG_MODULE_REGISTER(zephcore_ui_actions, CONFIG_ZEPHCORE_UI_ACTIONS_LOG_LEVEL);
 #define UI_ACTION_SCREEN_OFF_SAVE   BIT(10)
 #define UI_ACTION_PATH_HASH_MODE_SAVE BIT(11)
 #define UI_ACTION_GPS_DUTY_SAVE     BIT(12)
+#define UI_ACTION_DISPLAY_ROTATE_SAVE BIT(13)
+#define UI_ACTION_INPUT_ROTATE_SAVE BIT(14)
 
 /* Module-local pointers, set by init */
 static CompanionMesh *s_mesh;
@@ -72,6 +74,8 @@ static atomic_t pending_wake_on_msg;
 static atomic_t pending_screen_off_secs;
 static atomic_t pending_path_hash_mode;
 static atomic_t pending_gps_duty_sec;
+static atomic_t pending_display_rotate;
+static atomic_t pending_input_rotate;
 
 extern "C" void ui_mesh_actions_init(struct k_event *mesh_events,
 				     uint32_t mesh_event_ui_action,
@@ -145,6 +149,20 @@ extern "C" void mesh_save_screen_off_secs(uint16_t secs)
 {
 	atomic_set(&pending_screen_off_secs, (atomic_val_t)secs);
 	atomic_or(&pending_ui_actions, UI_ACTION_SCREEN_OFF_SAVE);
+	k_event_post(s_mesh_events, s_mesh_event_ui_action);
+}
+
+extern "C" void mesh_save_display_rotate(bool rotated)
+{
+	atomic_set(&pending_display_rotate, rotated ? 1 : 0);
+	atomic_or(&pending_ui_actions, UI_ACTION_DISPLAY_ROTATE_SAVE);
+	k_event_post(s_mesh_events, s_mesh_event_ui_action);
+}
+
+extern "C" void mesh_save_input_rotate(bool rotated)
+{
+	atomic_set(&pending_input_rotate, rotated ? 1 : 0);
+	atomic_or(&pending_ui_actions, UI_ACTION_INPUT_ROTATE_SAVE);
 	k_event_post(s_mesh_events, s_mesh_event_ui_action);
 }
 
@@ -293,6 +311,18 @@ extern "C" void mesh_handle_ui_actions(void)
 	if (actions & UI_ACTION_SCREEN_OFF_SAVE) {
 		s_mesh->prefs.screen_off_secs = (uint16_t)atomic_get(&pending_screen_off_secs);
 		LOG_INF("screen_off_secs=%d (button)", s_mesh->prefs.screen_off_secs);
+		need_save = true;
+	}
+
+	if (actions & UI_ACTION_DISPLAY_ROTATE_SAVE) {
+		s_mesh->prefs.display_rotate = atomic_get(&pending_display_rotate) ? 1 : 0;
+		LOG_INF("display_rotate=%d (button)", s_mesh->prefs.display_rotate);
+		need_save = true;
+	}
+
+	if (actions & UI_ACTION_INPUT_ROTATE_SAVE) {
+		s_mesh->prefs.input_rotate = atomic_get(&pending_input_rotate) ? 1 : 0;
+		LOG_INF("input_rotate=%d (button)", s_mesh->prefs.input_rotate);
 		need_save = true;
 	}
 

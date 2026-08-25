@@ -9,6 +9,7 @@
 #include "screen_helpers.h"
 #include <adapters/gps/ZephyrGPSManager.h>
 #include <helpers/time_sync.h>
+#include <helpers/ui/display.h>
 #include <helpers/ui/ui_mesh_actions.h>
 #include <zephyr/kernel.h>
 #include <zephyr/random/random.h>
@@ -26,7 +27,18 @@ enum SysDevItem { SYSDEV_BUZZER=0, SYSDEV_BLUETOOTH, SYSDEV_OFFGRID, SYSDEV_LEDS
 
 #define DFU_CONFIRM_WINDOW_MS 3000
 /* Display submenu items */
-enum SysDspItem { SYSDSP_BRIGHT=0, SYSDSP_SCROFF, SYSDSP_BATT, SYSDSP_WAKE, SYSDSP_COUNT };
+/* SYSDSP_ROTATE is present only where the panel can flip itself in hardware
+ * (SSD1306 / SH1106 — see MC_DISPLAY_ROTATE_SUPPORTED).  Offering a row that
+ * always fails would be worse than not offering it, and dropping it at
+ * compile time keeps the flash cost at zero on the other boards.
+ * SYSDSP_INPUT_ROTATE is unconditional: the axis swap is ours, not the
+ * panel's, so it works everywhere — including boards whose screen cannot
+ * rotate but whose stick still ends up upside down in a custom case. */
+enum SysDspItem { SYSDSP_BRIGHT=0, SYSDSP_SCROFF, SYSDSP_BATT, SYSDSP_WAKE,
+#if MC_DISPLAY_ROTATE_SUPPORTED
+                  SYSDSP_ROTATE,
+#endif
+                  SYSDSP_INPUT_ROTATE, SYSDSP_COUNT };
 /* Info submenu items */
 enum SysInfoItem { SYSINFO_TIME=0, SYSINFO_STATS, SYSINFO_RADIO, SYSINFO_COUNT };
 /* Power submenu items */
@@ -92,6 +104,10 @@ int SystemScreen::render(JoystickDisplay &display)
 		items[SYSDSP_SCROFF] = scroff_label;
 		items[SYSDSP_BATT] = batt_label;
 		items[SYSDSP_WAKE] = _task->getWakeOnMsg() ? "Wake on msg: ON" : "Wake on msg: OFF";
+#if MC_DISPLAY_ROTATE_SUPPORTED
+		items[SYSDSP_ROTATE] = _task->getDisplayRotate() ? "Rotate 180: ON" : "Rotate 180: OFF";
+#endif
+		items[SYSDSP_INPUT_ROTATE] = _task->getInputRotate() ? "Flip input: ON" : "Flip input: OFF";
 		renderSubMenu(display, "Display", _selected, items, SYSDSP_COUNT);
 		return 500;
 	}
@@ -212,6 +228,19 @@ bool SystemScreen::handleInput(char c)
 			case SYSDSP_WAKE:
 				_task->toggleWakeOnMsg();
 				_task->showAlert(_task->getWakeOnMsg() ? "Wake on msg: ON" : "Wake on msg: OFF", 1000);
+				return true;
+#if MC_DISPLAY_ROTATE_SUPPORTED
+			case SYSDSP_ROTATE:
+				if (!_task->toggleDisplayRotate()) {
+					_task->showAlert("Rotate unsupported", 1500);
+					return true;
+				}
+				_task->showAlert(_task->getDisplayRotate() ? "Rotate 180: ON" : "Rotate 180: OFF", 1000);
+				return true;
+#endif
+			case SYSDSP_INPUT_ROTATE:
+				_task->toggleInputRotate();
+				_task->showAlert(_task->getInputRotate() ? "Flip input: ON" : "Flip input: OFF", 1000);
 				return true;
 			default: return false;
 			}

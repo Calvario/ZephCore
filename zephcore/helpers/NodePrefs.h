@@ -120,6 +120,19 @@ struct NodePrefs {
 	 * driver rejects anything else.  Ignored on non-LR2021 radios. */
 	uint8_t extra_sf[EXTRA_SF_MAX];
 
+	/* Physical mounting orientation.  Common to both roles: a repeater board
+	 * with an OLED (RAK4631, Heltec) can be mounted upside down just as a
+	 * companion can, and the joystick boards ship a repeater artifact too.
+	 *
+	 * display_rotate rotates the panel 180 degrees in hardware and is only
+	 * honoured on SSD1306/SH1106 (see MC_DISPLAY_ROTATE_SUPPORTED); other
+	 * panels report it unsupported rather than silently ignoring it.
+	 * input_rotate swaps the joystick/D-pad axes to match, and is kept
+	 * separate because the two are not always wanted together — a screen can
+	 * be remounted without moving the stick. */
+	uint8_t display_rotate;         // 1 = panel rotated 180 degrees
+	uint8_t input_rotate;           // 1 = joystick up/down and left/right swapped
+
 	/* ---- Companion-only fields ---- */
 	uint8_t manual_add_contacts;
 	uint8_t telemetry_mode_base;
@@ -216,6 +229,8 @@ static inline void sanitizeNodePrefs(NodePrefs* p) {
 	p->cad_auto            = saneBool<uint8_t>(p->cad_auto, 0);
 	p->allow_read_only     = saneBool<uint8_t>(p->allow_read_only, 0);
 	p->powersaving_enabled = saneBool<uint8_t>(p->powersaving_enabled, 0);
+	p->display_rotate      = saneBool<uint8_t>(p->display_rotate, 0);
+	p->input_rotate        = saneBool<uint8_t>(p->input_rotate, 0);
 	/* Defaults that are on, not off. */
 	p->rx_boost            = saneBool<uint8_t>(p->rx_boost, 1);
 	p->fem_rxgain          = saneBool<uint8_t>(p->fem_rxgain, 1);
@@ -316,6 +331,8 @@ static inline void initNodePrefs(NodePrefs* prefs) {
 	prefs->probe_interval = 15;       // floor sample + CAD probe; staircase responds in ~1-2 h
 	prefs->cad_busycap = 25;          // back off detPeak once >25% of TX attempts are deferred
 	prefs->wake_on_msg = 1;           // Default ON — wake display when message arrives
+	prefs->display_rotate = 0;        // Default OFF — panel in the stock case orientation
+	prefs->input_rotate = 0;          // Default OFF — joystick axes as the board wires them
 	prefs->v_contact_enabled = 1;     // Default ON — v-contact loopback admin chat (companion)
 	prefs->v_battery_alert_mv = 0xFFFF; // Sentinel: derive from board auto-shutdown threshold
 }

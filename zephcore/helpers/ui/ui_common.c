@@ -22,6 +22,7 @@
 #include "led_gate.h"               /* shared with the LoRa TX LED */
 
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
 #include <zephyr/kernel.h>
 #include <string.h>
 
@@ -35,6 +36,42 @@
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(ui_led, CONFIG_ZEPHCORE_BOARD_LOG_LEVEL);
+
+/* ========== Input axis flip ==========
+ *
+ * Shared by both UI variants so an upside-down mount only has to be
+ * configured once.  Written from the mesh/CLI thread, read from the input
+ * callback.  A plain bool needs no atomic here: it is a single aligned byte,
+ * and the only race — a keypress landing in the same instant the setting is
+ * toggled — costs that one keypress its direction, which is what toggling an
+ * axis swap does anyway. */
+
+static bool input_flipped;
+
+void zephcore_input_set_flipped(bool flipped)
+{
+	input_flipped = flipped;
+}
+
+bool zephcore_input_is_flipped(void)
+{
+	return input_flipped;
+}
+
+uint16_t zephcore_input_map_code(uint16_t code)
+{
+	if (!input_flipped) {
+		return code;
+	}
+
+	switch (code) {
+	case INPUT_KEY_UP:    return INPUT_KEY_DOWN;
+	case INPUT_KEY_DOWN:  return INPUT_KEY_UP;
+	case INPUT_KEY_LEFT:  return INPUT_KEY_RIGHT;
+	case INPUT_KEY_RIGHT: return INPUT_KEY_LEFT;
+	default:              return code;
+	}
+}
 
 /* ========== Startup Chime ========== */
 

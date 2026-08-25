@@ -893,6 +893,16 @@ void ZephyrDataStore::loadPrefs(NodePrefs &prefs)
 		prefs.fem_rxgain = buf[off++];
 	}
 
+	/* Offset 168-169: display_rotate / input_rotate (ZephCore extension).
+	 * Absent in pre-existing files → both stay at the initNodePrefs() default
+	 * of 0, i.e. the stock mounting orientation every deployed node runs. */
+	if (off < len) {
+		prefs.display_rotate = buf[off++];
+	}
+	if (off < len) {
+		prefs.input_rotate = buf[off++];
+	}
+
 	sanitizeNodePrefs(&prefs);
 }
 
@@ -995,7 +1005,10 @@ void ZephyrDataStore::savePrefs(const NodePrefs &prefs)
 	buf[off++] = prefs.v_contact_flags;
 	/* Offset 167: fem_rxgain (ZephCore extension, external FEM LNA in RX) */
 	buf[off++] = prefs.fem_rxgain;
-	/* Total: 168 bytes */
+	/* Offset 168-169: display_rotate / input_rotate (ZephCore extension) */
+	buf[off++] = prefs.display_rotate;
+	buf[off++] = prefs.input_rotate;
+	/* Total: 170 bytes */
 
 	bool ok = atomicReplaceFile(PREFS_FILE, buf, off);
 	LOG_DBG("savePrefs: wrote %s, ok=%d (%d bytes), name='%.16s'",

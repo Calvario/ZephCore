@@ -175,3 +175,11 @@ WEAK void ui_notify_channel_msg(const char *channel_name, const char *text,
 }
 
 WEAK void ui_notify_packet_sent(void) { }
+
+/* Input axis flip. The real state lives in ui_common.c, which is compiled
+ * whenever any UI hardware is present; a headless build has no input to flip,
+ * so the setter is a no-op and the mapper is the identity. The CLI calls
+ * these unconditionally. */
+WEAK void zephcore_input_set_flipped(bool flipped) { ARG_UNUSED(flipped); }
+WEAK bool zephcore_input_is_flipped(void) { return false; }
+WEAK uint16_t zephcore_input_map_code(uint16_t code) { return code; }

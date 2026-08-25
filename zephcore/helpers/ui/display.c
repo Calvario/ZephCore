@@ -48,6 +48,7 @@ LOG_MODULE_REGISTER(zephcore_display, CONFIG_ZEPHCORE_BOARD_LOG_LEVEL);
 static const struct device *disp_dev;
 static bool disp_on;
 static bool disp_initialized;
+static bool disp_rotated;     /* panel flipped 180 degrees (upside-down mount) */
 
 /* Runtime display geometry (queried from driver) */
 static uint16_t disp_width;
@@ -633,6 +634,43 @@ bool mc_display_is_on(void)
 bool mc_display_is_epd(void)
 {
 	return is_epd;
+}
+
+int mc_display_set_rotated(bool rotated)
+{
+#if !MC_DISPLAY_ROTATE_SUPPORTED
+	ARG_UNUSED(rotated);
+	return -ENOTSUP;
+#else
+	if (!disp_initialized) {
+		return -ENODEV;
+	}
+	if (rotated == disp_rotated) {
+		return 0;
+	}
+
+	/* Panel-level remap: the driver rewrites SEGMENT_MAP + COM_OUTPUT_SCAN
+	 * and the existing framebuffer contents come back out mirrored on both
+	 * axes.  Nothing to redraw, and no cost on subsequent frames. */
+	int ret = display_set_orientation(disp_dev,
+					  rotated ? DISPLAY_ORIENTATION_ROTATED_180
+						  : DISPLAY_ORIENTATION_NORMAL);
+
+	if (ret) {
+		LOG_WRN("display rotate %s failed: %d",
+			rotated ? "180" : "normal", ret);
+		return ret;
+	}
+
+	disp_rotated = rotated;
+	LOG_INF("display rotated %s", rotated ? "180" : "normal");
+	return 0;
+#endif
+}
+
+bool mc_display_is_rotated(void)
+{
+	return disp_rotated;
 }
 
 #if MC_DISPLAY_COLOR_PANEL

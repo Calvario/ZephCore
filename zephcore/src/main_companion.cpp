@@ -29,6 +29,9 @@ LOG_MODULE_REGISTER(zephcore_main, CONFIG_ZEPHCORE_MAIN_LOG_LEVEL);
 #include <helpers/time_sync.h>
 #include "ui_task.h"
 #include "ui_mesh_actions.h"
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DISPLAY)
+#include "display.h"
+#endif
 #include "oled_power.h"
 #include "led_gate.h"
 #include "buzzer_gate.h"
@@ -1521,6 +1524,17 @@ int main(void)
 	if (boot_cause_msg[0] != '\0') {
 		companion_mesh.vcontactNotify(boot_cause_msg);
 	}
+
+	/* Physical mounting orientation, from prefs.  This is the earliest it can
+	 * run — ui_init() brings the panel up before prefs are loaded, so the
+	 * splash may flash upright for a moment before the remap lands.  A panel
+	 * that cannot rotate logs a warning and stays native. */
+	zephcore_input_set_flipped(companion_mesh.prefs.input_rotate != 0);
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DISPLAY)
+	if (companion_mesh.prefs.display_rotate) {
+		mc_display_set_rotated(true);
+	}
+#endif
 
 	/* Push initial state to UI display */
 	ui_set_node_name(companion_mesh.prefs.node_name);

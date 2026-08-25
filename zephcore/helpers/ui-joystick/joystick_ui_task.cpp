@@ -358,14 +358,23 @@ static void joystick_ui_input_cb(struct input_event *evt, void *user_data)
 		return;
 	}
 
+	/* Apply the joystick axis flip once, here, so every path below — the
+	 * long-press timers keyed on UP/DOWN included — sees the direction the
+	 * user physically pushed on an upside-down mount.
+	 *
+	 * Mapped into a local rather than written back into the event: the input
+	 * event is shared with every other INPUT_CALLBACK_DEFINE consumer on the
+	 * bus, and this remap is a UI-layer convention, not a hardware fact. */
+	const uint16_t code = zephcore_input_map_code(evt->code);
+
 #ifdef CONFIG_ZEPHCORE_EASTER_EGG_DOOM
 	/* When Doom is running, forward all events to it.
 	 * BACK/ESC/KEY_1 release also enqueues KEY_CANCEL so DoomScreen can stop it. */
 	if (doom_game_is_running()) {
-		doom_game_input(evt->code, evt->value);
+		doom_game_input(code, evt->value);
 		if (!evt->value &&
-			(evt->code == INPUT_KEY_BACK || evt->code == INPUT_KEY_ESC ||
-			 evt->code == INPUT_KEY_1)) {
+			(code == INPUT_KEY_BACK || code == INPUT_KEY_ESC ||
+			 code == INPUT_KEY_1)) {
 			if (joystick_queue_initialized) {
 				JoystickUITask::enqueueKey(KEY_CANCEL);
 			}
@@ -384,9 +393,9 @@ static void joystick_ui_input_cb(struct input_event *evt, void *user_data)
 	static bool s_userbtn_down;
 	static bool s_center_down;
 	static bool s_lock_combo_latched;
-	if (evt->code == INPUT_KEY_0) {
+	if (code == INPUT_KEY_0) {
 		s_userbtn_down = (evt->value != 0);
-	} else if (evt->code == INPUT_KEY_ENTER) {
+	} else if (code == INPUT_KEY_ENTER) {
 		s_center_down = (evt->value != 0);
 	}
 	if (s_userbtn_down && s_center_down) {
@@ -401,7 +410,7 @@ static void joystick_ui_input_cb(struct input_event *evt, void *user_data)
 	}
 
 	/* Long press fires on RELEASE so hold duration is known */
-	if (evt->code == INPUT_KEY_ENTER) {
+	if (code == INPUT_KEY_ENTER) {
 		if (evt->value) {
 			s_enter_press_ms = k_uptime_get_32();
 		} else {
@@ -413,7 +422,7 @@ static void joystick_ui_input_cb(struct input_event *evt, void *user_data)
 		}
 		return;
 	}
-	if (evt->code == INPUT_KEY_UP) {
+	if (code == INPUT_KEY_UP) {
 		if (evt->value) {
 			s_up_press_ms = k_uptime_get_32();
 		} else {
@@ -425,7 +434,7 @@ static void joystick_ui_input_cb(struct input_event *evt, void *user_data)
 		}
 		return;
 	}
-	if (evt->code == INPUT_KEY_DOWN) {
+	if (code == INPUT_KEY_DOWN) {
 		if (evt->value) {
 			s_down_press_ms = k_uptime_get_32();
 		} else {
@@ -448,15 +457,15 @@ static void joystick_ui_input_cb(struct input_event *evt, void *user_data)
 	 * Testing the raw event code against 0x20-0x7E instead would be wrong:
 	 * INPUT_KEY_LEFT is 105 and INPUT_KEY_RIGHT is 106, so joystick boards
 	 * would see their arrows turn into the letters 'i' and 'j'. */
-	if (ZEPHCORE_INPUT_IS_ASCII(evt->code)) {
+	if (ZEPHCORE_INPUT_IS_ASCII(code)) {
 		if (joystick_queue_initialized) {
-			JoystickUITask::enqueueKey(ZEPHCORE_INPUT_TO_ASCII(evt->code));
+			JoystickUITask::enqueueKey(ZEPHCORE_INPUT_TO_ASCII(code));
 		}
 		return;
 	}
 
 	char key = 0;
-	switch (evt->code) {
+	switch (code) {
 	case INPUT_KEY_LEFT:    key = KEY_LEFT;         break;
 	case INPUT_KEY_RIGHT:   key = KEY_RIGHT;        break;
 	case INPUT_KEY_BACK:
@@ -1107,6 +1116,38 @@ void JoystickUITask::toggleWakeOnMsg()
 {
 	_wake_on_msg = !_wake_on_msg;
 	mesh_set_wake_on_msg(_wake_on_msg);
+}
+
+bool JoystickUITask::getDisplayRotate() const
+{
+	return mc_display_is_rotated();
+}
+
+bool JoystickUITask::toggleDisplayRotate()
+{
+	bool want = !mc_display_is_rotated();
+
+	/* Only persist what the panel actually did.  Saving a rotation the
+	 * hardware refused would come back at the next boot and be refused
+	 * again, leaving the menu showing a state the screen never entered. */
+	if (mc_display_set_rotated(want) != 0) {
+		return false;
+	}
+	mesh_save_display_rotate(want);
+	return true;
+}
+
+bool JoystickUITask::getInputRotate() const
+{
+	return zephcore_input_is_flipped();
+}
+
+void JoystickUITask::toggleInputRotate()
+{
+	bool want = !zephcore_input_is_flipped();
+
+	zephcore_input_set_flipped(want);
+	mesh_save_input_rotate(want);
 }
 
 /* ===== Notifications from mesh ===== */

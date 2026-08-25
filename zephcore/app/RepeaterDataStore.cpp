@@ -240,6 +240,11 @@ bool RepeaterDataStore::loadPrefs(NodePrefs& prefs) {
      * EOF read keeps the initNodePrefs() default fem_rxgain=1, which is what
      * every already-deployed node has been running. */
     fs_read(&file, &prefs.fem_rxgain, sizeof(prefs.fem_rxgain));
+    /* Mounting orientation, offsets 305-306.  Absent in <307-byte files; the
+     * no-op EOF reads keep the initNodePrefs() defaults of 0/0, which is the
+     * stock orientation every already-deployed node runs. */
+    fs_read(&file, &prefs.display_rotate, sizeof(prefs.display_rotate));
+    fs_read(&file, &prefs.input_rotate, sizeof(prefs.input_rotate));
 
     fs_close(&file);
 
@@ -385,6 +390,9 @@ bool RepeaterDataStore::savePrefs(const NodePrefs& prefs) {
     fs_write(&file, prefs.extra_sf, sizeof(prefs.extra_sf));
     /* External FEM RX gain (offset 304) */
     fs_write(&file, &prefs.fem_rxgain, sizeof(prefs.fem_rxgain));
+    /* Mounting orientation (offsets 305-306) */
+    fs_write(&file, &prefs.display_rotate, sizeof(prefs.display_rotate));
+    fs_write(&file, &prefs.input_rotate, sizeof(prefs.input_rotate));
 
     ret = fs_sync(&file);
     fs_close(&file);
