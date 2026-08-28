@@ -40,6 +40,13 @@ bool zephcore_usbd_is_dtr_active(void);
  * Companion uses this to reset its RX state and flip active_iface on drop. */
 void zephcore_usbd_set_dtr_cb(zephcore_usbd_cdc_dtr_cb_t cb);
 
+/* Detach from the USB bus (drop the D+ pull-up) so the host sees an unplug.
+ * Call before a reset: a soft reset leaves the PHY attached on some SoCs, and
+ * the host then keeps a stale endpoint open across the reboot. No-op if the
+ * stack was never initialized; after this, zephcore_usbd_init() would have to
+ * run again to come back. */
+void zephcore_usbd_detach(void);
+
 #ifdef __cplusplus
 }
 #endif

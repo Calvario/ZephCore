@@ -267,3 +267,27 @@ extern "C" void zephcore_usbd_set_dtr_cb(zephcore_usbd_cdc_dtr_cb_t cb)
 {
 	s_dtr_cb = cb;
 }
+
+extern "C" void zephcore_usbd_detach(void)
+{
+	if (!s_initialized) {
+		return;
+	}
+
+	/* usbd_disable() -> udc_disable() drops the D+ pull-up, which is the only
+	 * thing that makes the host see an unplug.  A soft reset does not: on the
+	 * ESP32-S3, esp_restart_noos() resets WiFi/BT, timers, SPI, UART, DMA and
+	 * crypto but nothing USB, so the PHY pad stays enabled across the reset
+	 * and the host keeps talking to an endpoint the firmware has abandoned.
+	 * (Same root cause as GH #43, which hit the USB-Serial-JTAG controller;
+	 * this covers the USB OTG one that the CDC companion transport uses.)
+	 *
+	 * Safe from the usbd message callback: CONFIG_USBD_MSG_DEFERRED_MODE is
+	 * on by default, so that callback runs on the system workqueue rather
+	 * than in the device stack context, and usbd_disable() is not re-entered
+	 * from the thread it stops.
+	 */
+	(void)usbd_disable(&zephcore_usbd);
+	s_initialized = false;
+	s_dtr_active = false;
+}

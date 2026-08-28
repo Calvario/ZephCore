@@ -61,6 +61,26 @@
 #define ESP32_FORCE_DOWNLOAD_BOOT 1
 #endif
 
+/* Detach the USB device stack before a reset so the host sees a real unplug —
+ * see zephcore_usbd_detach().  Matters most on the ESP32-S3 USB companion,
+ * whose OTG PHY survives a soft reset with D+ still pulled up.
+ *
+ * The condition below must be EXACTLY the one CMakeLists.txt uses to compile
+ * adapters/usb/ZephyrUSBCDC.cpp, or this call site compiles against an
+ * implementation that is never linked (findings #22 — that failure mode has
+ * already cost this repo four separate undefined-reference bugs).  The
+ * repeater/observer/room-server branches use the inner half alone; the
+ * companion branch wraps it in (LOG || COMPANION_USB || COMPANION_SERIAL), and
+ * ZEPHCORE_COMPANION is the compile definition that identifies that branch. */
+#if !defined(CONFIG_CDC_ACM_SERIAL_INITIALIZE_AT_BOOT) && \
+    (defined(CONFIG_USB_CDC_ACM) || defined(CONFIG_USBD_CDC_ACM_CLASS))
+#if !defined(ZEPHCORE_COMPANION) || defined(CONFIG_LOG) || \
+    defined(CONFIG_ZEPHCORE_COMPANION_USB) || defined(CONFIG_ZEPHCORE_COMPANION_SERIAL)
+#include <ZephyrUSBCDC.h>
+#define ZEPHCORE_USBD_DETACH 1
+#endif
+#endif
+
 /* LoRa TX activity LED (optional — defined per-board via DT alias) */
 #if DT_NODE_EXISTS(DT_ALIAS(lora_tx_led))
 static const struct gpio_dt_spec tx_led =
@@ -295,6 +315,11 @@ void ZephyrBoard::onAfterTransmit()
 void ZephyrBoard::reboot()
 {
 	k_msleep(50);  /* Let UART/USB flush */
+#ifdef ZEPHCORE_USBD_DETACH
+	/* USB device stack (CDC ACM): detach so the host sees an unplug. */
+	zephcore_usbd_detach();
+	k_msleep(100);  /* Hold SE0 long enough for host disconnect debounce */
+#endif
 #ifdef ESP32_USB_SERIAL_DETACH
 	/* Drop the D+ pull-up so the host sees a clean USB disconnect before the
 	 * soft reset (GH #43 — wedged serial port on macOS). */
@@ -317,6 +342,14 @@ void ZephyrBoard::rebootToBootloader()
 	REG_SET_BIT(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
 #endif
 	k_msleep(50);  /* Let UART/USB flush */
+#ifdef ZEPHCORE_USBD_DETACH
+	/* Detach the CDC ACM device — same reason as reboot(), and doubly so here:
+	 * the ESP32-S3 comes back in ROM download mode, where the port belongs to
+	 * USB-Serial-JTAG.  The host must see the old device leave the bus first or
+	 * it will not enumerate the new one. */
+	zephcore_usbd_detach();
+	k_msleep(100);
+#endif
 #ifdef ESP32_USB_SERIAL_DETACH
 	/* Clean USB disconnect before the soft reset — same reason as reboot(). */
 	usb_serial_jtag_ll_phy_enable_pad(false);
