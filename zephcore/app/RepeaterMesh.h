@@ -152,7 +152,7 @@ class RepeaterMesh : public mesh::Mesh, public CommonCLICallbacks {
     /* Region-definition CLI (defined in app/RepeaterRegionCLI.cpp).
      * handleRegionLoadLine: a continuation line during `region load`.
      * handleRegionCommand:  a `region ...` command. */
-    void handleRegionLoadLine(char* command, char* reply);
+    void handleRegionLoadLine(uint32_t sender_timestamp, char* command, char* reply);
     void handleRegionCommand(char* command, char* reply);
 
 protected:

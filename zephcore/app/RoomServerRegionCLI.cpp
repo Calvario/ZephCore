@@ -57,7 +57,7 @@ static bool processRegionDefSegment(RegionMap* map, char* tok, RegionEntry** cur
 }
 /* ---------------------------------------- */
 
-void RoomServerMesh::handleRegionLoadLine(char* command, char* reply) {
+void RoomServerMesh::handleRegionLoadLine(uint32_t sender_timestamp, char* command, char* reply) {
     if (StrHelper::isBlank(command)) {
         region_map = temp_map;
         region_load_active = false;
@@ -66,6 +66,22 @@ void RoomServerMesh::handleRegionLoadLine(char* command, char* reply) {
         char* np = command;
         while (*np == ' ') np++;
         int indent = np - command;
+
+        /* An unindented, name-like line is a typed command, not a region row:
+         * real rows are indent >= 1 (load_stack[0] is the wildcard), and the
+         * one unindented line a client legitimately sends is the exported
+         * wildcard header "*", whose '*' is not a name char.  Without this,
+         * `region load` is only escapable by a blank line -- which the USB
+         * reader discards (main_repeater.cpp) and a dead remote-admin client
+         * never sends, stranding the CLI until a reboot.  Abort without
+         * committing temp_map and run the command.  Must come BEFORE the
+         * name-terminator write below, which would truncate `set foo 1` to
+         * `set`. */
+        if (indent == 0 && RegionMap::is_name_char((uint8_t)*np)) {
+            region_load_active = false;
+            handleCommand(sender_timestamp, command, reply);
+            return;
+        }
 
         char* ep = np;
         while (RegionMap::is_name_char(*ep)) ep++;

@@ -1351,7 +1351,7 @@ void RepeaterMesh::resetDutyCycleTimeoutRestarts() {
 
 void RepeaterMesh::handleCommand(uint32_t sender_timestamp, char* command, char* reply) {
     if (region_load_active) {
-        handleRegionLoadLine(command, reply);
+        handleRegionLoadLine(sender_timestamp, command, reply);
         return;
     }
 

@@ -120,10 +120,10 @@ class RoomServerMesh : public mesh::Mesh, public CommonCLICallbacks {
     void sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis, uint8_t path_hash_size);
     void sendFloodReply(mesh::Packet* packet, unsigned long delay_millis, uint8_t path_hash_size);
 
-    /* Region-definition CLI (defined in app/RepeaterRegionCLI.cpp).
+    /* Region-definition CLI (defined in app/RoomServerRegionCLI.cpp).
      * handleRegionLoadLine: a continuation line during `region load`.
      * handleRegionCommand:  a `region ...` command. */
-    void handleRegionLoadLine(char* command, char* reply);
+    void handleRegionLoadLine(uint32_t sender_timestamp, char* command, char* reply);
     void handleRegionCommand(char* command, char* reply);
 
 protected:

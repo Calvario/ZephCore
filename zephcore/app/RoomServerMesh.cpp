@@ -1008,11 +1008,11 @@ void RoomServerMesh::resetDutyCycleTimeoutRestarts() {
 }
 
 /* Region-def CLI (handleRegionLoadLine / handleRegionCommand) and its static
- * parser helpers live in app/RepeaterRegionCLI.cpp. */
+ * parser helpers live in app/RoomServerRegionCLI.cpp. */
 
 void RoomServerMesh::handleCommand(uint32_t sender_timestamp, char* command, char* reply) {
     if (region_load_active) {
-        handleRegionLoadLine(command, reply);
+        handleRegionLoadLine(sender_timestamp, command, reply);
         return;
     }
 
