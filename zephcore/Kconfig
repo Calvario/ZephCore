@@ -502,10 +502,16 @@ config ZEPHCORE_PM_CONSOLE_UART_NUM
 	  esp_rom_uart_tx_wait_idle() before entering light sleep, so a line in
 	  the TX FIFO is not cut off mid-character by the clock stopping.
 
-	  0 is correct for every board this is currently enabled on: their
-	  console is uart0, whether via a USB-serial bridge (Heltec V3/V4/V4.3)
-	  or the ROM-default pads.  Change it only if a board's console is moved
-	  to another hardware UART — a wrong index does not fail the build, it
+	  0 is correct for the boards whose console really is uart0: Heltec V3
+	  (via a CP2102 bridge) and anything on the ROM-default pads.  On Heltec
+	  V4, V4.3 and Wireless Tracker V2 the console is usb_serial (their
+	  board.overlay chooses it, and the uart0 reroute in
+	  boards/common/esp32s3_usb.overlay is companion-only), so this flush
+	  targets a peripheral that is not their console and does nothing.  That
+	  is harmless but not a fix: a USJ console has no wake source either way,
+	  so on those boards the USB CLI is simply unavailable once
+	  ZEPHCORE_PM_BOOT_AWAKE_MS expires.  Change it only if a board's console
+	  is moved to another hardware UART — a wrong index does not fail the build, it
 	  just silently flushes the wrong peripheral and lets the console
 	  truncate again.
 

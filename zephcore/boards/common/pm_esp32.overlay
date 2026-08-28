@@ -27,7 +27,7 @@
  * esp_sleep_enable_gpio_wakeup() on PM_DEVICE_ACTION_RESUME, but only when the
  * PORT is wakeup-capable — that is what pm_device_wakeup_is_capable() tests,
  * and it is set by this property.  Per-PIN arming is separate and comes from
- * patches/zephyr/0012, which passes GPIO_INT_WAKEUP on the DIO1 configure.
+ * patches/zephyr/0003, which passes GPIO_INT_WAKEUP on the DIO1 configure.
  * Both halves are needed: the port enables the wake source, the pin selects
  * which line triggers it.
  *
@@ -45,7 +45,7 @@
  * allowlisted boards is an RTC-capable pad (GPIO 0-21), so their levels are
  * NOT retained unless explicitly held.  The chain:
  *
- *   1. patches/zephyr/0012 passes GPIO_INT_WAKEUP on DIO1.  On the S3 that
+ *   1. patches/zephyr/0003 passes GPIO_INT_WAKEUP on DIO1.  On the S3 that
  *      lands on esp_sleep_enable_ext1_wakeup_io() (drivers/gpio/gpio_esp32.c,
  *      SOC_PM_SUPPORT_EXT1_WAKEUP), i.e. RTC_EXT1_TRIG_EN.
  *   2. esp_sleep_start() only forces ESP_PD_DOMAIN_RTC_PERIPH on for
@@ -86,7 +86,7 @@
  * DIO1 is not the only thing that needs to interrupt a sleeping node — a person
  * pressing the button expects the display to come on.  Marking the PORT
  * wakeup-source above only enables esp_sleep_enable_gpio_wakeup(); the PIN is
- * armed separately, and until now only DIO1 got that (via patches/zephyr/0012).
+ * armed separately, and until now only DIO1 got that (via patches/zephyr/0003).
  * The result was a node that woke for packets and ignored its own button: press
  * it, nothing happens, the display never lights.  Reported from the field.
  *

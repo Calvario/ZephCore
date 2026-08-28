@@ -478,24 +478,40 @@ endif()
 # build would light-sleep mid-advertising or mid-connection. repeater.conf
 # sets CONFIG_BT=n, which removes the problem instead of racing it.
 #
-# BOARD ALLOWLIST, not a platform check. Light sleep is only safe where DIO1
-# can wake the SoC, i.e. an RTC-capable pin (GPIO 0-21 on the S3). Every board
-# below wires DIO1 to GPIO14 and consoles on uart0 through a USB-serial bridge,
-# so both the packet wake and the console flush land correctly. Deliberately
-# ABSENT and must stay absent unless their wiring changes:
+# BOARD ALLOWLIST, not a platform check. The hard requirement is DIO1 on an
+# RTC-capable pin (GPIO 0-21 on the S3) so a received packet can wake the SoC.
+# Every board below wires DIO1 to GPIO14. Deliberately ABSENT and must stay
+# absent unless their wiring changes:
 #   xiao_esp32s3 (DIO1=GPIO39), station_g2 (GPIO48), thinknode_m9 (GPIO42),
 #   lilygo_tlora_c6 (GPIO23, outside the C6's LP range 0-7),
-#   lilygo_t3s3 (GPIO33 — and its console is USB Serial/JTAG, so it fails
-#     the second test below as well)
+#   lilygo_t3s3 (GPIO33)
 #     -> cannot wake on a received packet; the node would go deaf while
 #        looking excellent on a current meter.
-#   ttgo_lora32 -> SX127x; patches/zephyr/0012 arms DIO1 in the sx126x driver
-#        only, so nothing marks the pin as a wake source.
-# Boards with a native USB Serial/JTAG console are also unsuitable: the USB
-# peripheral drops off the bus in light sleep and there is no USJ wake source
-# in the HAL (only UART0/1/2 and LP-UART).
+#   ttgo_lora32 -> SX127x; the DIO1 wake flag lives in the sx126x half of
+#        patches/zephyr/0003, so nothing marks the pin as a wake source.
+#
+# CONSOLE, and why it does NOT gate this list. A native USB Serial/JTAG console
+# cannot survive light sleep: the peripheral drops off the bus and the HAL has
+# no USJ wake source (only UART0/1/2 and LP-UART). Of the boards below, only
+# Heltec V3 consoles on a physical uart0 (CP2102). V4, V4.3 and Wireless
+# Tracker V2 choose usb_serial in their board.overlay, and the uart0 reroute in
+# boards/common/esp32s3_usb.overlay is COMPANION-ONLY (the auto-include below
+# excludes repeater/observer/room_server), so a repeater build of those boards
+# keeps a USJ console.
+#
+# The consequence is accepted, not overlooked: on V4/V4.3/WT-V2 the USB CLI
+# stops answering once ZEPHCORE_PM_BOOT_AWAKE_MS expires, and the console flush
+# in helpers/pm_esp32_console.c targets UART0, which is not their console, so it
+# is inert there. Remote admin over LoRa is unaffected, and connecting a
+# terminal normally resets the board (the bridge drives EN from DTR) which
+# re-arms the window. These boards are in the field deliberately to get light
+# sleep exercised; drop them from the regex to take it away.
+#
+# The regex lists v43 explicitly. "heltec_wifi_lora32_v4" already substring-
+# matches it (CMake MATCHES is unanchored), which made V4.3's inclusion look
+# accidental; spelling it out makes the intent reviewable.
 if(ZEPHCORE_PLATFORM_CONF MATCHES "esp32_common" AND EXTRA_CONF_FILE MATCHES "repeater"
-   AND BOARD MATCHES "heltec_wifi_lora32_v3|heltec_wifi_lora32_v4|heltec_wireless_tracker")
+   AND BOARD MATCHES "heltec_wifi_lora32_v3|heltec_wifi_lora32_v4|heltec_wifi_lora32_v43|heltec_wireless_tracker")
     set(ZEPHCORE_PM_CONF "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/pm_esp32.conf")
     if(EXISTS ${ZEPHCORE_PM_CONF})
         list(APPEND ZEPHCORE_CONF_FILES ${ZEPHCORE_PM_CONF})
