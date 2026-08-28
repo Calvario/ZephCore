@@ -141,8 +141,15 @@ void CommonCLI::scheduleReboot(uint8_t type)
  */
 void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, char* reply) {
     if (strcmp(command, "start dfu") == 0) {
-        /* Reboot into UF2 bootloader for firmware update */
+        /* Reboot into the chip's own firmware-update mode.  nRF52: the Adafruit
+         * UF2 bootloader.  ESP32-S3: the ROM download mode, which is the only
+         * way to get the USB port back from the CDC companion transport for
+         * esptool (see ZephyrBoard::rebootToBootloader). */
+#if defined(CONFIG_SOC_SERIES_ESP32S3)
+        strcpy(reply, "OK - rebooting to ESP32 download mode");
+#else
         strcpy(reply, "OK - rebooting to UF2 DFU");
+#endif
         scheduleReboot(REBOOT_DFU);
     } else if (memcmp(command, "start ota", 9) == 0) {
 #if IS_ENABLED(CONFIG_ZEPHCORE_WIFI_OTA)

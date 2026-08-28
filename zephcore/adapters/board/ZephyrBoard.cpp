@@ -33,6 +33,34 @@
 #define ESP32_USB_SERIAL_DETACH 1
 #endif
 
+/* ESP32-S3: reboot into the ROM download mode rather than back into the app.
+ *
+ * The USB CDC companion transport (boards/common/esp32s3_usb.conf) hands the
+ * shared D+/D- pads to USB OTG and disables USB-Serial-JTAG.  USJ is exactly
+ * what esptool drives to put the chip into download mode, so once our CDC-ACM
+ * device owns the port esptool's auto-reset is inert: DTR/RTS land on a Zephyr
+ * CDC endpoint that is not wired to EN/BOOT, and the only way back into the
+ * bootloader is the physical BOOT button.
+ *
+ * FORCE_DOWNLOAD_BOOT lives in the RTC domain, which a software system reset
+ * does not clear (only a power-on reset does), so setting it and rebooting
+ * brings the ROM up in download mode with USB-Serial-JTAG back on the pads.
+ * That gives both `start dfu` and the Arduino-style 1200-baud touch a way to
+ * hand the port back to esptool / esptool-js / the web configurator.
+ *
+ * Same register and sequence Arduino-ESP32 uses in usb_persist_restart()
+ * (RESTART_BOOTLOADER).  OPTION1 carries no other bits on this SoC, but set the
+ * bit rather than writing the word so it stays correct if that changes.  Scoped
+ * to the S3 deliberately: it is the only part we ship whose USB port can be
+ * taken away from the ROM this way (C3/C6 use a different LP_AON register, and
+ * classic ESP32 has no native USB — it always flashes through its UART bridge).
+ */
+#if defined(CONFIG_SOC_SERIES_ESP32S3)
+#include <soc/rtc_cntl_reg.h>
+#include <soc/soc.h>
+#define ESP32_FORCE_DOWNLOAD_BOOT 1
+#endif
+
 /* LoRa TX activity LED (optional — defined per-board via DT alias) */
 #if DT_NODE_EXISTS(DT_ALIAS(lora_tx_led))
 static const struct gpio_dt_spec tx_led =
@@ -283,7 +311,17 @@ void ZephyrBoard::rebootToBootloader()
 	 * UF2 supports both drag-and-drop (.uf2) and serial DFU (nrfutil). */
 	nrf_power_gpregret_set(NRF_POWER, 0, BOOTLOADER_DFU_UF2_MAGIC);
 #endif
+#ifdef ESP32_FORCE_DOWNLOAD_BOOT
+	/* Come back up in the ROM download mode instead of the app, handing the
+	 * USB port back to USB-Serial-JTAG so esptool can reach it. */
+	REG_SET_BIT(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
+#endif
 	k_msleep(50);  /* Let UART/USB flush */
+#ifdef ESP32_USB_SERIAL_DETACH
+	/* Clean USB disconnect before the soft reset — same reason as reboot(). */
+	usb_serial_jtag_ll_phy_enable_pad(false);
+	k_msleep(100);
+#endif
 	sys_reboot(SYS_REBOOT_COLD);
 }
 

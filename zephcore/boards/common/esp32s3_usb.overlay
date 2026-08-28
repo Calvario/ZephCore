@@ -18,8 +18,11 @@
  * CONFIG_ZEPHCORE_COMPANION_USB — the conf/overlay pairing is what makes this
  * conditional.
  *
- * Boards whose console is already a physical uart0 (Heltec V3/V4/V43, ThinkNode
- * M9) are unaffected: the include re-asserts the same uart0 + GPIO43/44 setup
- * they already have.
+ * Boards whose console is already a physical uart0 (Heltec V3, ThinkNode M9) are
+ * unaffected: the include re-asserts the same uart0 + GPIO43/44 setup they
+ * already have.  Heltec V4/V4.3 and Wireless Tracker V2 DO get moved — their
+ * board.overlay chooses usb_serial — which is the point, and only actually
+ * happens because board.overlay now goes into EXTRA_DTC_OVERLAY_FILE first
+ * (see the DTC overlay precedence block in CMakeLists.txt).
  */
 #include "esp32s3_console_uart0.dtsi"

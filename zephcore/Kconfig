@@ -134,7 +134,11 @@ config ZEPHCORE_COMPANION_USB
 	  depends forces this to n automatically — no conf change needed.
 
 	  For ESP32-S3 boards, USB_DEVICE_STACK_NEXT must be enabled first via
-	  boards/common/esp32s3_usb.conf before this becomes active.
+	  boards/common/esp32s3_usb.conf before this becomes active.  CMakeLists.txt
+	  adds that conf automatically to companion builds on the S3 boards whose
+	  board.overlay declares the USB OTG CDC-ACM node, so it is on by default
+	  there too — but not on repeater/observer/room-server or debug builds,
+	  which keep the port for the console.
 
 config ZEPHCORE_COMPANION_SERIAL
 	bool "Enable plain-UART companion transport"

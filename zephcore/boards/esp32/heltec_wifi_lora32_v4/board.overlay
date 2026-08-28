@@ -90,6 +90,8 @@
 
 /* LittleFS auto-mount — standard /lfs mount point */
 #include "../../common/filesystem.dtsi"
-/* USB CDC-ACM — companion USB transport (esp32s3_usb.conf). Heltec has a
- * dedicated UART console, so no console reroute is needed. */
+/* USB CDC-ACM — companion USB transport, auto-enabled for companion builds via
+ * boards/common/esp32s3_usb.conf (see the auto-include block in CMakeLists.txt).
+ * The chosen console above is usb_serial, i.e. the same D+/D- pins, so the conf's
+ * paired overlay moves the console to uart0/GPIO43-44 for those builds. */
 #include "../../common/esp32s3_usb_otg.dtsi"

@@ -27,7 +27,7 @@ All commands are sent over USB serial (CDC-ACM). Commands sent remotely over the
 | `ver` | Firmware version and build date |
 | `board` | Board manufacturer name |
 | `reboot` | Reboot immediately |
-| `start dfu` | Reboot into UF2 bootloader for drag-and-drop firmware update |
+| `start dfu` | nRF52: reboot into the UF2 bootloader for drag-and-drop update. ESP32-S3: reboot into the ROM download mode so esptool can reach the chip |
 | `start ota` | ESP32: start WiFi AP + HTTP OTA server. nRF52: reboot into BLE OTA DFU mode |
 | `stop ota` | Stop WiFi OTA server (ESP32 only) |
 | `clkreboot` | Set clock to a fixed reference time (15 May 2024 8:50pm UTC) then reboot |

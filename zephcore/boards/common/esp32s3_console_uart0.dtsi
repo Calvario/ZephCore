@@ -13,9 +13,17 @@
  * GPIO43/44.  It is included from the auto-paired esp32s3_usb.overlay instead,
  * so it follows esp32s3_usb.conf.
  *
- * Boards whose console really is a physical uart0 — Heltec V3/V4/V43, and
- * ThinkNode M9 (USB-C via a CH9102-class bridge into UART0, native USB pads not
- * bonded) — do include it unconditionally, which is correct for them.
+ * Boards whose console really is a physical uart0 — Heltec V3, and ThinkNode M9
+ * (USB-C via a CH9102-class bridge into UART0, native USB pads not bonded) — do
+ * include it unconditionally, which is correct for them.
+ *
+ * Heltec V4/V4.3 and Wireless Tracker V2 are NOT in that group even though
+ * their board DTS names uart0: their board.overlay re-chooses usb_serial, so
+ * they go through the conditional path above like every other native-USB board.
+ * That did not work until 2026-08-28 — board.overlay was applied AFTER the
+ * auto-paired overlays and simply won, leaving the console pointed at a USJ
+ * peripheral that no longer owned the pins.  See the DTC overlay precedence
+ * block in CMakeLists.txt.
  *
  * uart0 is disabled by default in the ESP32-S3 SoC dtsi, so we enable it and
  * pin it to the chip's ROM-default UART0 pads (GPIO43 TX / GPIO44 RX) — the
