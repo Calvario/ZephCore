@@ -120,6 +120,10 @@ static struct ring_buf usb_ring_buf;
 static char cli_line_buf[CLI_LINE_BUF_SIZE];
 static char cli_reply_buf[256];
 static uint16_t cli_line_idx;
+/* Last byte seen by cli_rx_work_fn, for collapsing CRLF/LFCR pairs. Persists
+ * across work-item invocations, so a pair split across two USB packets still
+ * compares correctly. */
+static uint8_t cli_prev_byte;
 
 /* Completed CLI lines are handed to the MAIN thread for execution.  Byte
  * assembly + echo (cli_rx_work_fn) runs on sysworkq and touches no mesh
@@ -193,31 +197,43 @@ static void cli_rx_work_fn(struct k_work *work)
 	uint8_t byte;
 
 	while (ring_buf_get(&usb_ring_buf, &byte, 1) == 1) {
-		/* Process command on \r OR \n (support echo from Linux) */
-		if (byte == '\r' || byte == '\n') {
-			if (cli_line_idx > 0) {
-				cli_line_buf[cli_line_idx] = '\0';
+		const uint8_t prev = cli_prev_byte;
+		cli_prev_byte = byte;
 
-				/* Debug: log received command */
+		/* Process command on \r OR \n. Accepting both is what makes a piped
+		 * `echo "cmd" > /dev/ttyACM0` (LF only) work. The cost is that a CRLF
+		 * terminal sends two terminator bytes per Enter, so collapse the pair
+		 * here: skip a terminator that directly follows a *different* one.
+		 * "\r\r" and "\n\n" (two genuine blank lines) still dispatch twice.
+		 * Blank lines ARE dispatched -- `region load` commits on one, and
+		 * handleCommand() no-ops a blank line otherwise. The previous
+		 * de-duplicator keyed on an empty line buffer instead: it ate every
+		 * blank line (stranding `region load` until a reboot) and still let
+		 * the CRLF tail fall through and emit a stray newline of its own. */
+		if (byte == '\r' || byte == '\n') {
+			if ((prev == '\r' || prev == '\n') && byte != prev) {
+				continue;   /* tail of a CRLF/LFCR pair */
+			}
+			cli_line_buf[cli_line_idx] = '\0';
+
+			/* Debug: log received command */
+			if (cli_line_idx > 0) {
 				LOG_INF("CLI cmd len=%d: %.40s%s", cli_line_idx,
 					cli_line_buf, cli_line_idx > 40 ? "..." : "");
-
-				/* Hand the command to the main thread (see cli_cmd_queue).
-				 * The reply + trailing newline are emitted there, exactly
-				 * matching the previous inline output order. */
-				struct cli_cmd_line c;
-				strncpy(c.buf, cli_line_buf, sizeof(c.buf) - 1);
-				c.buf[sizeof(c.buf) - 1] = '\0';
-				if (k_msgq_put(&cli_cmd_queue, &c, K_NO_WAIT) == 0) {
-					k_event_post(&mesh_events, MESH_EVENT_CLI_RX);
-				} else {
-					cli_print("\r\n  -> busy\r\n");
-				}
-				cli_line_idx = 0;
-			} else {
-				/* Empty line — just emit the newline (no command to run) */
-				cli_print("\r\n");
 			}
+
+			/* Hand the command to the main thread (see cli_cmd_queue).
+			 * The reply + trailing newline are emitted there, exactly
+			 * matching the previous inline output order. */
+			struct cli_cmd_line c;
+			strncpy(c.buf, cli_line_buf, sizeof(c.buf) - 1);
+			c.buf[sizeof(c.buf) - 1] = '\0';
+			if (k_msgq_put(&cli_cmd_queue, &c, K_NO_WAIT) == 0) {
+				k_event_post(&mesh_events, MESH_EVENT_CLI_RX);
+			} else {
+				cli_print("\r\n  -> busy\r\n");
+			}
+			cli_line_idx = 0;
 		} else if (byte == 0x7F || byte == 0x08) {
 			/* Backspace - echo backspace sequence */
 			if (cli_line_idx > 0) {

@@ -1016,6 +1016,11 @@ void RoomServerMesh::handleCommand(uint32_t sender_timestamp, char* command, cha
         return;
     }
 
+    /* Blank line: nothing to run.  The USB reader forwards these (see
+     * cli_rx_work_fn) because `region load` commits on one -- which is
+     * handled above, before this returns. */
+    if (StrHelper::isBlank(command)) { reply[0] = 0; return; }
+
     while (*command == ' ') command++;
 
     if (strlen(command) > 4 && command[2] == '|') {
