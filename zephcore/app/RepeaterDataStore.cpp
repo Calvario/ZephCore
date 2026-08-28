@@ -4,8 +4,9 @@
  */
 
 #include "RepeaterDataStore.h"
+#include "../adapters/datastore/ZephyrFsFormat.h"
 #include <zephyr/fs/fs.h>
-#include <zephyr/storage/flash_map.h>
+#include <zephyr/sys/util.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
 #include <stdio.h>
@@ -36,6 +37,37 @@ bool RepeaterDataStore::begin() {
 }
 
 const char* RepeaterDataStore::getBasePath() const { return BASE_PATH; }
+
+static bool fileExists(const char* path) {
+    struct fs_dirent entry;
+    return fs_stat(path, &entry) == 0;
+}
+
+bool RepeaterDataStore::hasRoleData() const {
+    char path[64];
+
+    /* Only THIS role's files count.  A companion volume does not: the roles
+     * are deliberately not interchangeable, and a companion's contacts and
+     * blob cache would eat into the same 128 KB the repeater needs, so a
+     * repeater booting onto a companion volume formats it.  The reverse
+     * already happens — ZephyrDataStore::hasPrefs() tests /lfs/new_prefs,
+     * which a repeater volume never has.
+     *
+     * Repeater, room server and observer DO share this store and base path;
+     * they use the same prefs layout, so switching among them keeps the
+     * node's identity, which is what an operator wants.
+     *
+     * Self-limiting: loadPrefs() persists defaults on boot 1 and main_*.cpp
+     * saves a generated identity on the same boot, so after one successful
+     * boot at least one of these exists and the check never fires again. */
+    static const char* const ours[] = { "prefs", "_main.id" };
+    for (size_t i = 0; i < ARRAY_SIZE(ours); i++) {
+        snprintf(path, sizeof(path), "%s/%s", BASE_PATH, ours[i]);
+        if (fileExists(path)) return true;
+    }
+
+    return false;
+}
 
 const char* RepeaterDataStore::getAclPath() const {
     static char buf[48];
@@ -412,37 +444,28 @@ bool RepeaterDataStore::savePrefs(const NodePrefs& prefs) {
 }
 
 bool RepeaterDataStore::formatFileSystem() {
-    LOG_WRN("Factory reset: erasing repeater data at %s", BASE_PATH);
+    LOG_WRN("Factory reset: erasing all storage");
 
-    struct fs_dir_t dir;
-    fs_dir_t_init(&dir);
-
-    int ret = fs_opendir(&dir, BASE_PATH);
-    if (ret < 0) {
-        LOG_WRN("No repeater directory to erase");
-        return true;
+    /* Erase the LittleFS *volume*, not just our files.  The old loop walked
+     * /lfs/repeater/ with fs_unlink, which left the volume itself untouched:
+     * it could not recover a volume another firmware had written into (on
+     * nRF52840 the Adafruit core's filesystem overlaps the top of ours), and
+     * it left /lfs/settings, stale companion files and all of /ext behind.
+     * Shared with the companion so all four roles erase the same regions. */
+    bool mounted = zephcore_fs_format_all(nullptr);
+    if (!mounted) {
+        LOG_ERR("Factory reset: /lfs did not remount");
+        return false;
     }
 
-    struct fs_dirent entry;
-    char path[280];
-
-    while (fs_readdir(&dir, &entry) == 0 && entry.name[0] != '\0') {
-        snprintf(path, sizeof(path), "%s/%s", BASE_PATH, entry.name);
-        LOG_INF("Deleting %s", path);
-        fs_unlink(path);
+    /* The format took /lfs/repeater with it.  Re-create it now rather than
+     * relying on the reboot: the CLI defers the reset so the reply can be
+     * transmitted, and anything that saves in that window needs the dir. */
+    _initialized = false;
+    if (!begin()) {
+        LOG_ERR("Factory reset: could not re-create %s", BASE_PATH);
+        return false;
     }
-    fs_closedir(&dir);
-
-#if FIXED_PARTITION_EXISTS(storage_partition)
-    /* Erase the NVS bonds partition too — a factory reset should clear BLE
-     * bonds, not just repeater files.  Caller reboots so NVS re-inits clean. */
-    const struct flash_area *fap;
-    if (flash_area_open(PARTITION_ID(storage_partition), &fap) == 0) {
-        LOG_INF("Formatting NVS storage (%u bytes)", (unsigned)fap->fa_size);
-        flash_area_flatten(fap, 0, fap->fa_size);
-        flash_area_close(fap);
-    }
-#endif
 
     LOG_INF("Repeater data erased");
     return true;

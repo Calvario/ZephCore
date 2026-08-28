@@ -50,6 +50,7 @@ extern "C" void bt_ctlr_assert_handle(char *file, uint32_t line)
 #endif
 
 #include <app/RepeaterDataStore.h>
+#include "../adapters/datastore/ZephyrFsFormat.h"
 #include <app/RepeaterMesh.h>
 #include <adapters/clock/ZephyrRTCClock.h>
 #include <adapters/clock/ZephyrRTCDiscover.h>
@@ -642,6 +643,24 @@ int main(void)
 		gpio_pin_configure_dt(&led1, GPIO_OUTPUT_INACTIVE);
 	}
 #endif
+
+	/* First boot on a volume that is not this role's - a fresh chip, a
+	 * companion, or a node that was running Arduino MeshCore, whose nRF52
+	 * filesystems overlap our lfs_partition
+	 * (devdocs/HANDOVER_lfs_arduino_overlap.md).  Erase everything so we
+	 * start from a known state: Zephyr's automount only
+	 * auto-formats the LittleFS volume when it fails to mount, and never
+	 * touches storage_partition (BLE bonds NVS) or QSPI.
+	 *
+	 * Self-limiting, so it needs no "done" marker: the identity is generated
+	 * and saved a few lines below, and loadPrefs() persists defaults on the
+	 * same boot, so the next boot sees this role's data and skips this. */
+	if (!data_store.hasRoleData()) {
+		LOG_WRN("Volume holds no data for this role - formatting before first boot");
+		if (!zephcore_fs_format_all(nullptr)) {
+			LOG_ERR("First-boot format failed - /lfs is not mounted");
+		}
+	}
 
 	/* Initialize repeater data store */
 	if (!data_store.begin()) {

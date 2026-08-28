@@ -708,7 +708,17 @@ public:
 	const char* getFirmwareVer() override { return FIRMWARE_VERSION; }
 	const char* getBuildDate() override { return FIRMWARE_BUILD_DATE; }
 	const char* getRole() override { return "companion"; }
-	bool formatFileSystem() override { return data_store.formatFileSystem(); }
+	/* CLI `erase`.  Re-stamp the init marker on success, exactly as
+	 * factoryReset() does for the BLE opcode path: the format takes
+	 * /lfs/_zc_init with it, so without this the post-reboot first-boot check
+	 * sees "no marker, no prefs" and runs a second, pointless full format. */
+	bool formatFileSystem() override {
+		bool ok = data_store.formatFileSystem();
+		if (ok) {
+			data_store.writeInitMarker();
+		}
+		return ok;
+	}
 
 	/* Advert — the companion can originate its own self-advert. delay_millis is
 	 * unused (companion sends flood at 0 ms / zero-hop immediately, matching the

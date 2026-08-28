@@ -7,6 +7,7 @@
  */
 
 #include "ZephyrDataStore.h"
+#include "ZephyrFsFormat.h"
 #include <AdvertDataHelpers.h>   // ADV_TYPE_NONE (transient/anon contacts)
 #include <zephyr/fs/fs.h>
 #include <zephyr/fs/littlefs.h>
@@ -371,84 +372,14 @@ void ZephyrDataStore::checkAdvBlobFile()
 
 bool ZephyrDataStore::formatFileSystem()
 {
-	LOG_INF("formatFileSystem: starting...");
+	/* The erase/remount itself lives in ZephyrFsFormat.c so the repeater,
+	 * room server and observer — which build RepeaterDataStore and never
+	 * compile this file — get the identical implementation. */
+	bool ext_mounted = false;
+	bool mounted = zephcore_fs_format_all(&ext_mounted);
 
-	/* Properly unmount from Zephyr's VFS before erasing flash.
-	 * The old unmount() only cleared flags — Zephyr still held /lfs mounted,
-	 * so flash_area_flatten silently destroyed the on-flash superblock while
-	 * LittleFS considered itself active.  Every subsequent file op then hit
-	 * the erased blocks and logged "Corrupted dir pair at {0x0, 0x1}".
-	 * FS_FSTAB_DECLARE_ENTRY exposes the non-static mount struct generated
-	 * from the DTS fstab; fs_mount() on a blank partition auto-formats
-	 * (littlefs_fs.c: lfs_mount fail → lfs_format → lfs_mount). */
-	FS_FSTAB_DECLARE_ENTRY(DT_NODELABEL(lfs));
-	fs_unmount(&FS_FSTAB_ENTRY(DT_NODELABEL(lfs)));
-	lfs_mounted = false;
-
-#if DT_NODE_EXISTS(DT_NODELABEL(qspi_lfs))
-	FS_FSTAB_DECLARE_ENTRY(DT_NODELABEL(qspi_lfs));
-	fs_unmount(&FS_FSTAB_ENTRY(DT_NODELABEL(qspi_lfs)));
-#endif
-	ext_lfs_mounted = false;
-
-	const struct flash_area *fap;
-	int rc;
-
-#if FIXED_PARTITION_EXISTS(lfs_partition)
-	rc = flash_area_open(PARTITION_ID(lfs_partition), &fap);
-	if (rc == 0) {
-		LOG_INF("Formatting LFS partition (%u bytes)", (unsigned)fap->fa_size);
-		flash_area_flatten(fap, 0, fap->fa_size);
-		flash_area_close(fap);
-	}
-#endif
-
-#if FIXED_PARTITION_EXISTS(storage_partition)
-	rc = flash_area_open(PARTITION_ID(storage_partition), &fap);
-	if (rc == 0) {
-		LOG_INF("Formatting NVS storage (%u bytes)", (unsigned)fap->fa_size);
-		flash_area_flatten(fap, 0, fap->fa_size);
-		flash_area_close(fap);
-	}
-#endif
-
-#if FIXED_PARTITION_EXISTS(qspi_storage_partition)
-	/* QSPI if present (any platform) */
-	rc = flash_area_open(PARTITION_ID(qspi_storage_partition), &fap);
-	if (rc == 0) {
-		LOG_INF("Formatting QSPI (%u bytes, may take a while)", (unsigned)fap->fa_size);
-		flash_area_flatten(fap, 0, fap->fa_size);
-		flash_area_close(fap);
-	}
-#endif
-
-	/* Remount: littlefs_mount() auto-formats on blank flash, then mounts. */
-	rc = fs_mount(&FS_FSTAB_ENTRY(DT_NODELABEL(lfs)));
-	bool mounted = (rc == 0);
-	if (mounted) {
-		lfs_mounted = true;
-	}
-
-#if DT_NODE_EXISTS(DT_NODELABEL(qspi_lfs))
-	/* Remount external QSPI too.  We unmounted it above and flattened its
-	 * partition, so it must be re-mounted here — otherwise a runtime format
-	 * (factory reset, or the first-boot "no prefs" auto-format) leaves /ext
-	 * unmounted for the rest of the session.  begin() then reads
-	 * ext_lfs_mounted=false and the store falls back to internal /lfs, so
-	 * contacts/channels save to /lfs and get needlessly migrated back to /ext
-	 * on the next boot ("Migrating contacts to external storage" churn). */
-	{
-		FS_FSTAB_DECLARE_ENTRY(DT_NODELABEL(qspi_lfs));
-		int ext_rc = fs_mount(&FS_FSTAB_ENTRY(DT_NODELABEL(qspi_lfs)));
-		if (is_mounted(extMountPoint())) {
-			ext_lfs_mounted = true;
-			LOG_INF("formatFileSystem: /ext remounted (rc=%d)", ext_rc);
-		} else {
-			ext_lfs_mounted = false;
-			LOG_ERR("formatFileSystem: /ext remount failed (rc=%d)", ext_rc);
-		}
-	}
-#endif
+	lfs_mounted = mounted;
+	ext_lfs_mounted = ext_mounted;
 
 	LOG_INF("formatFileSystem: mount() returned %d", mounted ? 1 : 0);
 	return mounted;

@@ -629,6 +629,10 @@ target_sources(app PRIVATE
   helpers/buzzer_gate.c
   # QSPI bring-up probe. Self-stubs unless CONFIG_ZEPHCORE_QSPI_RDID_PROBE.
   helpers/qspi_probe.c
+  # Factory format of every storage region. Compiled for all roles: the
+  # companion builds ZephyrDataStore, the other three build
+  # RepeaterDataStore, and both call into this.
+  adapters/datastore/ZephyrFsFormat.c
 )
 
 # Boot-time hardware-RTC auto-discovery (compact raw-I2C). Always compiled so

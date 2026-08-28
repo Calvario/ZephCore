@@ -1114,6 +1114,17 @@ Codes `0x80`–`0x90` (`PUSH_CODE_*` in `app/CompanionMesh.h`). Most used:
 | `/lfs/repeater/regions2` | Region map | Header + 164B × N entries |
 | `storage_partition` (NVS, 0xD0000 nRF52) | BLE bonds + Zephyr settings | NVS settings backend (≥1.16.2; old `/lfs/settings` file detected by self-heal) |
 
+> **Roles are not interchangeable.** Each role formats the whole volume on its first boot if the
+> volume holds no data for that role: the companion checks `/lfs/new_prefs`
+> (`ZephyrDataStore::hasPrefs()`), the repeater/room-server/observer check `/lfs/repeater/prefs`
+> and `/lfs/repeater/_main.id` (`RepeaterDataStore::hasRoleData()`). So flashing a repeater over
+> a companion — or the reverse — erases the previous role's identity, prefs and contacts, plus
+> `storage_partition` and QSPI. Export your identity before switching roles. The roles' files
+> never overlap physically (one LittleFS volume, one allocator); the reason for the wipe is that
+> they share 128 KB and the other role's data crowds out writes. Repeater, room server and
+> observer share `/lfs/repeater/` and the same prefs layout, so switching among *those three*
+> preserves the identity.
+
 ### Preferences Binary Layouts
 
 Two distinct field-by-field serializations (NOT raw struct dumps), both Arduino-compatible

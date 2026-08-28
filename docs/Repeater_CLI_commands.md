@@ -127,7 +127,17 @@ Regions control which flood packets the repeater forwards. The region tree is hi
 | `log stop` | Disable packet logging |
 | `log erase` | Erase the log file |
 | `log` | *(USB only)* Dump the full log file to USB serial |
-| `erase` | *(USB only)* Format the entire filesystem |
+| `erase` | *(USB only)* Factory reset: erase the entire LittleFS volume, the BLE-bond NVS, and external QSPI flash, then reboot |
+
+> **`erase` is a true factory reset.** It flattens `lfs_partition` (identity, prefs, ACL,
+> region map, logs), `storage_partition` (BLE bonds) and `qspi_storage_partition` where
+> present — not just the files under `/lfs/repeater/`. The node comes back with a new
+> identity and default prefs. Erasing the volume rather than unlinking files is what makes
+> it able to recover a volume another firmware has written into: on nRF52840 the Adafruit
+> core's filesystem (used by Arduino MeshCore and Meshtastic) sits at 0xED000, inside our
+> `lfs_partition`, and its format scribbles the top 7 blocks of our volume. Switching
+> between Arduino-core firmware and ZephCore on nRF52840 needs an erase in **both**
+> directions — `tools/formatter` or a full chip erase.
 
 ---
 
