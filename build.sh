@@ -273,26 +273,17 @@ if [[ $1 == "esp32" ]]; then
         if [[ $2 == "companions" ]]; then
             # build ESP32 companions (production is the default)
             #
-            # ESP32-S3 boards that include esp32s3_usb_otg.dtsi in their overlay
-            # get the USB CDC-ACM companion transport enabled via esp32s3_usb.conf.
-            # This gives the full companion protocol over native USB (Web Serial /
-            # app.meshcore.io) in addition to BLE.  Boards without the OTG DTSI
-            # (Heltec V3/CP2102, Wireless Tracker V1, C3/C6, classic ESP32) are
-            # unaffected — they use BLE or serial_companion instead.
-            usb_conf=""
-            board_stem="${board%%/*}"
-            overlay="zephcore/boards/esp32/${board_stem}/board.overlay"
-            if [[ $board =~ esp32s3 && -f "$overlay" ]] && grep -q 'esp32s3_usb_otg\.dtsi' "$overlay"; then
-                usb_conf="boards/common/esp32s3_usb.conf"
-            fi
-
+            # The USB CDC-ACM companion transport (boards/common/esp32s3_usb.conf)
+            # is NOT selected here. zephcore/CMakeLists.txt auto-includes it for
+            # companion builds on every S3 board whose board.overlay declares the
+            # USB OTG CDC-ACM node, so a plain build below already gets it — and a
+            # developer building the same board by hand gets identical firmware.
+            # Keeping the choice in one place is the point: release artifacts
+            # already diverge from a plain build in layout (sysbuild/MCUboot), and
+            # a second divergence in which transports the app speaks would make
+            # user bug reports unreproducible from source.
             echo "Now building $board companion"
-            if [[ -n "$usb_conf" ]]; then
-                echo "  USB CDC companion: enabled ($usb_conf)"
-                west build -b "$board" zephcore --pristine --sysbuild -- -DEXTRA_CONF_FILE="$usb_conf"
-            else
-                west build -b "$board" zephcore --pristine --sysbuild
-            fi
+            west build -b "$board" zephcore --pristine --sysbuild
             FLASH_SIZE=$(
                 python3 -c '
 import re
