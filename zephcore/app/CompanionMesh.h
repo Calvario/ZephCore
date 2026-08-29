@@ -164,9 +164,12 @@ public:
 	 * A synthesized CHAT contact visible only to the connected BLE/USB app.
 	 * Messages to it are short-circuited into the CLI before any packet is
 	 * created — nothing ever reaches the dispatcher or the radio. Its pubkey
-	 * is SHA256("zc-vcontact" || self pubkey); no private key exists and it
-	 * is never registered in the RF RX matching path, so over-the-air
-	 * traffic addressed to it is inert. */
+	 * is the Ed25519 point of a keypair seeded from
+	 * SHA256("zc-vcontact" || self prv_key || counter) — a real point, because
+	 * strict clients decompress peer keys and reject anything else. The private
+	 * half is derived and dropped: never stored, never used. The key is never
+	 * registered in the RF RX matching path, so over-the-air traffic addressed
+	 * to it is inert. */
 	void setVContactCLICallback(VContactCLICallback cb) { _vcontact_cli_cb = cb; }
 	bool isVContactEnabled() const { return prefs.v_contact_enabled != 0; }
 	/** Queue an unsolicited v-contact message (battery alert, restart reason).

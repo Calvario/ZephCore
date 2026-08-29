@@ -232,8 +232,9 @@ void CompanionMesh::begin()
 	BaseChatMesh::begin();
 
 	/* Derive the v-contact pubkey from our identity: stable per node, unique
-	 * per device. Deliberately NOT a real keypair — no private key exists
-	 * anywhere, so nothing addressed to this key is decryptable by anyone. */
+	 * per device. A real Ed25519 point (strict clients reject anything else),
+	 * but its private half is derived-and-dropped — never stored, never used —
+	 * and only this node can recompute it. */
 	deriveVContactKey();
 	/* Stamp lastmod only if a time source already ran (hardware RTC restore
 	 * happens before begin()). Otherwise stay deferred (lastmod = 0) until
@@ -1052,13 +1053,71 @@ void CompanionMesh::vcontactFlushConfirm()
 
 void CompanionMesh::deriveVContactKey()
 {
-	/* v-contact pubkey = SHA256("zc-vcontact" || self pubkey). Re-run whenever
-	 * the identity changes (boot, CMD_IMPORT_PRIVATE_KEY) so the key always
-	 * tracks the current identity. */
+	/* v-contact pubkey = the Ed25519 public point of a keypair derived from
+	 * SHA256("zc-vcontact" || self prv_key || counter). Re-run whenever the
+	 * identity changes (boot, CMD_IMPORT_PRIVATE_KEY) so the key always tracks
+	 * the current identity.
+	 *
+	 * This used to be the bare hash SHA256("zc-vcontact" || self pubkey) placed
+	 * straight into a pub_key field. That is wrong on the wire: a uniformly
+	 * random 32-byte string decompresses to a valid Ed25519 point only about
+	 * half the time (the recovered x^2 must be a quadratic residue), so ~50% of
+	 * nodes advertised a v-contact whose key strict clients reject outright —
+	 * they decompress peer keys on contact upsert and on DM build, and error
+	 * with "peer pub_key is not a valid Ed25519 point". ZephCore itself never
+	 * noticed because it only ever memcmp()s this key (see isVContactKey();
+	 * buildVContact() sets shared_secret_valid = false). Deriving the point via
+	 * scalarbase instead makes it valid by construction, for every node.
+	 *
+	 * Seeded from the PRIVATE key, not the public one: the seed then sits
+	 * behind a value no one else holds, so an outsider cannot link a v-contact
+	 * to the node it belongs to, and cannot derive the matching private key.
+	 * Nothing needs that link — the app receives the v-contact through an
+	 * explicit PUSH_CODE_NEW_ADVERT and never derives it. The private half is
+	 * computed here and dropped: it is never stored, never signs, and never
+	 * takes part in a key exchange. Publishing the point leaks nothing about
+	 * the identity — reaching prv from it means solving the Ed25519 discrete
+	 * log AND inverting SHA-512 AND inverting SHA-256.
+	 *
+	 * The counter byte serves the reserved-prefix guard: MeshCore treats
+	 * pub_key[0] of 0x00/0xFF as a protocol marker (same rule as
+	 * ZephyrRNG::generateFirstBootIdentity and validatePrivateKey), and a
+	 * deterministic derivation cannot simply "draw again" without one. Each
+	 * bump re-rolls the whole key; P(a single miss) = 2/256, so the loop
+	 * essentially always ends on the first pass and stays deterministic. */
 	static const char vc_salt[] = "zc-vcontact";
-	mesh::Utils::sha256(_vcontact_pubkey, PUB_KEY_SIZE,
-		(const uint8_t *)vc_salt, sizeof(vc_salt) - 1,
-		self_id.pub_key, PUB_KEY_SIZE);
+	uint8_t material[PRV_KEY_SIZE + 1];
+	uint8_t seed[SEED_SIZE];
+	mesh::LocalIdentity vc;
+
+	/* writeTo()'s buffer format is prv || pub; capping max_len at PRV_KEY_SIZE
+	 * asks for the private half alone. */
+	if (self_id.writeTo(material, PRV_KEY_SIZE) != PRV_KEY_SIZE) {
+		/* Cannot happen — kept so a future signature change fails loudly
+		 * rather than seeding off an uninitialised stack buffer. */
+		LOG_ERR("vcontact: private key unavailable, key not derived");
+		mesh::Utils::secureZeroize(material, sizeof(material));
+		return;
+	}
+
+	for (int counter = 0; counter < 256; counter++) {
+		material[PRV_KEY_SIZE] = (uint8_t)counter;
+		mesh::Utils::sha256(seed, SEED_SIZE,
+			(const uint8_t *)vc_salt, sizeof(vc_salt) - 1,
+			material, sizeof(material));
+		vc.fromSeed(seed);
+		if (vc.pub_key[0] != 0x00 && vc.pub_key[0] != 0xFF) break;
+	}
+	memcpy(_vcontact_pubkey, vc.pub_key, PUB_KEY_SIZE);
+
+	/* material holds the real identity private key, and vc holds the v-key's
+	 * discarded private half. Neither has any business outliving this call.
+	 * LocalIdentity keeps prv_key private and has no wipe of its own, so the
+	 * object is cleared wholesale — it has no virtuals, so there is no vtable
+	 * pointer to destroy. */
+	mesh::Utils::secureZeroize(material, sizeof(material));
+	mesh::Utils::secureZeroize(seed, sizeof(seed));
+	mesh::Utils::secureZeroize(&vc, sizeof(vc));
 }
 
 void CompanionMesh::vcontactPushAdvert()

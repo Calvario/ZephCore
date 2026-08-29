@@ -4,7 +4,7 @@ Storage housekeeping, plus a listen-before-talk fix. The repeater's `erase` neve
 a node flashed from another firmware could start out with somebody else's leftovers underneath it,
 and switching a node between companion and repeater firmware quietly let the two share the same
 128 KB. Separately, the channel-activity detector was using the wrong reference table on LR1110
-boards.
+boards, and the companion's built-in `v` contact carried an unusable key on about half of all nodes.
 
 > [!IMPORTANT]
 > **Read the role-switching section before you flash a different role onto an existing node.** A
@@ -112,6 +112,27 @@ unless you run a 250 or 500 kHz bandwidth, where the old value was up to ten cou
 > This is a first release of the corrected tables. They are verified against Semtech's reference and
 > against on-air measurements from three nodes, but not yet across a season or a busy site. If a node
 > starts deferring noticeably more or less than it used to, `get cad.stats` shows what it is measuring.
+
+---
+
+## The built-in `v` contact had an unusable key on half of all nodes
+
+Every companion offers a contact named after itself with a `v` in front — the loopback chat that runs
+the console commands. Its key was built in a way that produced something key-shaped but, on roughly
+half of all nodes, not a valid key for the curve the protocol uses.
+
+The official app never checked and so never minded. Other clients do check, and refused either to add
+the contact or to send it a message. That is why the v-contact has worked for some people and not for
+others with no apparent pattern: it was a coin flip settled when the node's identity was created, and
+nothing the owner did afterwards could change the outcome.
+
+The key is now derived properly and is valid on every node. Nothing else about the v-contact moves —
+it is still local to the app, still never touches the radio, and still has no private key stored
+anywhere.
+
+> [!IMPORTANT]
+> **The v-contact's key changes with this release, so your app will keep showing the old one.** Delete
+> the leftover `v<name>` entry by hand. The new one arrives on its own the next time the app connects.
 
 ---
 

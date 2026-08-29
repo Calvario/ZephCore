@@ -611,9 +611,18 @@ unsolicited notices: a one-shot low-battery alert and a restart-reason message
 (all causes: PIN/SOFTWARE/BROWNOUT/POR/WATCHDOG/LOCKUP — offline-queue only,
 so routine power-on "noise" costs nothing over the air).
 
-**Identity**: pubkey = `SHA256("zc-vcontact" || self_pubkey)` — stable per
-node, unique per device, and deliberately **not a real keypair**: no private
-key exists anywhere.
+**Identity**: seed = `SHA256("zc-vcontact" || self_prv_key || counter)`,
+pubkey = that seed's Ed25519 public point — stable per node, unique per device.
+It is a **real curve point**, which the bare hash it replaced was not: a random
+32-byte string decompresses to a valid Ed25519 point only ~50% of the time, so
+half of all nodes advertised a v-contact that strict clients reject on contact
+upsert and DM build ("peer pub_key is not a valid Ed25519 point"). ZephCore
+never noticed because it only `memcmp`s this key. The `counter` byte re-rolls
+the key on the protocol-reserved `0x00`/`0xFF` prefix (P = 2/256 per try).
+
+Seeding from the *private* key keeps the v-contact unlinkable to its node by
+outsiders, and its private half is **derived and dropped** — never stored,
+never signs, never does ECDH. Only this node can recompute it.
 
 **No-RF invariants** (all enforced in `CompanionMesh`):
 1. `vcontactHandleFrame()` intercepts `CMD_SEND_TXT_MSG` (and the handful of
