@@ -123,4 +123,20 @@ uint8_t LR1110Radio::hwCadBasePeak()
 	return lr11xx_cad_base_peak(_dev);
 }
 
+/* The detPeak range lr11xx_do_cad() will actually program.  Must match the
+ * driver's clamp exactly: if the adapter thinks the range is wider, the
+ * staircase explores offsets that collapse onto one peak and reads the noise
+ * between them as curvature.  Same reasoning as LR2021Radio::hwCadPeakMin —
+ * and the same symptom was observed here on T1000-E companions, which sat at
+ * o:-8 with the driver's old floor of 48 already reached. */
+uint8_t LR1110Radio::hwCadPeakMin()
+{
+	return lr11xx_cad_peak_min();
+}
+
+uint8_t LR1110Radio::hwCadPeakMax()
+{
+	return lr11xx_cad_peak_max();
+}
+
 } /* namespace mesh */

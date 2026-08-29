@@ -452,7 +452,8 @@ cap** — step up when the operating busy rate exceeds `cad_busycap` (percent,
 `set cad.busycap`, default 25, 0=off); self-targeting since only busy nodes
 reach it, and effectively a faint-tolerance dial (lower = reject faint harder).
 Each step needs ≥`CAD_STEP_MIN_PROBES` (120); offset clamped to **−8…+12**
-*narrowed by the driver's own detPeak clamp* (SX126x 15–40, LR 48–90), persisted
+*narrowed by the driver's own detPeak clamp* (SX126x 12–48, LR11xx 40–100,
+LR20xx 48–90), persisted
 via `Dispatcher::onCadOffsetChanged()`. The narrowing is not cosmetic: where
 `base + offset` falls outside the hardware clamp, several offsets program the
 **same** peak, and the staircase then compares rungs that are physically
@@ -463,7 +464,7 @@ level the controller can reach is a distinct configuration and the `pk` shown by
 4-symbol base is 51 at SF5–7 (effective −3…+12) and 54 at SF8 (−6…+12); the
 LR11xx's lowest base of 56 already lands exactly on the 48 floor at −8, so its
 full window is usable and it keeps the static range. AN1200.48 recommends 21–29
-for SX126x (base `SF+13`), tuned to catch faint — LBT may deliberately sit above
+for SX126x (base from Semtech's LBM table, bandwidth-aware), tuned to catch faint — LBT may deliberately sit above
 it. Probe +
 offset plumbing is per-driver extension API (`*_cad_probe`,
 `*_cad_set_peak_offset`, `*_cad_base_peak`); LBT CAD runs 4 symbols (set in

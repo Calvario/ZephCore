@@ -42,8 +42,8 @@ lowering it means "hear even the faint stuff."** There is no knob that
 separates *near* from *far* — only *strong* from *faint* — because the
 radio only ever knew signal strength, never distance.
 
-**Semtech's recommended values (AN1200.48: 21–29 across all SF/BW for the
-SX126x; our base is `SF+13`, which is 21 at SF8) are tuned for a
+**Semtech's recommended values (21–29 across all SF/BW for the SX126x;
+our base is their table, ~20–24 at BW125) are tuned for a
 receiver** that wants to hear everything down to its sensitivity limit —
 i.e. to *catch the faint*. Listen-before-talk on a busy backbone often
 wants the opposite: deliberately sit *above* that band so it ignores faint
@@ -51,13 +51,30 @@ contention it would win on capture anyway. So "operating above 29" is not
 a misconfiguration here; it is the point.
 
 **Scale sanity, because the register is deceptive.** `cadDetPeak` is a
-full 8-bit field (0–255), but the *useful* range is only ~18–32. The
-driver's 40 ceiling is ~11 above the highest value Semtech recommends
-anywhere — a near-blind guardrail, not an operating point. And the
-LR11xx/LR2021 family's 56–68 numbers are a **different chip's correlation
-scale**; porting them onto an SX126x makes CAD deaf. If a value feels like
-it should be "mid-scale," that instinct is the trap: this scale is
-compressed, not linear over 0–255.
+full 8-bit field (0–255), but the *useful* range is only ~18–35 on the
+SX126x. The driver's 48 ceiling is well above the highest value Semtech
+recommends anywhere — a near-blind guardrail, not an operating point. And
+the LR11xx/LR2021 family's ~50–85 numbers are a **different chip's
+correlation scale**; porting them onto an SX126x makes CAD deaf. If a
+value feels like it should be "mid-scale," that instinct is the trap: this
+scale is compressed, not linear over 0–255.
+
+**Bandwidth matters, and it matters unequally.** Semtech's tables are
+bracketed by bandwidth, not just SF. On the SX126x the effect is mild —
+1–3 counts per octave — but on the LR11xx it is roughly 12 counts per
+octave (at SF7: 52 at BW125, 64 at BW250, 77 at BW500). A bandwidth-blind
+base table is therefore a small error on one family and a large one on the
+other. This is not theoretical: the LR11xx base table used to be
+bandwidth-blind *and* taken from the wrong chip (it was the LR20xx
+2-symbol row), reading 56 at SF7 where Semtech says 52. Field T1000-E
+companions at SF7/BW62.5 walked eight rungs down to the offset rail
+because of it, while an SX1262 in the same room settled at −1.
+
+Below BW125 Semtech declines to give any value, and MeshCore's default
+preset is BW62.5 — so our normal operating point is off the end of the
+published tables. Both drivers reuse the BW125 row there rather than
+extrapolating the trend downward: the curve is noisy empirical PER data,
+and the staircase's whole job is to find the local value anyway.
 
 **Why the probes only ever measure the faint side.** A calibration probe
 is *skipped* whenever RSSI is more than 7 dB above the noise floor (a
@@ -99,8 +116,10 @@ duty cycle is briefly interrupted and re-armed, within the same
 preamble-catch budget philosophy the sniff-mode math already accepts.
 
 Each probe tests one **level**: a signed offset from the chip family's
-per-SF base detPeak (SX126x: `SF+13`; LR11xx/LR2021: the 56–68 table).
-Results accumulate per level:
+base detPeak for the current SF, bandwidth and CAD symbol count (all three
+from Semtech's LoRa Basics Modem reference tables — SX126x ~18–34, LR11xx
+~50–85, LR2021 its own symbol-indexed table). Results accumulate per
+level:
 
 - `probes` — how many CADs ran at this level
 - `busy` — raw "activity detected" verdicts
@@ -180,7 +199,12 @@ offset is persisted to flash whenever it steps.
 The offset is clamped to **−8…+12** levels around the family base — wide
 enough that a dense hilltop can settle much less sensitive and a quiet
 valley node much more sensitive. The driver additionally clamps the
-absolute detPeak (SX126x 15–40, LR11xx/LR20xx 48–90). That absolute clamp
+absolute detPeak (SX126x 12–48, LR11xx 40–100, LR20xx 48–90), and now
+*reports* that clamp to the controller, which narrows the offset window to
+match. That reporting matters: where base+offset falls outside the clamp,
+several offsets collapse onto the same peak, and the staircase reads the
+sampling noise between identical configurations as curvature — which is
+how a node can random-walk to a rail. That absolute clamp
 is a *firmware guardrail*, not a chip limit — `cadDetPeak` is a full
 8-bit register (0–255) — it simply stops the staircase from wandering
 into "CAD never fires" (detPeak too high → LBT effectively off) or "CAD

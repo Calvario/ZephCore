@@ -1698,20 +1698,97 @@ int16_t lr11xx_get_chip_temp_c(const struct device *dev)
 
 /* ── Driver API: CAD ────────────────────────────────────────────────── */
 
-/* Recommended cad_detect_peak values per SF for 2-symbol CAD.
- * From Semtech SX1261/62/68 / LR1110 reference (same silicon IP). */
-static uint8_t lr11xx_cad_detect_peak(uint8_t sf)
+/* Recommended cad_detect_peak, from Semtech's own reference stack:
+ * LoRa Basics Modem v4.9.0, ral_lr11xx.c ral_lr11xx_get_lora_cad_det_peak().
+ *
+ * Provenance matters here, because the table this replaces was wrong twice
+ * over.  It was `{56,56,56,58,58,60,64,68}`, labelled "from SX1261/62/68 /
+ * LR1110 reference (same silicon IP)" — but that is byte-for-byte the *LR20xx*
+ * 2-symbol row (ral_lr20xx.c), i.e. the wrong chip family, sampled at the wrong
+ * symbol count.  The SX126x scale is ~20-35 and shares nothing with this one.
+ * The error was worst at SF6/SF7, where it read 56 against Semtech's 52, and it
+ * is what drove field units eight rungs down to the offset rail: measured on
+ * two T1000-E companions at SF7/BW62.5, both pinned at o:-8 with a flat, clean
+ * FP curve, one of them also sitting on the driver's own peak clamp.
+ *
+ * Unlike the LR20xx, this family's detPeak is strongly bandwidth-dependent —
+ * at SF7 Semtech spans 52/64/77 across BW125/250/500, ~12 counts per octave,
+ * against ~1-3 per octave on the SX126x.  A bandwidth-blind base table is
+ * therefore a much larger error here than it is there, which is precisely why
+ * the SX1262 in the same room settled at offset -1 while these walked to -8.
+ *
+ * Below BW125 Semtech returns RAL_STATUS_UNKNOWN_VALUE and offers nothing.  We
+ * run BW62.5 by default, so that gap is our normal operating point.  We reuse
+ * the BW125 row there rather than extrapolating the trend downward: the curve
+ * is empirical PER-test data with visible noise (SF9 breaks monotonicity in all
+ * three brackets), a one-octave extrapolation at SF7 would invent ~40, and we
+ * already run a closed-loop controller whose entire job is to find the local
+ * value.  Reusing BW125 leaves the adaptive offset a short, well-centred walk
+ * instead of substituting a guess for a measurement we take anyway. */
+static uint8_t lr11xx_cad_detect_peak(uint8_t sf, uint16_t bw_khz, uint8_t symb_nb)
 {
-	switch (sf) {
-	case 5:  case 6:  return 56;
-	case 7:           return 56;
-	case 8:           return 58;
-	case 9:           return 58;
-	case 10:          return 60;
-	case 11:          return 64;
-	case 12:          return 68;
-	default:          return 60;
+	/*        SF5 SF6 SF7 SF8 SF9 SF10 SF11 SF12 */
+	static const uint8_t bw500[8] = { 65, 70, 77, 85, 78, 80, 79, 82 };
+	static const uint8_t bw250[8] = { 60, 61, 64, 72, 63, 71, 73, 75 };
+	static const uint8_t bw125[8] = { 56, 52, 52, 58, 58, 62, 66, 68 };
+	const uint8_t *row;
+	int peak;
+
+	if (sf < 5 || sf > 12) {
+		sf = 9;  /* mid-range fallback */
 	}
+
+	if (bw_khz >= 500) {
+		row = bw500;
+	} else if (bw_khz >= 250) {
+		row = bw250;
+	} else {
+		/* BW125 and everything narrower — see the note above. */
+		row = bw125;
+	}
+	peak = (int)row[sf - 5];
+
+	/* More symbols means more looks at the same correlation, so the same
+	 * detection quality is reached at a lower threshold.  Semtech applies
+	 * this correction after the table lookup; we run 4 symbols everywhere
+	 * (LORA_CAD_SYMB_4 in LoRaRadioBase::buildModemConfig), so it always
+	 * bites, and omitting it was one further count of the SF7 error. */
+	if (symb_nb >= 8) {
+		peak -= 2;
+	} else if (symb_nb >= 4) {
+		peak -= 1;
+	}
+
+	return (uint8_t)peak;
+}
+
+/* The detPeak range this driver will actually program.  Exported through
+ * lr11xx_cad_peak_min/max() so the C++ adaptive-CAD controller can narrow its
+ * offset window to match: where base+offset falls outside this, several offsets
+ * collapse onto one peak and the staircase reads sampling noise between
+ * identical configurations as curvature.  That is not hypothetical — it is the
+ * documented failure mode on the LR2021 (see LR2021Radio::hwCadPeakMin), and
+ * the old 48 floor here reproduced it on the LR1110 at SF7.
+ *
+ * The bounds are chosen so the clamp never truncates the offset window itself:
+ * the lowest base this table yields is 51 (SF6/SF7, BW<=125, 4 symbols), and
+ * CAD_LEVEL_MIN is -8, so anything above 43 would silently collapse the bottom
+ * rungs; the highest base is 85 (SF8, BW500) and CAD_LEVEL_MAX is +12.  Within
+ * those, CAD_LEVEL_MIN/MAX remain the real limit and this is only a guardrail
+ * against "CAD never fires" / "CAD always busy".  40 is also roughly where
+ * Semtech's own BW trend extrapolates for the sub-125 bandwidths it declines to
+ * tabulate, which is where our default preset lives. */
+#define LR11XX_CAD_PEAK_MIN 40
+#define LR11XX_CAD_PEAK_MAX 100
+
+uint8_t lr11xx_cad_peak_min(void)
+{
+	return LR11XX_CAD_PEAK_MIN;
+}
+
+uint8_t lr11xx_cad_peak_max(void)
+{
+	return LR11XX_CAD_PEAK_MAX;
 }
 
 static int lr11xx_do_cad(struct lr11xx_data *data)
@@ -1720,23 +1797,23 @@ static int lr11xx_do_cad(struct lr11xx_data *data)
 	struct lora_modem_config *mc = &data->modem_cfg;
 
 	uint8_t sf = (uint8_t)mc->datarate;
-	uint8_t symb_nb = 2;
-	uint8_t detect_peak = lr11xx_cad_detect_peak(sf);
+	/* Both the table lookup and the timeout need the symbol count, so it is
+	 * resolved before the base peak rather than after it. */
+	uint8_t symb_nb = mc->cad.symbol_num ? (uint8_t)mc->cad.symbol_num : 2;
+	uint16_t bw_khz = (uint16_t)bw_enum_to_khz(mc->bandwidth);
+	uint8_t detect_peak = lr11xx_cad_detect_peak(sf, bw_khz, symb_nb);
 
-	if (mc->cad.symbol_num != 0) {
-		symb_nb = (uint8_t)mc->cad.symbol_num;
-	}
 	if (mc->cad.detection_peak != 0) {
 		detect_peak = mc->cad.detection_peak;
 	} else if (data->cad_peak_offset != 0) {
 		/* Adaptive-CAD operating offset (base +/- learned delta).
-		 * LR11xx detPeak scale is ~48-90 — never mix with SX126x. */
+		 * LR11xx detPeak scale is ~50-85 — never mix with SX126x. */
 		int peak = (int)detect_peak + data->cad_peak_offset;
 
-		if (peak < 48) {
-			peak = 48;
-		} else if (peak > 90) {
-			peak = 90;
+		if (peak < LR11XX_CAD_PEAK_MIN) {
+			peak = LR11XX_CAD_PEAK_MIN;
+		} else if (peak > LR11XX_CAD_PEAK_MAX) {
+			peak = LR11XX_CAD_PEAK_MAX;
 		}
 		detect_peak = (uint8_t)peak;
 	}
@@ -1845,7 +1922,15 @@ uint8_t lr11xx_cad_base_peak(const struct device *dev)
 {
 	struct lr11xx_data *data = dev->data;
 
-	return lr11xx_cad_detect_peak((uint8_t)data->modem_cfg.datarate);
+	/* Must mirror lr11xx_do_cad()'s lookup exactly — bandwidth and symbol
+	 * count included.  This is what `get cad` prints as the base and what
+	 * the C++ staircase offsets from, so a base that disagreed with the
+	 * peak actually programmed would make every rung a lie. */
+	return lr11xx_cad_detect_peak(
+		(uint8_t)data->modem_cfg.datarate,
+		(uint16_t)bw_enum_to_khz(data->modem_cfg.bandwidth),
+		data->modem_cfg.cad.symbol_num
+			? (uint8_t)data->modem_cfg.cad.symbol_num : 2);
 }
 
 int lr11xx_cad_probe(const struct device *dev, int8_t peak_offset)
@@ -1855,10 +1940,10 @@ int lr11xx_cad_probe(const struct device *dev, int8_t peak_offset)
 	int peak = base + peak_offset;
 	int ret;
 
-	if (peak < 48) {
-		peak = 48;
-	} else if (peak > 90) {
-		peak = 90;
+	if (peak < LR11XX_CAD_PEAK_MIN) {
+		peak = LR11XX_CAD_PEAK_MIN;
+	} else if (peak > LR11XX_CAD_PEAK_MAX) {
+		peak = LR11XX_CAD_PEAK_MAX;
 	}
 
 	/* One-shot absolute override consumed by lr11xx_do_cad().  Probes and

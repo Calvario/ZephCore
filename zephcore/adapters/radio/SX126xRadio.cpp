@@ -151,6 +151,20 @@ uint8_t SX126xRadio::hwCadBasePeak()
 	return sx126x_cad_base_peak(_dev);
 }
 
+/* The detPeak range sx126x_do_cad() will actually program.  Must match the
+ * driver's clamp exactly: if the adapter thinks the range is wider, the
+ * staircase explores offsets that collapse onto one peak and reads the noise
+ * between them as curvature.  Same reasoning as LR2021Radio::hwCadPeakMin. */
+uint8_t SX126xRadio::hwCadPeakMin()
+{
+	return sx126x_cad_peak_min();
+}
+
+uint8_t SX126xRadio::hwCadPeakMax()
+{
+	return sx126x_cad_peak_max();
+}
+
 uint32_t SX126xRadio::getDutyCycleTimeoutRestarts() const
 {
 	return sx126x_get_dc_timeout_restarts(_dev);

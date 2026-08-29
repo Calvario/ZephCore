@@ -162,12 +162,29 @@ void sx126x_reset_dc_timeout_restarts(const struct device *dev);
 void sx126x_cad_set_peak_offset(const struct device *dev, int8_t offset);
 
 /**
- * @brief Per-SF base cadDetPeak for the currently configured SF
+ * @brief Base cadDetPeak for the current SF, bandwidth and CAD symbol count
  *
  * @param dev LoRa device
- * @return Base detPeak (SF + 13 on this family)
+ * @return Base detPeak (roughly 18-34 on this family)
  */
 uint8_t sx126x_cad_base_peak(const struct device *dev);
+
+/**
+ * @brief Lowest detPeak this driver will program.
+ *
+ * The C++ adaptive-CAD controller narrows its offset window to this range so it
+ * never explores offsets that collapse onto one peak.
+ *
+ * @return Minimum absolute detPeak
+ */
+uint8_t sx126x_cad_peak_min(void);
+
+/**
+ * @brief Highest detPeak this driver will program.
+ *
+ * @return Maximum absolute detPeak
+ */
+uint8_t sx126x_cad_peak_max(void);
 
 /**
  * @brief Run one blocking calibration CAD at base detPeak + peak_offset

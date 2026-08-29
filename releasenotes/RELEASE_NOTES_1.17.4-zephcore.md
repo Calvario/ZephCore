@@ -1,9 +1,10 @@
 # ZephCore 1.17.4-zephcore
 
-Storage housekeeping. The repeater's `erase` command never actually erased anything, a node flashed
-from another firmware could start out with somebody else's leftovers underneath it, and switching a
-node between companion and repeater firmware quietly let the two share the same 128 KB. All three are
-fixed, and the last one is now deliberate and loud rather than quiet.
+Storage housekeeping, plus a listen-before-talk fix. The repeater's `erase` never actually erased,
+a node flashed from another firmware could start out with somebody else's leftovers underneath it,
+and switching a node between companion and repeater firmware quietly let the two share the same
+128 KB. Separately, the channel-activity detector was using the wrong reference table on LR1110
+boards.
 
 > [!IMPORTANT]
 > **Read the role-switching section before you flash a different role onto an existing node.** A
@@ -18,82 +19,99 @@ fixed, and the last one is now deliberate and loud rather than quiet.
 
 ## `erase` now erases
 
-On a repeater or room server, `erase` promised to format the entire filesystem. It did not. It deleted
-the handful of files it had put in its own folder and cleared the phone pairings, and left everything
-else exactly where it was.
+On a repeater or room server, `erase` promised to format the entire filesystem. It deleted the files
+in its own folder and cleared the phone pairings, and left everything else where it was.
 
-Most of the time nobody noticed, because on a healthy node those files *are* everything that matters.
-It mattered when the node was not healthy — which is precisely when somebody reaches for `erase`. If
-anything had written into the storage area from outside, deleting our own files could not undo it, and
-the command reported success while the problem stayed.
+That only mattered when a node was unhealthy — which is precisely when somebody reaches for `erase`.
+If anything had written into the storage area from outside, deleting our own files could not undo it,
+and the command reported success while the problem stayed.
 
-`erase` now wipes the storage area itself, the phone-pairing store, and external flash where a board has
-it, then reboots. The node comes back with a new identity and default settings, exactly like a node out
-of the box.
+`erase` now wipes the storage area, the phone-pairing store, and external flash where a board has it,
+then reboots. The node comes back exactly like one out of the box.
 
 > [!IMPORTANT]
 > **This is a genuine factory reset now, and it takes the identity with it.** Anyone who had your node
-> in their contacts will need to add it again, and an admin password, ACL and region map all go too.
-> That was always what the command claimed to do; it is now what it does.
+> in their contacts will need to add it again, and the admin password, ACL and region map go too.
 
-The companion's `erase` already worked this way. Repeater, room server and observer share one
-implementation with it now, so there is one behaviour to remember instead of two.
+The companion's `erase` already worked this way. Repeater, room server and observer now share its
+implementation, so there is one behaviour to remember instead of two.
 
 ---
 
 ## Switching a node between roles now wipes it
 
-Companion firmware and repeater firmware kept their files in separate folders, and until now each left
-the other's alone. Flashing back and forth preserved both sets.
+Companion and repeater firmware keep their files in separate folders, and until now each left the
+other's alone. Flashing back and forth preserved both sets.
 
-That sounds generous and was not. The two roles share a single 128 KB storage area. A companion that has
-collected a few hundred contacts and a full advert cache leaves noticeably less room for a repeater's
-region map and access list, and a write that no longer fits simply fails. The node is not corrupted —
-the two roles' files never sit on top of each other — it just runs out of space for reasons its owner
-cannot see, because half of what is stored belongs to firmware that is not running.
+That sounds generous and was not. The two roles share a single 128 KB storage area, so a companion's
+few hundred contacts and full advert cache leave noticeably less room for a repeater's region map and
+access list — and a write that no longer fits simply fails. Nothing is corrupted; the node just runs
+out of space for reasons its owner cannot see, because half of what is stored belongs to firmware that
+is not running.
 
-They are also two quite different kinds of node, and treating one machine as quietly holding both was
-never worth the space it cost.
-
-From 1.17.4, each role checks on first boot whether the storage belongs to it, and formats everything if
-not. So a repeater flashed onto a former companion starts empty, and a companion flashed onto a former
-repeater starts empty.
+From 1.17.4 each role checks on first boot whether the storage belongs to it, and formats everything
+if not.
 
 > [!IMPORTANT]
-> **Export your identity before switching roles.** The node's identity, settings, contacts, channels,
-> access list, region map and phone pairings all go. There is no undo and no warning prompt — the first
-> boot on the new firmware has already done it by the time you see anything.
+> **Export your identity before switching roles.** Identity, settings, contacts, channels, access list,
+> region map and phone pairings all go. There is no undo and no prompt — the first boot on the new
+> firmware has already done it by the time you see anything.
 
 > [!NOTE]
-> **Repeater, room server and observer still share.** Those three keep their files in the same place and
-> use the same settings layout, so moving between them keeps the node's identity and configuration. It
-> is the companion that is now separate.
+> **Repeater, room server and observer still share.** Those three keep their files in the same place
+> and use the same settings layout, so moving between them keeps identity and configuration. It is the
+> companion that is now separate.
 
 ---
 
 ## A node coming from other firmware starts clean
 
-Flashing ZephCore onto hardware that was running something else is a normal thing to do, and it used to
-leave more behind than anyone expected.
+Nothing about installing firmware erases storage. Dragging a UF2 writes the program and nothing else,
+and each firmware only clears the piece of flash it believes is its own. On the nRF52840 boards,
+Arduino MeshCore's storage sits inside the region ZephCore uses, so whichever boots first tidies its
+own corner and leaves the rest. On one Seeed Solar Node that produced a repeater which came up looking
+perfectly healthy and silently refused to forward anything, because a single setting deep inside its
+configuration had been overwritten by another firmware's bytes.
 
-Nothing about installing firmware erases storage. Dragging a UF2 file writes the program and nothing
-else, and each firmware only ever clears the piece of flash it believes is its own. On the nRF52840
-boards, Arduino MeshCore's storage sits inside the same region ZephCore uses, so the two overlap — and
-whichever one boots first tidies up its own corner and leaves the rest of the other's files sitting
-there. The result on one Seeed Solar Node was a repeater that came up looking perfectly healthy and
-silently refused to forward anything, because a single setting deep inside its configuration had been
-overwritten by bytes that belonged to a different firmware.
-
-Each role now checks on first boot whether the storage is its own and, if not, clears the whole lot —
-the storage area, the phone-pairing store, and external flash — before writing anything. A node arriving
-from another firmware, or from a factory-fresh chip, starts from a known state instead of an inherited
-one.
+Each role now checks on first boot whether the storage is its own and, if not, clears the whole lot
+before writing anything.
 
 > [!IMPORTANT]
-> **Moving between Arduino MeshCore and ZephCore still needs an erase in both directions.** ZephCore now
-> cleans up on the way in, but it cannot clean up on the way out — going back to Arduino MeshCore leaves
-> ZephCore's files inside the area Arduino will use. Run the formatter UF2, or a full chip erase, when
-> you switch either way. This is not new advice; it is now written down.
+> **Moving between Arduino MeshCore and ZephCore still needs an erase in both directions.** ZephCore
+> cleans up on the way in but cannot clean up on the way out. Run the formatter UF2, or a full chip
+> erase, when you switch either way.
+
+---
+
+## Listen-before-talk was too cautious on LR1110 boards
+
+Before transmitting, a node listens for a LoRa signal already on the air. How faint a signal counts is
+set by a per-chip threshold, and ZephCore tunes it automatically from what each node measures.
+
+The starting values for that tuning came from a reference table — and on the LR1110 it was the wrong
+table, copied from a different Semtech chip and read at the wrong setting. It started roughly five
+steps too insensitive, so those nodes spent weeks walking the threshold down and still hit the limit of
+how far they were allowed to adjust. Two nodes sitting in one room made it visible: an SX1262 settled
+one step from its starting point while the LR1110s next to it were pinned at the end of their range.
+
+The tables now come from Semtech's own reference code, and they take **bandwidth** into account, which
+nothing did before. That barely moves the SX1262 — a count or two, and nothing at all at the default
+preset — but on the LR1110 bandwidth is worth around twelve counts per doubling, which is most of the
+error. The range each node may adjust within is wider, and the radio now tells the tuner where its own
+limits are, so a node can no longer sit against a wall it cannot see.
+
+Affected boards: **T1000-E**, **ThinkNode M3** and **ThinkNode M9**. On SX1262 boards nothing changes
+unless you run a 250 or 500 kHz bandwidth, where the old value was up to ten counts too sensitive.
+
+> [!NOTE]
+> **Run `set cad.reset` after upgrading.** The tuning statistics your node collected are measured
+> against the old starting point and are not comparable to the new one. Clearing them lets the tuner
+> re-converge cleanly; left alone it blends two sets of readings. Everything else is automatic.
+
+> [!IMPORTANT]
+> This is a first release of the corrected tables. They are verified against Semtech's reference and
+> against on-air measurements from three nodes, but not yet across a season or a busy site. If a node
+> starts deferring noticeably more or less than it used to, `get cad.stats` shows what it is measuring.
 
 ---
 
@@ -102,6 +120,5 @@ one.
 Nothing here changes how a node behaves.
 
 - **A wasted erase on the companion.** Running `erase` from the companion's USB console formatted the
-  storage, then formatted it a second time on the reboot that followed, because the marker saying "this
-  node has been set up" went out with everything else. The pairing-based factory reset never had this
-  problem. Both paths behave the same way now.
+  storage, then formatted it again on the reboot that followed, because the marker saying "this node
+  has been set up" went out with everything else. Both paths behave the same way now.

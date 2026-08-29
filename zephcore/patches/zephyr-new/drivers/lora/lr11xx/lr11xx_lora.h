@@ -132,9 +132,27 @@ void lr11xx_cad_set_peak_offset(const struct device *dev, int8_t offset);
  * @brief Per-SF base cadDetPeak for the currently configured SF
  *
  * @param dev LoRa device
- * @return Base detPeak (56-68 on this family)
+ * @return Base detPeak for the current SF, bandwidth and CAD symbol count
+ *         (roughly 50-85 on this family; strongly bandwidth-dependent)
  */
 uint8_t lr11xx_cad_base_peak(const struct device *dev);
+
+/**
+ * @brief Lowest detPeak this driver will program.
+ *
+ * The C++ adaptive-CAD controller narrows its offset window to this range so it
+ * never explores offsets that collapse onto one peak.
+ *
+ * @return Minimum absolute detPeak
+ */
+uint8_t lr11xx_cad_peak_min(void);
+
+/**
+ * @brief Highest detPeak this driver will program.
+ *
+ * @return Maximum absolute detPeak
+ */
+uint8_t lr11xx_cad_peak_max(void);
 
 /**
  * @brief Run one blocking calibration CAD at base detPeak + peak_offset

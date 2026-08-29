@@ -40,6 +40,8 @@ protected:
 	int hwCadProbe(int8_t level) override;
 	void hwCadSetPeakOffset(int8_t offset) override;
 	uint8_t hwCadBasePeak() override;
+	uint8_t hwCadPeakMin() override;
+	uint8_t hwCadPeakMax() override;
 };
 
 } /* namespace mesh */
