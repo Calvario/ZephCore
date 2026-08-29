@@ -553,7 +553,7 @@ Regenerate with:
 appended to this preamble.
 
 diff --git a/drivers/lora/native/sx126x/sx126x.c b/drivers/lora/native/sx126x/sx126x.c
-index 30243ba5dc7..aa0732b1de9 100644
+index 30243ba5dc7..16823387b1d 100644
 --- a/drivers/lora/native/sx126x/sx126x.c
 +++ b/drivers/lora/native/sx126x/sx126x.c
 @@ -6,72 +6,220 @@
@@ -2674,9 +2674,9 @@ index 30243ba5dc7..aa0732b1de9 100644
 +static int sx126x_do_cad(const struct device *dev, struct sx126x_data *data)
 +{
 +	struct lora_modem_config *mc = &data->config;
-+	uint8_t sf = (uint8_t)mc->datarate;
-+	/* Both the table lookup and the timeout need the symbol count, so it is
-+	 * resolved before the base peak rather than after it. */
++	/* No local sf: sx126x_cad_base_peak_cfg() reads the SF, bandwidth and
++	 * symbol count off mc itself, which is what keeps it agreeing with
++	 * sx126x_cad_base_peak() and sx126x_cad_probe(). */
 +	uint8_t symb_nb = mc->cad.symbol_num ? (uint8_t)mc->cad.symbol_num : 2;
 +	uint8_t detect_peak = sx126x_cad_base_peak_cfg(mc);
 +	int ret;
