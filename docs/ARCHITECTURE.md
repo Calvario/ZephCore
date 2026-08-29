@@ -1079,7 +1079,7 @@ Over USB CDC (and native-Linux TCP): framed with a length prefix — `[2B LE len
 
 ### Key Command Opcodes (phone → device)
 
-The full set (~50 opcodes, `0x01`–`0x41`) is defined at the top of `app/CompanionMesh.cpp`; values match the Arduino MeshCore companion protocol. A sample:
+The full set (~50 opcodes, `0x01`–`0x42`) is defined at the top of `app/CompanionMesh.cpp`; values match the Arduino MeshCore companion protocol. A sample:
 
 | Opcode | Name | Payload |
 |--------|------|---------|

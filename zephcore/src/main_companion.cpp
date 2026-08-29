@@ -1090,9 +1090,9 @@ static bool companion_shutdown_hook(int reason)
 /* Transport-neutral CLI line execution — runs on the MAIN thread only
  * (CommonCLI::handleCommand touches mesh state shared with loop()). Both the
  * USB text sideband and the v-contact chat funnel through here. `reply` must
- * be CLI_REPLY_SIZE (== VCONTACT_CLI_REPLY_SIZE). */
-static_assert(VCONTACT_CLI_REPLY_SIZE == CLI_REPLY_SIZE,
-	      "v-contact reply buffer must match CommonCLI reply size");
+ * be CLI_REPLY_SIZE (== COMPANION_CLI_REPLY_SIZE). */
+static_assert(COMPANION_CLI_REPLY_SIZE == CLI_REPLY_SIZE,
+	      "companion CLI reply buffer must match CommonCLI reply size");
 
 static void companion_cli_exec(const char *line, char *reply)
 {
@@ -1510,7 +1510,7 @@ int main(void)
 		zephcore_ble_set_passkey(new_pin);
 	});
 	/* V-contact chat lines run the same CLI as the USB text sideband. */
-	companion_mesh.setVContactCLICallback(companion_cli_exec);
+	companion_mesh.setCLICallback(companion_cli_exec);
 	companion_mesh_ptr = &companion_mesh;
 
 	/* Set LoRa callbacks for event-driven packet processing */

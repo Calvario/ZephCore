@@ -193,8 +193,11 @@ public:
 	virtual bool sendSelfAdvert(bool flood) { (void)flood; return false; }
 	int sendMessage(const ContactInfo &recipient, uint32_t timestamp, uint8_t attempt, const char *text,
 		uint32_t &expected_ack, uint32_t &est_timeout);
-	int sendCommandData(const ContactInfo &recipient, uint32_t timestamp, uint8_t attempt, const char *text,
-		uint32_t &est_timeout);
+	/* @param txt_type TXT_TYPE_CLI_DATA (understood by every MeshCore version)
+	 * or TXT_TYPE_CLI_COMMAND (v1.18+ only). Callers that must reach older
+	 * repeaters have to keep using TXT_TYPE_CLI_DATA. */
+	int sendCommandData(const ContactInfo &recipient, uint32_t timestamp, uint8_t attempt,
+		uint8_t txt_type, const char *text, uint32_t &est_timeout);
 	/* @param out_hash if non-null, filled with the FNV-1a packet hash so the
 	 * caller can later query the contention tracker for "how many neighbors
 	 * heard and retransmitted this?" — used by the joystick UI's send-feedback

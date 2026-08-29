@@ -91,11 +91,12 @@ typedef void (*RadioReconfigureCallback)(void);
 /* BLE PIN change callback */
 typedef void (*PinChangeCallback)(uint32_t new_pin);
 
-/* V-contact CLI execution callback — runs a text-CLI line and fills `reply`
- * (buffer is VCONTACT_CLI_REPLY_SIZE). Registered by main_companion so the
- * v-contact chat reuses the same CommonCLI instance as the USB text CLI. */
-#define VCONTACT_CLI_REPLY_SIZE 256
-typedef void (*VContactCLICallback)(const char *line, char *reply);
+/* Companion CLI execution callback — runs a text-CLI line and fills `reply`
+ * (buffer is COMPANION_CLI_REPLY_SIZE). Registered by main_companion so every
+ * companion-side CLI entry point shares one CommonCLI instance: the USB text
+ * CLI, the v-contact chat, and CMD_RUN_CLI_COMMAND from the app. */
+#define COMPANION_CLI_REPLY_SIZE 256
+typedef void (*CompanionCLICallback)(const char *line, char *reply);
 
 /**
  * CompanionMesh: Application layer for ZephCore Companion device
@@ -170,7 +171,7 @@ public:
 	 * half is derived and dropped: never stored, never used. The key is never
 	 * registered in the RF RX matching path, so over-the-air traffic addressed
 	 * to it is inert. */
-	void setVContactCLICallback(VContactCLICallback cb) { _vcontact_cli_cb = cb; }
+	void setCLICallback(CompanionCLICallback cb) { _cli_exec_cb = cb; }
 	bool isVContactEnabled() const { return prefs.v_contact_enabled != 0; }
 	/** Queue an unsolicited v-contact message (battery alert, restart reason).
 	 *  Goes through the offline queue — delivered on next app connect/sync. */
@@ -510,7 +511,7 @@ private:
 	 * the clock was invalid (pre-1970s epoch) when we would have stamped it,
 	 * so the contact is withheld from sync/adverts until a time source
 	 * arrives — otherwise the app shows a 1970 last-heard timestamp. */
-	VContactCLICallback _vcontact_cli_cb;
+	CompanionCLICallback _cli_exec_cb;
 	uint8_t _vcontact_pubkey[PUB_KEY_SIZE];
 	uint32_t _vcontact_lastmod;
 	/* Dedupe app resends: a retry reuses the message timestamp (only the

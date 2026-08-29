@@ -601,7 +601,11 @@ void RoomServerMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int send
         memcpy(&sender_timestamp, data, 4);
         uint8_t flags = (data[4] >> 2);
 
-        if (!(flags == TXT_TYPE_PLAIN || flags == TXT_TYPE_CLI_DATA)) {
+        /* TXT_TYPE_CLI_COMMAND (v1.18+) is handled exactly like TXT_TYPE_CLI_DATA
+         * here: both stay behind client->isAdmin() below, and both are covered
+         * by the monotonic sender_timestamp / is_retry gates. */
+        if (!(flags == TXT_TYPE_PLAIN || flags == TXT_TYPE_CLI_DATA ||
+              flags == TXT_TYPE_CLI_COMMAND)) {
             LOG_DBG("onPeerDataRecv: unsupported text type: flags=%02x", flags);
         } else if (sender_timestamp >= client->last_timestamp) {
             bool is_retry = (sender_timestamp == client->last_timestamp);
@@ -618,7 +622,7 @@ void RoomServerMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int send
 
             uint8_t temp[5 + CLI_REMOTE_REPLY_SIZE];
             bool send_ack;
-            if (flags == TXT_TYPE_CLI_DATA) {  // admin CLI over the air
+            if (flags == TXT_TYPE_CLI_DATA || flags == TXT_TYPE_CLI_COMMAND) {  // admin CLI over the air
                 if (client->isAdmin()) {
                     if (is_retry) {
                         temp[5] = 0;

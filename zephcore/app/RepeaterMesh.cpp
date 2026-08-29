@@ -860,7 +860,11 @@ void RepeaterMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender
         memcpy(&sender_timestamp, data, 4);
         uint8_t flags = (data[4] >> 2);
 
-        if (!(flags == TXT_TYPE_PLAIN || flags == TXT_TYPE_CLI_DATA)) {
+        /* TXT_TYPE_CLI_COMMAND (v1.18+) is handled exactly like TXT_TYPE_CLI_DATA
+         * here: both reach this block only behind client->isAdmin(), and both
+         * are covered by the monotonic sender_timestamp / is_retry gates below. */
+        if (!(flags == TXT_TYPE_PLAIN || flags == TXT_TYPE_CLI_DATA ||
+              flags == TXT_TYPE_CLI_COMMAND)) {
             LOG_DBG("onPeerDataRecv: unsupported text type: flags=%02x", flags);
         } else if (sender_timestamp >= client->last_timestamp) {
             bool is_retry = (sender_timestamp == client->last_timestamp);

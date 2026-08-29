@@ -318,6 +318,13 @@ void BaseChatMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender
 			} else {
 				sendAckTo(from, (uint8_t *)&ack_hash, 4);
 			}
+		} else {
+			/* Includes TXT_TYPE_CLI_COMMAND (v1.18+).  Upstream's companion
+			 * executes it when the contact carries flag 0x10; ZephCore
+			 * deliberately does not — see devdocs/UPSTREAM_TRACKER.md.  Logged
+			 * rather than dropped silently so the case is diagnosable. */
+			LOG_DBG("onPeerDataRecv: unhandled text type flags=%d from '%s'",
+				flags, from.name);
 		}
 	} else if (type == PAYLOAD_TYPE_REQ && len > 4) {
 		uint32_t sender_timestamp;
@@ -533,14 +540,14 @@ int BaseChatMesh::sendMessage(const ContactInfo &recipient, uint32_t timestamp, 
 }
 
 int BaseChatMesh::sendCommandData(const ContactInfo &recipient, uint32_t timestamp, uint8_t attempt,
-	const char *text, uint32_t &est_timeout)
+	uint8_t txt_type, const char *text, uint32_t &est_timeout)
 {
 	int text_len = strlen(text);
 	if (text_len > MAX_TEXT_LEN) return MSG_SEND_FAILED;
 
 	uint8_t temp[5 + MAX_TEXT_LEN + 1];
 	memcpy(temp, &timestamp, 4);
-	temp[4] = (attempt & 3) | (TXT_TYPE_CLI_DATA << 2);
+	temp[4] = (attempt & 3) | (txt_type << 2);
 	memcpy(&temp[5], text, text_len + 1);
 
 	mesh::Packet *pkt = createDatagram(PAYLOAD_TYPE_TXT_MSG, recipient.id,

@@ -84,6 +84,7 @@ LOG_MODULE_REGISTER(zephcore_companion, CONFIG_ZEPHCORE_MAIN_LOG_LEVEL);
 #define CMD_SET_DEFAULT_FLOOD_SCOPE 0x3F  /* v11+ */
 #define CMD_GET_DEFAULT_FLOOD_SCOPE 0x40  /* v11+ */
 #define CMD_SEND_RAW_PACKET         0x41  /* v12+ */
+#define CMD_RUN_CLI_COMMAND         0x42  /* v14+ */
 
 /* Response packet types */
 #define PACKET_OK               0x00
@@ -115,6 +116,7 @@ LOG_MODULE_REGISTER(zephcore_companion, CONFIG_ZEPHCORE_MAIN_LOG_LEVEL);
 #define PACKET_ALLOWED_REPEAT_FREQ 0x1A
 #define PACKET_CHANNEL_DATA_RECV   0x1B
 #define PACKET_DEFAULT_FLOOD_SCOPE 0x1C
+#define PACKET_CLI_REPLY           0x1D  /* v14+, reply to CMD_RUN_CLI_COMMAND */
 
 #define MAX_CHANNEL_DATA_LENGTH    (MAX_FRAME_SIZE - 9)
 
@@ -210,7 +212,7 @@ CompanionMesh::CompanionMesh(mesh::Radio &radio, mesh::MillisecondClock &ms, mes
 	_dirty_channels_expiry = 0;
 	memset(_send_scope.key, 0, sizeof(_send_scope.key));
 	_send_scope_force_unscoped = false;
-	_vcontact_cli_cb = nullptr;
+	_cli_exec_cb = nullptr;
 	memset(_vcontact_pubkey, 0, sizeof(_vcontact_pubkey));
 	_vcontact_lastmod = 0;
 	memset(_vcontact_recent_ts, 0, sizeof(_vcontact_recent_ts));
@@ -1156,7 +1158,8 @@ bool CompanionMesh::vcontactHandleFrame(const uint8_t *data, size_t len)
 		 * attempt(1) + timestamp(4) + pub_key_prefix(6) + text(N). */
 		if (len >= 14 && isVContactKey(&data[7], 6)) {
 			uint8_t txt_type = data[1];
-			if (txt_type != TXT_TYPE_PLAIN && txt_type != TXT_TYPE_CLI_DATA) {
+			if (txt_type != TXT_TYPE_PLAIN && txt_type != TXT_TYPE_CLI_DATA &&
+			    txt_type != TXT_TYPE_CLI_COMMAND) {
 				sendPacketError(ERR_UNSUPPORTED);
 				return true;
 			}
@@ -1242,10 +1245,10 @@ bool CompanionMesh::vcontactHandleFrame(const uint8_t *data, size_t len)
 				}
 
 				LOG_INF("vcontact CLI: '%s'", line);
-				char reply[VCONTACT_CLI_REPLY_SIZE];
+				char reply[COMPANION_CLI_REPLY_SIZE];
 				reply[0] = '\0';
-				if (_vcontact_cli_cb) {
-					_vcontact_cli_cb(line, reply);
+				if (_cli_exec_cb) {
+					_cli_exec_cb(line, reply);
 				} else {
 					strcpy(reply, "CLI not available");
 				}
@@ -2637,16 +2640,18 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 				pub_key_prefix[3], pub_key_prefix[4], pub_key_prefix[5]);
 
 			ContactInfo *contact = lookupContactByPubKey(pub_key_prefix, 6);
-			if (contact && (txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_CLI_DATA)) {
+			if (contact && (txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_CLI_DATA ||
+					txt_type == TXT_TYPE_CLI_COMMAND)) {
 				LOG_DBG("CMD_SEND_TXT_MSG: contact='%s' text='%s' text_len=%u", contact->name, text, (unsigned)text_len);
 
 				uint32_t expected_ack = 0, est_timeout;
 				int result;
 
-				if (txt_type == TXT_TYPE_CLI_DATA) {
+				if (txt_type == TXT_TYPE_CLI_DATA || txt_type == TXT_TYPE_CLI_COMMAND) {
 					// Use node's RTC instead of app timestamp
 					msg_timestamp = getRTCClock()->getCurrentTimeUnique();
-					result = sendCommandData(*contact, msg_timestamp, attempt, text, est_timeout);
+					result = sendCommandData(*contact, msg_timestamp, attempt, txt_type, text,
+								 est_timeout);
 				} else {
 					result = sendMessage(*contact, msg_timestamp, attempt, text, expected_ack, est_timeout);
 				}
@@ -2919,7 +2924,13 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 			static const uint8_t version[20] = FIRMWARE_VERSION;  // injected by CMakeLists.txt
 			uint8_t rsp[82];
 			rsp[0] = PACKET_DEVICE_INFO;
-			rsp[1] = 13;  // FIRMWARE_VER_CODE - v13 = CMD_SEND_ANON_REQ to non-contact pubkey (transient anon contacts)
+			/* v14 = CMD_RUN_CLI_COMMAND / PACKET_CLI_REPLY, plus TXT_TYPE_CLI_COMMAND
+			 * accepted by CMD_SEND_TXT_MSG and by the repeater / room-server admin
+			 * CLI.  Deliberately NOT the whole of upstream's v14: a companion here
+			 * never *executes* an over-the-air TXT_TYPE_CLI_COMMAND, so contact
+			 * flag 0x10 (remote-CLI-allowed) is stored and ignored.  See
+			 * devdocs/UPSTREAM_TRACKER.md for why. */
+			rsp[1] = 14;  // FIRMWARE_VER_CODE
 			rsp[2] = (MAX_CONTACTS / 2 > 255) ? 255 : (MAX_CONTACTS / 2);  // protocol byte, app multiplies by 2
 			rsp[3] = MAX_GROUP_CHANNELS;
 			put_le32(&rsp[4], prefs.ble_pin ? prefs.ble_pin : 123456);  // BLE PIN
@@ -3722,6 +3733,48 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 			} else {
 				sendPacketError(ERR_TABLE_FULL);
 			}
+		} else {
+			sendPacketError(ERR_ILLEGAL_ARG);
+		}
+		return true;
+
+	case CMD_RUN_CLI_COMMAND:
+		/* Runs a CLI line on behalf of the connected app.  This is the same
+		 * local CLI the USB text sideband and the v-contact chat already reach,
+		 * over the same already-paired transport, so it adds no reach that an
+		 * app connected to this node did not already have — it is executed with
+		 * sender_timestamp 0 (local) for exactly that reason. */
+		if (len >= 2) {
+			if (_cli_exec_cb == nullptr) {
+				sendPacketError(ERR_UNSUPPORTED);
+				return true;
+			}
+
+			/* `data` is const, so the line has to be copied out to be
+			 * null-terminated.  A command can never exceed one frame. */
+			char line[MAX_FRAME_SIZE];
+			size_t cmd_len = len - 1;
+			if (cmd_len > sizeof(line) - 1) cmd_len = sizeof(line) - 1;
+			memcpy(line, &data[1], cmd_len);
+			line[cmd_len] = '\0';
+
+			/* Reply is built in place behind the frame type byte; the callback
+			 * contract requires COMPANION_CLI_REPLY_SIZE of room. */
+			uint8_t rsp[1 + COMPANION_CLI_REPLY_SIZE];
+			char *reply = (char *)&rsp[1];
+			rsp[0] = PACKET_CLI_REPLY;
+			reply[0] = '\0';
+			_cli_exec_cb(line, reply);
+			if (reply[0] == '\0') {
+				strcpy(reply, "Unknown command");
+			}
+
+			/* A CommonCLI reply can be longer than one companion frame and the
+			 * app protocol has no continuation for this response, so truncate
+			 * rather than drop. */
+			size_t rlen = strlen(reply);
+			if (rlen > MAX_FRAME_SIZE - 1) rlen = MAX_FRAME_SIZE - 1;
+			writeFrame(rsp, rlen + 1);
 		} else {
 			sendPacketError(ERR_ILLEGAL_ARG);
 		}

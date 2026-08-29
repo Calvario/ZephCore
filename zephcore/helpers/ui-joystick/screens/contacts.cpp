@@ -1113,7 +1113,9 @@ bool RepeaterAdminScreen::sendCLI(const char *cmd)
 	}
 	uint32_t ts = _rtc ? _rtc->getCurrentTimeUnique() : k_uptime_get_32();
 	uint32_t est_timeout = 0;
-	int result = mesh->sendCommandData(*contact, ts, 0, cmd, est_timeout);
+	/* TXT_TYPE_CLI_DATA, not TXT_TYPE_CLI_COMMAND: this talks to repeaters of
+	 * any vintage, and type 3 is only understood from v1.18 on. */
+	int result = mesh->sendCommandData(*contact, ts, 0, TXT_TYPE_CLI_DATA, cmd, est_timeout);
 	if (result == MSG_SEND_FAILED) {
 		_task->showAlert("Send failed", 1500);
 		return false;
