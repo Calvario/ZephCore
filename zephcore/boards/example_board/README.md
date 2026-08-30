@@ -51,8 +51,16 @@ SWD flash: `west flash` (requires J-Link, pyocd, or nrfjprog connected).
 | Heltec Wireless Tracker V2 | `west build -b heltec_wireless_tracker_v2/esp32s3/procpu zephcore` | `west flash` |
 | LilyGo T-Beam v1.2     | `west build -b ttgo_tbeam/esp32/procpu zephcore`               | `west flash` |
 | ThinkNode M9           | `west build -b thinknode_m9/esp32s3/procpu zephcore`           | `west flash` |
+| Meshnology W12 (LR2021) | `west build -b meshnology_w12/esp32s3/procpu zephcore`        | `west flash` |
 
 **Heltec V3 console:** ZephCore routes console/shell to `uart0` on V3. Use the UART serial port for boot logs and CLI.
+
+**Meshnology W12:** the only board here with an LR2021 *and* an external PA, and
+the only ESP32 board whose TX power is capped well below the chip maximum —
+4 dBm at the chip is ~30 dBm at the antenna through the GC1109 front end. It has
+no USB-UART bridge, so esptool cannot auto-reset a companion build into download
+mode; use `start dfu`, a 1200-baud touch, or hold BOOT. Full port notes and the
+vendor schematic live in `devdocs/w12/`.
 
 **Heltec V4.2 vs V4.3:** The hardware revision is printed on the PCB silkscreen. If
 unclear, check GPIO2's default pull: the V4.2 GC1109 PA has an internal pull-down

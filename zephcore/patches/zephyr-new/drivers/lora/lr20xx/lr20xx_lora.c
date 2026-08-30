@@ -61,7 +61,12 @@ struct lr20xx_config {
 	/* RF switch DIO bitmasks (bit 0 = DIO5, bit 1 = DIO6, ...) */
 	uint8_t rfswitch_enable;
 	uint8_t rfswitch_standby;
-	uint8_t rfswitch_rx;
+	/* RX masks are split per band: a front end that shuts its sub-GHz PA
+	 * down during 2.4 GHz RX (Meshnology W12 / GC1109 CSD) needs the two
+	 * to differ.  Boards that set only the combined `rfswitch-rx` get the
+	 * same mask in both, which is the pre-split behaviour. */
+	uint8_t rfswitch_rx_lf;
+	uint8_t rfswitch_rx_hf;
 	uint8_t rfswitch_tx;
 	uint8_t rfswitch_tx_hp;
 };
@@ -350,18 +355,44 @@ lr20xx_irq_dio_pull(const struct lr20xx_config *cfg)
 
 /* ── Configure RF switch DIOs ───────────────────────────────────────── */
 
+/* DIO5..DIO11 inclusive — the full RF-switch-capable range on this chip.
+ * Bit i of every rfswitch-* mask is DIO(5 + i), so the masks stay uint8_t. */
+#define LR20XX_RFSWITCH_DIO_COUNT \
+	(LR20XX_SYSTEM_DIO_11 - LR20XX_SYSTEM_DIO_5 + 1)
+
 static void lr20xx_configure_rfswitch(void *ctx, const struct lr20xx_config *cfg)
 {
 	/* LR20xx RF switch uses per-DIO configuration.
-	 * DIO5..DIO8 map to enable bitmask bits 0..3.
+	 * DIO5..DIO11 map to enable bitmask bits 0..6 (the chip has no RF
+	 * switch DIOs outside 5..11 — see lr20xx_system_dio_t).
 	 * For each enabled DIO, compute which operational modes
-	 * should drive it HIGH by looking at the per-mode bitmasks. */
-	for (int i = 0; i < 4; i++) {
+	 * should drive it HIGH by looking at the per-mode bitmasks.
+	 *
+	 * This used to stop at bit 3 (DIO5..DIO8), which silently dropped the
+	 * top three DIOs from any board that used them: the enable bit was set
+	 * in devicetree, the loop never reached it, so the DIO kept its default
+	 * function and the front end it drives never switched.  The Meshnology
+	 * W12 puts its entire sub-GHz front end there (DIO9 = GC1109 CTX,
+	 * DIO10 = CPS, DIO11 = CSD), and with those three left unconfigured the
+	 * FEM stays in the shutdown its 10k pull-downs assert at reset — the
+	 * node is both deaf and mute while every register readback looks fine. */
+	for (int i = 0; i < LR20XX_RFSWITCH_DIO_COUNT; i++) {
 		if (!(cfg->rfswitch_enable & BIT(i))) {
 			continue;
 		}
 
 		lr20xx_system_dio_t dio = (lr20xx_system_dio_t)(LR20XX_SYSTEM_DIO_5 + i);
+
+		/* Never repurpose the interrupt line.  A board that sets the IRQ
+		 * DIO's bit in rfswitch-enable by mistake would otherwise have its
+		 * only IRQ pin switched to RF-switch duty here, and the driver
+		 * would then wait forever on TX_DONE/RX_DONE with no way to tell
+		 * why.  Skipping it turns a silent hang into a warning. */
+		if (dio == lr20xx_irq_dio(cfg)) {
+			LOG_WRN("rfswitch: DIO%d is the IRQ line, not configuring "
+				"it as an RF switch", (int)dio);
+			continue;
+		}
 
 		/* Set this DIO function to RF switch control */
 		lr20xx_system_set_dio_function(ctx, dio,
@@ -375,9 +406,11 @@ static void lr20xx_configure_rfswitch(void *ctx, const struct lr20xx_config *cfg
 		if (cfg->rfswitch_standby & BIT(i)) {
 			sw_cfg |= LR20XX_SYSTEM_DIO_RF_SWITCH_WHEN_STANDBY;
 		}
-		if (cfg->rfswitch_rx & BIT(i)) {
-			sw_cfg |= LR20XX_SYSTEM_DIO_RF_SWITCH_WHEN_RX_LF |
-				  LR20XX_SYSTEM_DIO_RF_SWITCH_WHEN_RX_HF;
+		if (cfg->rfswitch_rx_lf & BIT(i)) {
+			sw_cfg |= LR20XX_SYSTEM_DIO_RF_SWITCH_WHEN_RX_LF;
+		}
+		if (cfg->rfswitch_rx_hf & BIT(i)) {
+			sw_cfg |= LR20XX_SYSTEM_DIO_RF_SWITCH_WHEN_RX_HF;
 		}
 		if (cfg->rfswitch_tx & BIT(i)) {
 			sw_cfg |= LR20XX_SYSTEM_DIO_RF_SWITCH_WHEN_TX_LF;
@@ -3238,8 +3271,10 @@ static int lr20xx_hw_init(struct lr20xx_data *data,
 	lr20xx_status_t st;
 
 	lr20xx_configure_rfswitch(ctx, cfg);
-	LOG_DBG("RF switch: en=0x%02x stby=0x%02x rx=0x%02x tx=0x%02x txhp=0x%02x",
-		cfg->rfswitch_enable, cfg->rfswitch_standby, cfg->rfswitch_rx,
+	LOG_DBG("RF switch: en=0x%02x stby=0x%02x rxlf=0x%02x rxhf=0x%02x "
+		"tx=0x%02x txhp=0x%02x",
+		cfg->rfswitch_enable, cfg->rfswitch_standby,
+		cfg->rfswitch_rx_lf, cfg->rfswitch_rx_hf,
 		cfg->rfswitch_tx, cfg->rfswitch_tx_hp);
 
 	st = lr20xx_system_set_dio_function(ctx, lr20xx_irq_dio(cfg),
@@ -3408,7 +3443,14 @@ static DEVICE_API(lora, lr20xx_lora_api) = {
 		.irq_dio          = DT_INST_PROP_OR(n, irq_dio, 9),         \
 		.rfswitch_enable  = DT_INST_PROP_OR(n, rfswitch_enable, 0), \
 		.rfswitch_standby = DT_INST_PROP_OR(n, rfswitch_standby, 0),\
-		.rfswitch_rx      = DT_INST_PROP_OR(n, rfswitch_rx, 0),     \
+		/* rfswitch-rx-lf / -hf are optional and carry no binding      \
+		 * default, so an absent one falls back to the combined       \
+		 * rfswitch-rx — which keeps every pre-split board (e.g.      \
+		 * promicro_lr2021) byte-identical. */                        \
+		.rfswitch_rx_lf   = DT_INST_PROP_OR(n, rfswitch_rx_lf,      \
+				    DT_INST_PROP_OR(n, rfswitch_rx, 0)),    \
+		.rfswitch_rx_hf   = DT_INST_PROP_OR(n, rfswitch_rx_hf,      \
+				    DT_INST_PROP_OR(n, rfswitch_rx, 0)),    \
 		.rfswitch_tx      = DT_INST_PROP_OR(n, rfswitch_tx, 0),     \
 		.rfswitch_tx_hp   = DT_INST_PROP_OR(n, rfswitch_tx_hp, 0),  \
 	};                                                                   \

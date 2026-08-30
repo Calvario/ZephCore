@@ -60,8 +60,10 @@ properties:
     type: int
     default: 0
     description: |
-      RF switch DIO enable bitmask (bit 0 = DIO5, bit 1 = DIO6, ...).
-      Set a bit to include that DIO in RF switch control.
+      RF switch DIO enable bitmask (bit 0 = DIO5, bit 1 = DIO6, ... bit 6 =
+      DIO11). DIO5..DIO11 is the chip's entire RF-switch-capable range, so
+      bit 7 is unused. Set a bit to include that DIO in RF switch control.
+      The DIO named by irq-dio is skipped even if its bit is set here.
 
   rfswitch-standby:
     type: int
@@ -74,8 +76,30 @@ properties:
     type: int
     default: 0
     description: |
-      Bitmask of RF switch DIOs that are HIGH in RX mode (both LF and HF).
-      Bit mapping matches rfswitch-enable.
+      Bitmask of RF switch DIOs that are HIGH in RX mode, in BOTH bands.
+      Bit mapping matches rfswitch-enable. This is the convenient form for
+      the common single-band board; set rfswitch-rx-lf / rfswitch-rx-hf
+      instead when the two bands need different masks.
+
+  rfswitch-rx-lf:
+    type: int
+    description: |
+      Bitmask of RF switch DIOs that are HIGH in sub-GHz RX only.
+      Defaults to rfswitch-rx when omitted. Bit mapping matches
+      rfswitch-enable.
+
+  rfswitch-rx-hf:
+    type: int
+    description: |
+      Bitmask of RF switch DIOs that are HIGH in 2.4 GHz RX only.
+      Defaults to rfswitch-rx when omitted. Bit mapping matches
+      rfswitch-enable.
+
+      Split from rfswitch-rx for front ends whose two bands are mutually
+      exclusive: the Meshnology W12 must hold the GC1109 sub-GHz FEM in
+      shutdown (DIO11 low) during 2.4 GHz RX, which a single shared mask
+      cannot express. Do NOT give these two a `default:` here — the driver
+      falls back to rfswitch-rx by testing for the property's absence.
 
   rfswitch-tx:
     type: int

@@ -1,0 +1,67 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * Meshnology W12 — Pin Control Definitions
+ *
+ * Verified against vendor schematic W12-MB-V0.2 (devdocs/w12/vendor/).
+ *
+ *   UART0:  TX=GPIO43, RX=GPIO44
+ *   I2C0:   SDA=GPIO17, SCL=GPIO18   (SSD1315 OLED + expansion header)
+ *   SPI2:   SCLK=GPIO9, MOSI=GPIO10, MISO=GPIO11  (LR2021 LoRa)
+ *   UART1:  TX=GPIO38, RX=GPIO39     (GNSS header, unpopulated from factory)
+ *
+ * The FEM control pins (GPIO3/GPIO4) and the LoRa NSS/RST/BUSY/IRQ lines are
+ * plain GPIO — no pinctrl entries needed.
+ */
+
+#include <zephyr/dt-bindings/pinctrl/esp-pinctrl-common.h>
+#include <zephyr/dt-bindings/pinctrl/esp32s3-pinctrl.h>
+#include <zephyr/dt-bindings/pinctrl/esp32s3-gpio-sigmap.h>
+
+&pinctrl {
+	uart0_default: uart0_default {
+		group1 {
+			pinmux = <UART0_TX_GPIO43>;
+			output-high;
+		};
+		group2 {
+			pinmux = <UART0_RX_GPIO44>;
+			bias-pull-up;
+		};
+	};
+
+	/* GNSS header. The vendor pin table names these from the GNSS module's
+	 * point of view — "GNSS_RX" (GPIO38) is the module's RX, i.e. the SoC's
+	 * TX, and "GNSS_TX" (GPIO39) is the SoC's RX. Module-perspective naming is
+	 * the usual trap here (same one as lilygo_timpulse_plus and the RAK3401);
+	 * the schematic net names settle it and this is the wiring that follows
+	 * from them. */
+	uart1_default: uart1_default {
+		group1 {
+			pinmux = <UART1_TX_GPIO38>;
+			output-high;
+		};
+		group2 {
+			pinmux = <UART1_RX_GPIO39>;
+			bias-pull-up;
+		};
+	};
+
+	i2c0_default: i2c0_default {
+		group1 {
+			pinmux = <I2C0_SDA_GPIO17>,
+				 <I2C0_SCL_GPIO18>;
+			drive-open-drain;
+		};
+	};
+
+	spim2_default: spim2_default {
+		group1 {
+			pinmux = <SPIM2_MISO_GPIO11>,
+				 <SPIM2_SCLK_GPIO9>;
+		};
+		group2 {
+			pinmux = <SPIM2_MOSI_GPIO10>;
+			output-low;
+		};
+	};
+};

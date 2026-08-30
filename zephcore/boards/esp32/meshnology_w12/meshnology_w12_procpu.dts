@@ -1,0 +1,341 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * Meshnology W12 "WiFi LoRa 32 V5" — ZephCore procpu DTS
+ *
+ * Every pin and polarity below is taken from the vendor schematic
+ * W12-MB-V0.2 and the vendor pin-assignment sheet, both archived in
+ * devdocs/w12/vendor/. Several of them contradict what the Arduino-side
+ * variants for this board claim; the schematic decides every time — see
+ * devdocs/w12/HANDOVER_MESHNOLOGY_W12.md for the list.
+ *
+ * Hardware:
+ *   MCU:     ESP32-S3R8 (WROOM-1 N16R8) — 16 MB QIO flash, 8 MB OPI PSRAM
+ *   Radio:   Semtech LR2021 on SPI2, plain 32 MHz crystal (no TCXO)
+ *   FEM:     GC1109 sub-GHz PA/LNA (~30 dBm out) + RFX2402E 2.4 GHz PA
+ *   OLED:    SSD1315 128x64 (SSD1306-compatible) on I2C0, bicolour glass
+ *   Button:  GPIO0 (BOOT doubles as the user key)
+ *   BatADC:  GPIO1 = ADC1_CH0, divider enable GPIO2 active-HIGH
+ *   Vext:    GPIO45 active-LOW (AO3401 P-FET gating an LDO enable)
+ *   GNSS:    header on UART1, unpopulated from the factory
+ *   Console: native USB Serial/JTAG (there is no USB-UART bridge)
+ *
+ * LoRa SPI2:  SCLK=9, MOSI=10, MISO=11, NSS=8
+ * LoRa ctrl:  RESET=12, BUSY=13, IRQ=14 (chip DIO8)
+ * FEM rails:  sub-GHz enable GPIO4, 2.4 GHz enable GPIO3 (both active-HIGH)
+ * FEM switch: chip DIO9=CTX, DIO10=CPS, DIO11=CSD, DIO5/6 = 2.4 GHz TX/RX EN
+ */
+
+/dts-v1/;
+
+#include <espressif/esp32s3/esp32s3_wroom_n16r8.dtsi>
+#include "meshnology_w12-pinctrl.dtsi"
+#include <espressif/partitions_0x0_default_16M.dtsi>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <zephyr/dt-bindings/adc/adc.h>
+
+/ {
+	model = "Meshnology W12 PROCPU";
+	compatible = "meshnology,w12";
+
+	aliases {
+		uart-0 = &uart0;
+		i2c-0 = &i2c0;
+		lora0 = &lora0;
+		sw0 = &button0;
+		watchdog0 = &wdt0;
+	};
+
+	buttons: buttons {
+		compatible = "gpio-keys";
+		button0: button_0 {
+			gpios = <&gpio0 0 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "USER Key";
+			zephyr,code = <INPUT_KEY_0>;
+		};
+	};
+
+	/* Vext rail — GPIO45, ACTIVE LOW.
+	 *
+	 * Schematic sheet 1: GPIO45 drives the gate of Q1 (AO3401, P-channel)
+	 * through R3 1k. Q1's source sits on VDD_3V3 with R2 100k gate-to-source
+	 * holding it off, and its drain feeds the EN pin of U4 (TLV75733 LDO),
+	 * which R5 100k pulls to ground. So GPIO45 LOW turns the P-FET on, pulls
+	 * EN high and brings VEXT_3V3 up; GPIO45 high or floating leaves the rail
+	 * dead. That makes this active-LOW, and it makes the rail OFF by default.
+	 *
+	 * MeshCore's variant declares PIN_VEXT_EN_ACTIVE=HIGH, which is wrong for
+	 * this circuit. Do not "fix" this to active-HIGH to match it without
+	 * re-reading sheet 1 — the whole peripheral rail, OLED included, hangs
+	 * off this pin.
+	 *
+	 * GPIO45 is also an ESP32-S3 strapping pin (VDD_SPI voltage select) with
+	 * an internal pull-down at reset. That default reads as 0, which is the
+	 * same level we drive to enable the rail, so there is no boot conflict —
+	 * but never add a pull-up here, it would flip the strap. */
+	vext_enable: vext-enable {
+		compatible = "regulator-fixed";
+		regulator-name = "vext";
+		enable-gpios = <&gpio1 13 GPIO_ACTIVE_LOW>;  /* GPIO45 */
+		regulator-boot-on;
+		regulator-always-on;
+	};
+
+	/* Sub-GHz front end rail — GPIO4 (PA_EN_M), ACTIVE HIGH.
+	 *
+	 * Drives the EN pin of the adjustable regulator that supplies the GC1109
+	 * (net VR_PA). Its pull-up R56 is marked NC on the schematic, so the rail
+	 * is off until firmware asserts this — the radio is deaf and mute without
+	 * it, in both directions, because the GC1109 carries the RX LNA too.
+	 *
+	 * startup-delay-us matches the 100 ms MeshCore waits after enabling the
+	 * FEM before touching the radio. Expressed as a regulator startup delay it
+	 * is paid once at regulator init, which runs at priority 75 — ahead of the
+	 * LoRa driver — instead of being a sleep on the radio init path. */
+	fem_lf_power: fem-lf-power {
+		compatible = "regulator-fixed";
+		regulator-name = "fem-lf";
+		enable-gpios = <&gpio0 4 GPIO_ACTIVE_HIGH>;  /* GPIO4 = PA_EN_M */
+		startup-delay-us = <100000>;
+		regulator-boot-on;
+		regulator-always-on;
+	};
+
+	/* 2.4 GHz front end rail — GPIO3 (PA_EN_G), ACTIVE HIGH, deliberately
+	 * left DISABLED. ZephCore is sub-GHz only, so the RFX2402E never needs
+	 * power, and leaving its rail up would burn current for nothing.
+	 *
+	 * This is a regulator rather than a comment because an undriven GPIO3
+	 * floats: R38 (the EN pull-up) is marked NC, so nothing else defines the
+	 * level. regulator_fixed_init() configures the enable pin
+	 * GPIO_OUTPUT_INACTIVE when the node has neither regulator-boot-on nor
+	 * regulator-always-on, which actively drives GPIO3 LOW at boot. That is
+	 * the entire purpose of this node — do not add boot-on/always-on. */
+	fem_hf_power: fem-hf-power {
+		compatible = "regulator-fixed";
+		regulator-name = "fem-hf";
+		enable-gpios = <&gpio0 3 GPIO_ACTIVE_HIGH>;  /* GPIO3 = PA_EN_G */
+	};
+
+	/* Battery divider enable — GPIO2, ACTIVE HIGH.
+	 * GPIO2 -> R52 1k -> base of Q7 (S8050 NPN); Q7's collector pulls the gate
+	 * of Q6 (AO3401A P-FET) down through R48 1k, switching BAT onto the
+	 * R50 390K / R51 100K divider. Driving GPIO2 high therefore enables the
+	 * divider; undriven, the divider is open and GPIO1 reads a hard 0 mV.
+	 * ZephyrBoard toggles this per reading, so the divider draws nothing
+	 * between samples. */
+	vbat_enable: vbat-enable {
+		compatible = "regulator-fixed";
+		regulator-name = "vbat-enable";
+		enable-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;  /* GPIO2 = ADC_CTRL */
+	};
+
+	/* GNSS module power — GPIO48 (GNSS_CTRL), ACTIVE LOW.
+	 * The header is unpopulated on shipping units; the node is unconditional
+	 * so a user-fitted module just works, exactly like the RAK4631's optional
+	 * RAK1910. With nothing fitted the driver simply never sees a fix. */
+	gps_en: gps-enable {
+		compatible = "gpio-leds";
+		gps_enable_pin: gps_enable {
+			gpios = <&gpio1 16 GPIO_ACTIVE_LOW>;  /* GPIO48 */
+			label = "GNSS Enable";
+		};
+	};
+
+	/* Battery ADC — ZephCore reads this via zephyr,user { io-channels }.
+	 * Multiplier = internal reference (1100 mV) x divider ratio 4.90
+	 * ((390K + 100K) / 100K, schematic R50/R51) = 5390. */
+	zephyr,user {
+		io-channels = <&adc0 0>;
+		vbat-mv-multiplier = <5390>;
+	};
+
+	aliases {
+		gps-enable = &gps_enable_pin;
+	};
+
+	chosen {
+		zephyr,sram = &sram1;
+		/* There is no USB-UART bridge on this board — GPIO43/44 only reach
+		 * the expansion header — so the stock console is USB Serial/JTAG.
+		 * A companion build pulls in boards/common/esp32s3_usb.conf, which
+		 * hands D+/D- to USB OTG CDC-ACM and reroutes this console to
+		 * uart0 on the header. */
+		zephyr,console = &usb_serial;
+		zephyr,shell-uart = &usb_serial;
+		zephyr,flash = &flash0;
+		zephyr,code-partition = &slot0_partition;
+		zephyr,bt-hci = &esp32_bt_hci;
+		zephyr,display = &ssd1306_128x64;
+	};
+};
+
+/* Battery ADC on adc0 (ADC unit 1 -> GPIO1 = ADC1_CH0). The node *labelled*
+ * adc0 is unit 1; the node labelled adc1 is unit 2 (GPIO11 = LR2021 MISO).
+ * The channel@0 node is required — without it adc_channel_setup_dt() fails and
+ * getBattMilliVolts() returns 0 before ever performing a conversion.
+ * ADC_GAIN_1 (0 dB) with ADC_REF_INTERNAL (~1100 mV): a 3.0-4.2 V cell lands at
+ * 612-857 mV after the 4.90 divider, comfortably inside range. */
+&adc0 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel@0 {
+		reg = <0>;
+		zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>;
+	};
+};
+
+/* ADC unit 2 (label adc1) is unused; keep it disabled so nothing can claim
+ * GPIO11 (LR2021 MISO) as an ADC pad. */
+&adc1 {
+	status = "disabled";
+};
+
+&usb_serial {
+	status = "okay";
+};
+
+&uart0 {
+	status = "okay";
+	current-speed = <115200>;
+	pinctrl-0 = <&uart0_default>;
+	pinctrl-names = "default";
+};
+
+&uart1 {
+	status = "okay";
+	current-speed = <9600>;
+	pinctrl-0 = <&uart1_default>;
+	pinctrl-names = "default";
+
+	gnss: gnss-nmea-generic {
+		compatible = "gnss-nmea-generic";
+	};
+};
+
+&gpio0 {
+	status = "okay";
+};
+
+&gpio1 {
+	status = "okay";
+};
+
+&i2c0 {
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_FAST>;
+	pinctrl-0 = <&i2c0_default>;
+	pinctrl-names = "default";
+
+	/* SSD1315 — register-compatible with the SSD1306 the Zephyr driver binds
+	 * to; the difference is the panel glass (bicolour: top 16 rows yellow),
+	 * which is invisible to the driver. Same part as lilygo_timpulse_plus.
+	 *
+	 * Reset is GPIO47, not GPIO21. The vendor pin sheet lists IO47 = OLED/LCD
+	 * RST and IO21 = OLED/LCD CS (CS belongs to the SPI-LCD option this
+	 * connector also supports and the shipping I2C panel does not use).
+	 * MeshCore's pins_arduino.h has RST_OLED = 21, which is the CS pin. */
+	ssd1306_128x64: display-controller@3c {
+		compatible = "solomon,ssd1306";
+		reg = <0x3c>;
+		width = <128>;
+		height = <64>;
+		segment-offset = <0>;
+		page-offset = <0>;
+		display-offset = <0>;
+		multiplex-ratio = <63>;
+		segment-remap;
+		com-invdir;
+		inversion-on;
+		prechargep = <0x22>;
+		reset-gpios = <&gpio1 15 GPIO_ACTIVE_LOW>;   /* GPIO47 */
+		vin-supply = <&vext_enable>;
+	};
+};
+
+&spi2 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	pinctrl-0 = <&spim2_default>;
+	pinctrl-names = "default";
+
+	/* The LR2021 driver takes NSS from here but strips CS out of its own
+	 * spi_dt_spec and toggles the pin itself, because the chip needs NSS held
+	 * across a two-window read. The ESP32 SPI controller therefore never
+	 * drives CS and the two cannot fight.
+	 *
+	 * No overrun-character property, and none is needed: the LR2021 HAL clocks
+	 * NULL TX buffers on its read windows and the chip parses those bytes, so
+	 * MOSI must idle at 0x00 (its NOP) rather than 0xff. On Nordic that takes
+	 * an explicit overrun-character; spi_esp32_spim allocates a zero-filled TX
+	 * buffer for any RX-only transfer, so ESP32 already sends 0x00. */
+	cs-gpios = <&gpio0 8 GPIO_ACTIVE_LOW>;  /* NSS = GPIO8 */
+
+	lora0: lora@0 {
+		compatible = "semtech,lr2021";
+		reg = <0>;
+		spi-max-frequency = <8000000>;
+
+		reset-gpios = <&gpio0 12 GPIO_ACTIVE_LOW>;                    /* GPIO12 */
+		busy-gpios  = <&gpio0 13 GPIO_ACTIVE_HIGH>;                   /* GPIO13 */
+		dio1-gpios  = <&gpio0 14 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;/* GPIO14 */
+
+		/* Chip DIO8 -> GPIO14 (schematic net IO14_LORA_INT2). DIO7 goes to
+		 * GPIO7 as a second IRQ line (IO7_LORA_INT1) that ZephCore does not
+		 * use. DIO5 is NOT free for interrupts here — it drives the 2.4 GHz
+		 * PA's TX enable — so leaving irq-dio at its default of 9 would also
+		 * be wrong. */
+		irq-dio = <8>;
+
+		/* No tcxo-voltage-mv: schematic sheet 3 shows a plain crystal on
+		 * XTA/XTB (pins 4/5) and pin 6 wired to the VNTC net, not a TCXO
+		 * supply. Setting a TCXO voltage on a board without one wedges the
+		 * chip at HF-XOSC startup — that is what happened on the
+		 * promicro_lr2021 module. */
+
+		rx-boosted;
+
+		/* RF switch — the LR2021 drives the whole front end itself.
+		 *
+		 *   DIO5  (bit 0) = RFX2402E 2.4 GHz TX_EN
+		 *   DIO6  (bit 1) = RFX2402E 2.4 GHz RX_EN
+		 *   DIO9  (bit 4) = GC1109 CTX  (transmit path select)
+		 *   DIO10 (bit 5) = GC1109 CPS  (PA vs bypass path)
+		 *   DIO11 (bit 6) = GC1109 CSD  (shutdown, HIGH = awake)
+		 *
+		 * CSD and CPS carry 10k pull-downs (R26/R27), so the GC1109 boots
+		 * into shutdown and stays there until these are configured. That is
+		 * why the driver's DIO5..DIO8-only loop had to be widened to
+		 * DIO5..DIO11 for this board: with DIO9/10/11 unconfigured the node
+		 * looks healthy on every register read and hears nothing.
+		 *
+		 * RX is split per band because the two front ends are mutually
+		 * exclusive: sub-GHz RX wakes the GC1109 (CSD high, CTX low = LNA
+		 * path), while 2.4 GHz RX must leave it in shutdown and enable the
+		 * RFX2402E instead. ZephCore only ever uses the sub-GHz side; the HF
+		 * masks are here so the table is a faithful description of the
+		 * hardware rather than a half-truth. */
+		rfswitch-enable  = <0x73>;  /* DIO5,6,9,10,11 */
+		rfswitch-standby = <0x00>;  /* everything off */
+		rfswitch-rx-lf   = <0x40>;  /* DIO11: GC1109 out of shutdown, LNA */
+		rfswitch-rx-hf   = <0x02>;  /* DIO6:  2.4 GHz LNA, GC1109 shut down */
+		rfswitch-tx      = <0x70>;  /* DIO9|10|11: GC1109 full PA */
+		rfswitch-tx-hp   = <0x01>;  /* DIO5:  2.4 GHz PA */
+	};
+};
+
+&timer0 { status = "okay"; };
+&timer1 { status = "okay"; };
+&timer2 { status = "okay"; };
+&timer3 { status = "okay"; };
+
+&wdt0 { status = "okay"; };
+&trng0 { status = "okay"; };
+
+&esp32_bt_hci { status = "okay"; };
+&wifi { status = "okay"; };

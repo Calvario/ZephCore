@@ -1,0 +1,72 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * Meshnology W12 — ZephCore overlay
+ *
+ * The board's own DTS (meshnology_w12_procpu.dts) already declares the LR2021,
+ * the SSD1315, the FEM rails, the battery ADC, the GNSS UART and the button.
+ * This overlay only adds the ZephCore integration on top: the runtime sensor
+ * bus, the LittleFS mount, the button gesture chain and the USB companion node.
+ */
+
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+
+/ {
+	/* Button chain — same mapping as RAK4631 / Heltec V3.
+	 * GPIO0 is the only button the firmware sees; the second hole in the
+	 * case is the ESP32 EN/reset key, which never reaches software. */
+	user_btn_longpress {
+		compatible = "zephyr,input-longpress";
+		input = <&buttons>;
+		input-codes = <INPUT_KEY_0>;
+		short-codes = <INPUT_KEY_A>;
+		long-codes = <INPUT_KEY_ENTER>;
+		long-delay-ms = <1000>;
+	};
+
+	page_btn_multitap {
+		compatible = "zephcore,input-multi-tap";
+		input-codes = <INPUT_KEY_A>;
+		tap-codes = <INPUT_KEY_1 INPUT_KEY_LEFT>;
+		tap-delay-ms = <400>;
+	};
+
+	chosen {
+		/* Plain-UART companion backend (CONFIG_ZEPHCORE_COMPANION_SERIAL).
+		 * uart0 is GPIO43/44 on the expansion header — there is no bridge
+		 * chip, so this is a wired-header option rather than the USB-C port.
+		 * Inert unless that conf is built. */
+		zephcore,companion-uart = &uart0;
+	};
+};
+
+/* Runtime-probed I2C sensors share the OLED bus, which is broken out on the
+ * display connector and the expansion header. */
+&i2c0 {
+	#include "../../common/sensors-i2c.dtsi"
+};
+
+/*
+ * Flash partitions live in partitions.overlay (this dir) so the identical map
+ * is fed to both the app and the MCUboot image — see that file and
+ * sysbuild/CMakeLists.txt.
+ */
+
+/* LittleFS auto-mount — standard /lfs mount point */
+#include "../../common/filesystem.dtsi"
+
+/* USB OTG companion transport. Including this dtsi is also the signal that
+ * CMakeLists.txt greps for to auto-enable boards/common/esp32s3_usb.conf on
+ * companion builds, so the companion speaks its protocol over the USB-C port.
+ *
+ * That matters more here than on most boards: the W12 has no USB-UART bridge,
+ * so the USB-C port is the ONLY wired route in. The cost is the documented one
+ * — once the port is USB OTG CDC-ACM rather than USB Serial/JTAG, esptool can
+ * no longer auto-reset the chip into download mode. Use `start dfu`, an
+ * Arduino-style 1200-baud touch (the vendor's own PlatformIO board JSON sets
+ * use_1200bps_touch for the same reason), or hold BOOT while plugging in.
+ *
+ * The console reroute to uart0 lives in the auto-paired esp32s3_usb.overlay and
+ * applies only on those companion builds. Do NOT include
+ * esp32s3_console_uart0.dtsi here — repeater and debug builds keep their USB
+ * Serial/JTAG console, which is the only console they have. */
+#include "../../common/esp32s3_usb_otg.dtsi"

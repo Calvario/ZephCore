@@ -1,0 +1,6 @@
+board:
+  name: meshnology_w12
+  full_name: Meshnology W12 LR2021
+  vendor: meshnology
+  socs:
+    - name: esp32s3

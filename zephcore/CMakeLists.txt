@@ -231,18 +231,12 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/patches/modules/hal-espressif)
     )
 endif()
 
-# Copy new files into Zephyr tree
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/patches/zephyr-new)
-    file(GLOB_RECURSE ZEPHCORE_NEW_FILES
-         RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/patches/zephyr-new
-         ${CMAKE_CURRENT_SOURCE_DIR}/patches/zephyr-new/*)
-    foreach(REL_PATH ${ZEPHCORE_NEW_FILES})
-        set(SRC_FILE ${CMAKE_CURRENT_SOURCE_DIR}/patches/zephyr-new/${REL_PATH})
-        set(DST_FILE ${ZEPHYR_DIR}/${REL_PATH})
-        configure_file(${SRC_FILE} ${DST_FILE} COPYONLY)
-        message(STATUS "  [zephyr-new] ${REL_PATH}")
-    endforeach()
-endif()
+# Copy new files into Zephyr tree.
+# Shared with sysbuild/CMakeLists.txt, which must do the same thing before
+# MCUboot's devicetree pass — see the module for why.
+set(ZEPHCORE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+set(ZEPHCORE_ZEPHYR_DIR ${ZEPHYR_DIR})
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/zephyr_new_files.cmake)
 
 # Custom board root: boards/<mcu>/<board>/ discovered via BOARD_ROOT
 list(APPEND BOARD_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
@@ -329,7 +323,7 @@ if(BOARD MATCHES ".*nrf52.*" OR BOARD MATCHES "rak4631" OR BOARD MATCHES "rak_wi
     set(ZEPHCORE_PLATFORM_CONF "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/nrf52_common.conf")
 elseif(DEFINED BOARD_QUALIFIERS AND BOARD_QUALIFIERS MATCHES ".*nrf52.*")
     set(ZEPHCORE_PLATFORM_CONF "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/nrf52_common.conf")
-elseif(BOARD MATCHES ".*esp32.*" OR BOARD MATCHES "station_g2" OR BOARD MATCHES "thinknode_m9" OR BOARD MATCHES "lilygo_tlora_c6" OR BOARD MATCHES "heltec_wifi_lora32_v3" OR BOARD MATCHES "heltec_wifi_lora32_v4")
+elseif(BOARD MATCHES ".*esp32.*" OR BOARD MATCHES "station_g2" OR BOARD MATCHES "thinknode_m9" OR BOARD MATCHES "lilygo_tlora_c6" OR BOARD MATCHES "heltec_wifi_lora32_v3" OR BOARD MATCHES "heltec_wifi_lora32_v4" OR BOARD MATCHES "meshnology_w12")
     set(ZEPHCORE_PLATFORM_CONF "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/esp32_common.conf")
 elseif(DEFINED BOARD_QUALIFIERS AND BOARD_QUALIFIERS MATCHES ".*esp32.*")
     set(ZEPHCORE_PLATFORM_CONF "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/esp32_common.conf")

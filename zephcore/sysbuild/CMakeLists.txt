@@ -2,6 +2,15 @@
 # so the BOARD_ROOT set there never fires. Set it here, before find_package(Sysbuild).
 set(BOARD_ROOT "${APP_DIR}" CACHE STRING "" FORCE)
 
+# Same story for the files ZephCore adds to the Zephyr tree: the app copies them
+# in its own CMakeLists, but MCUboot is configured first and runs a devicetree
+# pass over the same board DTS. A board whose radio node uses a ZephCore-only
+# binding (the LR11xx / LR20xx LoRa drivers) needs that binding present before
+# MCUboot's DTS pass, not after. See cmake/zephyr_new_files.cmake.
+set(ZEPHCORE_SOURCE_DIR "${APP_DIR}")
+set(ZEPHCORE_ZEPHYR_DIR "$ENV{ZEPHYR_BASE}")
+include("${APP_DIR}/cmake/zephyr_new_files.cmake")
+
 # Auto-propagate flash size from board.conf to MCUboot.
 #
 # MCUboot is built as a separate image and does NOT inherit the app's board.conf
