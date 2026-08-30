@@ -107,6 +107,11 @@ unless you run a 250 or 500 kHz bandwidth, where the old value was up to ten cou
 > **Run `set cad.reset` after upgrading.** The tuning statistics your node collected are measured
 > against the old starting point and are not comparable to the new one. Clearing them lets the tuner
 > re-converge cleanly; left alone it blends two sets of readings. Everything else is automatic.
+>
+> `cad.reset` also returns the threshold itself to the starting point now — see below. Until this
+> release it cleared only the statistics, which left a node re-tuning from wherever it had already
+> walked to. On the LR1110 boards that is exactly the position you are trying to leave, so run this
+> on the new firmware, not the old.
 
 > [!IMPORTANT]
 > This is a first release of the corrected tables. They are verified against Semtech's reference and
@@ -133,6 +138,43 @@ anywhere.
 > [!IMPORTANT]
 > **The v-contact's key changes with this release, so your app will keep showing the old one.** Delete
 > the leftover `v<name>` entry by hand. The new one arrives on its own the next time the app connects.
+
+---
+
+## Two console commands did not do what they said
+
+**`set cad.reset` left the threshold where it was.** It cleared the tuning statistics and nothing
+else, so a node that had spent weeks walking its listen-before-talk threshold away from the starting
+point stayed exactly there — now with no measurements to explain why. That is the opposite of a
+reset, and it matters most in this release, where the whole point of the command is to let an LR1110
+node leave the position the old reference table pushed it into. It now clears the statistics *and*
+returns the threshold to the starting point, applying it to the radio immediately.
+
+**`set probe.interval default` switched probing off.** The console read the word `default` as the
+number zero, and zero is a legal value for that setting meaning "stop probing" — so the node did
+exactly that and answered `OK`. Any typo did the same. The same flaw sat in `set cad.busycap`, where
+zero means "no airtime cap".
+
+Both are fixed, and the fix is general: **every `set` that takes a number or an on/off value now
+accepts the word `default`** and restores that setting to what a factory-fresh node uses. `set radio
+default` puts all four radio parameters back together. Input that is neither a number nor `default`
+is now rejected with an error instead of being quietly read as zero.
+
+> [!NOTE]
+> **Worth checking `get probe.interval` and `get cad.busycap` on nodes you have configured by hand.**
+> If either reads `0` and you did not intend to switch it off, a mistyped value is the likely cause.
+> `set probe.interval default` and `set cad.busycap default` now genuinely restore them.
+
+---
+
+## Two settings did not behave the way they were documented
+
+**`set backoff.multiplier 0` did not survive a reboot.** Zero is the documented way
+to switch reactive backoff off, and it worked until the node restarted — at which
+point a migration meant for old settings files could not tell "never configured"
+from "deliberately zero", and put it back to 0.2. Anyone who believed they had
+disabled reactive backoff has in fact been running with it on the whole time. Zero
+now means zero, and a genuinely absent setting still arrives as 0.2.
 
 ---
 

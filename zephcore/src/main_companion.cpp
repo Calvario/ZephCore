@@ -1446,8 +1446,12 @@ int main(void)
 	 * loadPrefs then keeps that 0 instead of the real default (this is what
 	 * zeroed probe_interval / cad_auto and, earlier, the GPS settings). */
 	initNodePrefs(&companion_mesh.prefs);
-	/* Companion-specific overrides vs. initNodePrefs defaults: */
-	companion_mesh.prefs.auto_shutdown_mv = CONFIG_ZEPHCORE_AUTO_SHUTDOWN_MILLIVOLTS; /* low-batt cutoff (0=off) */
+	/* Companion-specific overrides vs. initNodePrefs defaults.  auto_shutdown_mv
+	 * used to be set here too; it now comes from initNodePrefs() itself, which
+	 * is what the comment above asks for — a value listed only here is invisible
+	 * to every other caller of initNodePrefs(). gps_interval stays because
+	 * initNodePrefs() hardcodes the 300 s companion figure while repeaters run a
+	 * much longer duty; this line is how a board's Kconfig value wins. */
 	companion_mesh.prefs.gps_interval = CONFIG_ZEPHCORE_GPS_POLL_INTERVAL_SEC; /* 5-min duty cycle (0=always-on) */
 
 	/* Load prefs from storage */

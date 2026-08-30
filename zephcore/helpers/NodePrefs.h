@@ -106,7 +106,7 @@ struct NodePrefs {
 	uint8_t _reserved_apc_enabled;
 	uint8_t _reserved_apc_margin;
 	uint8_t meshtimesync;           // 1 = mesh time-sync clock correction on (default off)
-	uint8_t cad_auto;               // 1 = adaptive-CAD staircase acts on probe stats (default off = dry-run)
+	uint8_t cad_auto;               // 1 = adaptive-CAD staircase acts on probe stats (default ON)
 	int8_t cad_offset;              // operating detPeak offset from family base (-4..4)
 	uint8_t probe_interval;         // seconds between periodic radio measurements:
 	                                // one noise-floor sample, and the CAD probe that
@@ -202,6 +202,11 @@ static inline void sanitizeNodePrefs(NodePrefs* p) {
 	p->airtime_factor = sanePrefFloat(p->airtime_factor, 0.0f, 9.0f, 9.0f);
 	p->rx_delay_base  = sanePrefFloat(p->rx_delay_base, 0.0f, 3600.0f, 0.0f);
 	p->adc_multiplier = sanePrefFloat(p->adc_multiplier, 0.0f, 30000.0f, 0.0f);
+	/* Range matches the CLI (0.0-2.0).  0.0 is a legal value meaning "reactive
+	 * backoff off" and must survive: this guard exists for NaN and corruption
+	 * only.  RepeaterDataStore used to coerce 0.0 -> 0.2 here, which silently
+	 * undid the documented way to disable the feature on every boot. */
+	p->backoff_multiplier = sanePrefFloat(p->backoff_multiplier, 0.0f, 2.0f, 0.2f);
 	p->node_lat = sanePrefFloat(p->node_lat, -90.0, 90.0, 0.0);
 	p->node_lon = sanePrefFloat(p->node_lon, -180.0, 180.0, 0.0);
 
@@ -226,7 +231,10 @@ static inline void sanitizeNodePrefs(NodePrefs* p) {
 	p->rx_duty_cycle       = saneBool<uint8_t>(p->rx_duty_cycle, 0);
 	p->leds_disabled       = saneBool<uint8_t>(p->leds_disabled, 0);
 	p->meshtimesync        = saneBool<uint8_t>(p->meshtimesync, 0);
-	p->cad_auto            = saneBool<uint8_t>(p->cad_auto, 0);
+	/* Fallback must be the initNodePrefs() default (ON).  It was 0, so a byte
+	 * that was neither 0 nor 1 silently switched adaptive CAD off instead of
+	 * restoring the default — left over from when the default was dry-run. */
+	p->cad_auto            = saneBool<uint8_t>(p->cad_auto, 1);
 	p->allow_read_only     = saneBool<uint8_t>(p->allow_read_only, 0);
 	p->powersaving_enabled = saneBool<uint8_t>(p->powersaving_enabled, 0);
 	p->display_rotate      = saneBool<uint8_t>(p->display_rotate, 0);
@@ -249,6 +257,7 @@ static inline void sanitizeNodePrefs(NodePrefs* p) {
 	if (p->loop_detect    > LOOP_DETECT_STRICT) p->loop_detect    = LOOP_DETECT_MINIMAL;
 	if (p->path_hash_mode > 2)                  p->path_hash_mode = 0;
 	p->autoadd_max_hops    = clampPref<uint8_t>(p->autoadd_max_hops, 0, 64);
+	p->flood_max           = clampPref<uint8_t>(p->flood_max, 0, 64);
 	p->flood_max_unscoped  = clampPref<uint8_t>(p->flood_max_unscoped, 0, 64);
 	p->flood_max_advert    = clampPref<uint8_t>(p->flood_max_advert, 0, 64);
 	p->cad_busycap         = clampPref<uint8_t>(p->cad_busycap, 0, 90);
@@ -304,6 +313,12 @@ static inline void initNodePrefs(NodePrefs* prefs) {
 	prefs->advert_interval = 0;       // 0 = periodic local advert off; else minutes = value * 2
 	prefs->flood_advert_interval = 47;  // hours
 	prefs->rx_delay_base = 0.0f;
+	/* Must match mesh::ContentionTracker::DEFAULT_BACKOFF_MULT.  Left at the
+	 * memset 0 (= backoff disabled) until now, with RepeaterDataStore coercing
+	 * 0.0 -> 0.2 on load to paper over it — which also undid a deliberate 0.0.
+	 * Companions never apply this (only Repeater/RoomServer call
+	 * setBackoffMultiplier), so setting it here changes no existing node. */
+	prefs->backoff_multiplier = 0.2f;
 	prefs->tx_delay_factor = 0.5f;
 	prefs->direct_tx_delay_factor = 0.3f;
 	prefs->allow_read_only = 0;
@@ -335,4 +350,17 @@ static inline void initNodePrefs(NodePrefs* prefs) {
 	prefs->input_rotate = 0;          // Default OFF — joystick axes as the board wires them
 	prefs->v_contact_enabled = 1;     // Default ON — v-contact loopback admin chat (companion)
 	prefs->v_battery_alert_mv = 0xFFFF; // Sentinel: derive from board auto-shutdown threshold
+	/* Companion-only feature, and main_companion.cpp used to assign this by
+	 * hand right after calling us — so no node ever ran without it.  It lives
+	 * here now because a default listed only at one call site is invisible to
+	 * every other caller of initNodePrefs(), which is the exact drift that
+	 * zeroed probe_interval and cad_auto in the past.  Matches what
+	 * loadPrefs()'s absent-field fallback and sanitizeNodePrefs() already use.
+	 * 0 means disabled and is a legal stored value, so sanitize passes it
+	 * through untouched — this default only applies to a fresh prefs struct. */
+#ifdef CONFIG_ZEPHCORE_AUTO_SHUTDOWN_MILLIVOLTS
+	prefs->auto_shutdown_mv = CONFIG_ZEPHCORE_AUTO_SHUTDOWN_MILLIVOLTS;
+#else
+	prefs->auto_shutdown_mv = 0;
+#endif
 }

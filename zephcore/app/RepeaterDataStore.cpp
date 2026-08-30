@@ -284,10 +284,12 @@ bool RepeaterDataStore::loadPrefs(NodePrefs& prefs) {
      * unwritten byte both mean "on". */
     prefs.leds_disabled = (leds_byte == LEDS_PREF_OFF) ? 1 : 0;
 
-    /* Migrate uninitialized backoff_multiplier (0.0 or NaN) to default */
-    if (prefs.backoff_multiplier == 0.0f || prefs.backoff_multiplier != prefs.backoff_multiplier) {
-        prefs.backoff_multiplier = 0.2f;
-    }
+    /* The 0.0-or-NaN -> 0.2 coercion that used to live here is gone.  It could
+     * not tell "field absent from an old file" from "the user set 0.0 to turn
+     * reactive backoff off", so the documented off switch never survived a
+     * reboot.  Both cases are now handled properly: initNodePrefs() supplies
+     * 0.2 and a short-file fs_read() is a no-op that keeps it, while NaN and
+     * out-of-range values are caught by sanitizeNodePrefs(). */
 
     LOG_INF("Loaded prefs from %s", path);
     LOG_DBG("  name='%s' freq=%.3f sf=%u bw=%.1f tx_pwr=%d",

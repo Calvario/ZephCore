@@ -459,9 +459,10 @@ config ZEPHCORE_NOISE_FLOOR_INTERVAL_MS
 	  raising it there would change their RF tracking for no power gain, since
 	  their housekeeping timer wakes them at 5 s regardless.
 
-	  Repeaters use 15 s, matching ZEPHCORE_CAD_PROBE_INTERVAL — the only other
-	  recurring radio deadline — so the two do not interleave into separate
-	  wakes any more often than they have to.
+	  Repeaters use 15 s, matching the default probe.interval pref (set in
+	  initNodePrefs(), helpers/NodePrefs.h) — the only other recurring radio
+	  deadline — so the two do not interleave into separate wakes any more
+	  often than they have to.
 
 	  On a repeater this is one of the two shortest recurring deadlines, so it
 	  bounds how long the SoC can sleep between wakes.  Raising it stretches
