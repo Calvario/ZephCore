@@ -130,7 +130,9 @@ public:
 
 	/* Adaptive CAD (LBT detPeak calibration) */
 	void setCadParams(bool auto_enabled, int8_t offset,
-			  uint16_t probe_interval_s, uint8_t busycap_pct) override;
+			  uint16_t probe_interval_s, uint8_t busycap_pct,
+			  uint8_t stored_base = 0) override;
+	uint8_t cadBasePeak() override;
 	void cadMaintenance() override;
 	/** Deaf-aware AGC unstick + temperature-drift recalibration.
 	 *  Called from Dispatcher::maintenanceLoop(); never on the packet path. */
@@ -162,6 +164,31 @@ protected:
 	virtual int hwSendAsync(uint8_t *buf, uint32_t len,
 				struct k_poll_signal *sig) = 0;
 	virtual int16_t hwGetCurrentRSSI() = 0;
+	/** Read `n` instantaneous RSSI samples spaced `spacing_us` apart.
+	 *
+	 * Exists so the whole burst can be bracketed ONCE by whatever a family
+	 * needs to take a reading, instead of once per sample.  On the LR
+	 * families a single RSSI read stands the duty cycle down, enters
+	 * continuous Rx, waits 1 ms to settle, reads, and re-arms the cycle --
+	 * and that re-arm clears every IRQ and zeroes the RX-busy latch.  Called
+	 * eight times for one median that is eight cycle tear-downs, eight latch
+	 * wipes and 8 ms of settle, every sampling interval, whether or not a
+	 * CAD probe follows.
+	 *
+	 * Returns the number of valid samples written (< n means the read was
+	 * refused partway and the caller should abandon the burst), or a NEGATIVE
+	 * value when the burst must be abandoned for a reason that is not a read
+	 * failure: -EAGAIN says the receiver detected a preamble or header inside
+	 * the window, so the samples describe that signal and not the floor.
+	 * Worth its own return because the caller's counters exist to tell a
+	 * failing bus from a busy channel, and only a family that brackets its own
+	 * Rx entry is in a position to notice the latter.
+	 *
+	 * The default implementation is the old per-sample loop, which is already
+	 * correct for radios whose RSSI read has no such bracket (SX126x bails on
+	 * BUSY and touches nothing; SX127x has no duty cycle at all) and which
+	 * therefore never reports -EAGAIN. */
+	virtual int hwGetRssiBurst(int16_t *out, int n, uint32_t spacing_us);
 	/* Non-destructive read of the radio's "currently receiving" signal —
 	 * latch + raw IRQ bits, never clears.  Backs LoRaRadioBase::isReceiving(). */
 	virtual bool hwIsReceiving() = 0;
@@ -174,9 +201,24 @@ protected:
 	 * CAD (SX127x): probing unsupported, offset ignored. ───────────── */
 
 	/** Blocking calibration CAD at (family base detPeak + level).
-	 *  Leaves the chip in STANDBY; caller restarts RX.
-	 *  Returns 1 = busy, 0 = free, <0 = error / unsupported. */
+	 *  Returns 0 = free (chip in STANDBY, caller restarts RX),
+	 *          1 = busy, chip in STANDBY, caller restarts RX,
+	 *          2 = busy, chip left in RX on the detected signal (CAD_RX
+	 *              exit mode) -- caller must NOT restart RX, and reads the
+	 *              outcome later via hwCadRxOutcome(),
+	 *          <0 = error / unsupported. */
 	virtual int hwCadProbe(int8_t level) { (void)level; return -ENOSYS; }
+
+	/** Outcome of the RX a hwCadProbe() == 2 left the chip in.
+	 *  1 = a packet completed, so the detection was real;
+	 *  2 = the chip's own CAD timeout expired with nothing decoded;
+	 *  0 = not armed, or the terminal interrupt has not arrived yet.
+	 *  Reads driver state only -- no chip access, no polling loop. */
+	virtual int hwCadRxOutcome() { return 0; }
+
+	/** How long the chip may stay in a CAD_RX-entered RX before it raises
+	 *  its own timeout.  Bounds the wait before hwCadRxOutcome() is read. */
+	virtual uint32_t hwCadRxTimeoutMs() { return 0; }
 	/** Apply the operating detPeak offset for all subsequent LBT CADs. */
 	virtual void hwCadSetPeakOffset(int8_t offset) { (void)offset; }
 	/** Per-SF base detPeak for the current config (0 = unsupported). */
@@ -336,6 +378,12 @@ protected:
 	int8_t _cad_offset;             /* operating detPeak offset (levels) */
 	uint16_t _probe_interval_s; /* 0 = CAD probing disabled; drives _measure_interval_ms */
 	uint8_t _cad_busycap_pct;       /* airtime cap: max % TX deferred (0 = off) */
+	/* A CAD_RX probe awaiting its terminal event.  _cad_pending_level is the
+	 * stats rung the result belongs to; _cad_pending_deadline_ms is when the
+	 * chip guarantees it has resolved, so the answer is READ once at that
+	 * point rather than polled for.  Level INT8_MIN means nothing pending. */
+	int8_t _cad_pending_level;
+	int64_t _cad_pending_deadline_ms;
 	int64_t _cad_last_probe_ms;
 	int64_t _cad_last_decay_ms;
 	/* Earliest uptime at which a due-but-blocked probe may be retried.  The
@@ -382,6 +430,15 @@ protected:
 	uint32_t _rssi_reads_ok;
 	uint32_t _rssi_reads_busy;
 	uint32_t _rssi_bursts_abandoned;
+	/* Attempts turned away BEFORE a burst starts, by the isRadioReady()
+	 * guard — i.e. the duty-cycle sleep window.  The three counters above
+	 * cannot see this: they only move once a burst is already running, so a
+	 * sampler that is being refused outright reads as b0/a0, which is
+	 * indistinguishable from one that is running perfectly.  That ambiguity
+	 * is what makes the "does the floor go stale under duty cycle?" question
+	 * unanswerable today, and it is the missing denominator for the ~0.2%
+	 * completion rate noted above. */
+	uint32_t _rssi_dc_blocked;
 
 	/* Silence tracking for deafness hunting.  Reports only; the recovery
 	 * decision lives in agcIdleMaintenance() and is family-gated. */

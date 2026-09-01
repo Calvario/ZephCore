@@ -671,7 +671,18 @@ int main(void)
 	lora_radio.setFemRxEnable(prefs->fem_rxgain != 0);
 	lora_radio.enableRxDutyCycle(prefs->rx_duty_cycle != 0);
 	lora_radio.setCadParams(prefs->cad_auto != 0, prefs->cad_offset,
-				prefs->probe_interval, prefs->cad_busycap);
+				prefs->probe_interval, prefs->cad_busycap,
+				prefs->cad_base);
+	/* Write back the (offset, base) actually in force.  setCadParams() may
+	 * have re-anchored the offset across a base-table change, and the pair
+	 * has to be persisted for the NEXT upgrade to have an anchor of its own.
+	 * Guarded so a node whose base has not moved never writes flash at boot. */
+	if (prefs->cad_base != lora_radio.cadBasePeak() ||
+	    prefs->cad_offset != lora_radio.getCadOffset()) {
+		prefs->cad_offset = lora_radio.getCadOffset();
+		prefs->cad_base = lora_radio.cadBasePeak();
+		room_mesh.savePrefs();
+	}
 
 	/* LR2021 side detectors (multi-SF RX) from prefs.  extra_sf is a
 	 * zero-terminated list; a rejected set (SF/BW changed since it was

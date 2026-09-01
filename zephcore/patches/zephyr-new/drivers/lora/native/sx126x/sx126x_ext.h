@@ -189,15 +189,44 @@ uint8_t sx126x_cad_peak_max(void);
 /**
  * @brief Run one blocking calibration CAD at base detPeak + peak_offset
  *
- * Uses the operating modem config (SF/BW/symbol count).  Leaves the chip
- * in STANDBY — the caller must restart RX afterwards.  Must be called
- * from the mesh loop thread only (same thread as the LBT CAD).
+ * Uses the operating modem config (SF/BW/symbol count).  Armed with the
+ * CAD_RX exit mode, so the two verdicts leave the chip in different places:
+ * a NEGATIVE CAD exits to standby and the caller must restart RX, while a
+ * POSITIVE one leaves the chip in Rx on the signal it detected and the caller
+ * must NOT.  The return value distinguishes them.  Must be called from the
+ * mesh loop thread only (same thread as the LBT CAD).
  *
  * @param dev         LoRa device
  * @param peak_offset Signed offset from the base table value
- * @return 1 = activity detected, 0 = channel free, <0 = error
+ * @return 2 = activity detected, chip left in Rx (see sx126x_cad_rx_outcome())
+ *         0 = channel free, chip in standby, caller restarts RX
+ *         <0 = error
  */
 int sx126x_cad_probe(const struct device *dev, int8_t peak_offset);
+
+/**
+ * @brief Outcome of the Rx a positive sx126x_cad_probe() entered
+ *
+ * The chip always resolves that Rx with a terminal interrupt -- a packet, or
+ * RX_TX_TIMEOUT at cadTimeout -- so this reports an observed event rather than
+ * an inference, and never has to be polled in a loop.  Call it once after the
+ * cadTimeout deadline has passed; it consumes the result.
+ *
+ * @param dev LoRa device
+ * @return 1 = a packet completed (RX_DONE or CRC_ERR): the detection was real
+ *         2 = cadTimeout expired with nothing decoded: no packet followed
+ *         0 = nothing armed, or the terminal interrupt has not arrived yet
+ */
+int sx126x_cad_rx_outcome(const struct device *dev);
+
+/**
+ * @brief The cadTimeout a CAD_RX probe programs, in milliseconds
+ *
+ * Max-length-packet airtime at the current SF/BW.  Exposed so a caller waiting
+ * to read sx126x_cad_rx_outcome() uses the chip's own deadline rather than a
+ * guess of its own.
+ */
+uint32_t sx126x_cad_rx_timeout_ms(const struct device *dev);
 
 #ifdef __cplusplus
 }

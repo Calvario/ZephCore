@@ -69,6 +69,11 @@ int16_t LR1110Radio::hwGetCurrentRSSI()
 	return lr11xx_get_rssi_inst(_dev);
 }
 
+int LR1110Radio::hwGetRssiBurst(int16_t *out, int n, uint32_t spacing_us)
+{
+	return lr11xx_get_rssi_burst(_dev, out, n, spacing_us);
+}
+
 bool LR1110Radio::hwIsReceiving()
 {
 	/* MUST be non-destructive: never clear IRQ bits from this path.
@@ -111,6 +116,16 @@ uint32_t LR1110Radio::hwWakeupTimeUs()
 int LR1110Radio::hwCadProbe(int8_t level)
 {
 	return lr11xx_cad_probe(_dev, level);
+}
+
+int LR1110Radio::hwCadRxOutcome()
+{
+	return lr11xx_cad_rx_outcome(_dev);
+}
+
+uint32_t LR1110Radio::hwCadRxTimeoutMs()
+{
+	return lr11xx_cad_rx_timeout_ms(_dev);
 }
 
 void LR1110Radio::hwCadSetPeakOffset(int8_t offset)

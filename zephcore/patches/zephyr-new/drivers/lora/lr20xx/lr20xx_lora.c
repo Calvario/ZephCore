@@ -161,11 +161,17 @@ struct lr20xx_data {
 	int dio1_stuck_count;
 	bool tcxo_disabled;   /* set when the TCXO fallback has already fired */
 
-	/* RX-busy tracking for lr20xx_is_receiving().  PREAMBLE_DETECTED and
-	 * SYNC_WORD_HEADER_VALID are latched (DS 5.7), kept off DIO1, and read
-	 * non-destructively — so continuous RX, which has no timeout, needs a
-	 * software release or a noise preamble pins the TX gate forever.
-	 * All accesses under spi_mutex. */
+	/* RX-busy tracking for lr20xx_is_receiving().  Both bits are latched
+	 * (DS 5.7) and read non-destructively — continuous RX has no timeout, so
+	 * each needs a software release or a noise preamble pins the TX gate
+	 * forever.  All writes under spi_mutex.
+	 *
+	 * PREAMBLE_DETECTED is kept off DIO1 (it fires on noise) and is
+	 * poll-only.  SYNC_WORD_HEADER_VALID is routed to DIO1 and stamps
+	 * header_seen_at_ms from the work handler: with a duty cycle armed
+	 * is_receiving() may not touch the bus, so that timestamp is the ONLY
+	 * thing it can answer from, and while nothing wrote it the RX-busy gate
+	 * was dead on every duty-cycled node. */
 	uint32_t preamble_seen_at_ms;
 
 	uint32_t header_seen_at_ms;
@@ -965,14 +971,30 @@ static void lr20xx_apply_modem_config(struct lr20xx_data *data,
 			(half_power & 1) ? 5 : 0, rc);
 	}
 
-	/* Only the events the DIO1 handler actually acts on. PREAMBLE_DETECTED
-	 * and SYNC_WORD_HEADER_VALID are deliberately NOT here: they fire on
-	 * noise, and an unhandled DIO1 assertion drives the safety path, which
-	 * restarts RX and destroys the very packet that was arriving. They stay
-	 * readable in the IRQ register for lr20xx_is_receiving(), which is the
-	 * same split the SX126x driver uses for its RX-busy gate. */
+	/* The events the DIO1 handler acts on, plus SYNC_WORD_HEADER_VALID.
+	 *
+	 * PREAMBLE_DETECTED is deliberately NOT here: it fires on noise, and an
+	 * unhandled DIO1 assertion drives the safety path, which restarts RX and
+	 * destroys the very packet that was arriving.  It stays readable in the
+	 * IRQ register for lr20xx_is_receiving()'s grace window.
+	 *
+	 * SYNC_WORD_HEADER_VALID used to sit alongside it, which was wrong on
+	 * both counts.  A header only latches after a sync-word match AND a
+	 * header CRC, so it fires at most once per real packet, not on noise;
+	 * and the safety-path objection is answered by handling it rather than
+	 * by hiding it (the handler now has a branch that marks the reception as
+	 * continuing).  Leaving it off DIO1 meant nothing ever stamped
+	 * header_seen_at_ms, and that timestamp is the entire RX-busy answer
+	 * once a duty cycle is armed -- the poll path is forbidden to touch the
+	 * bus there -- so lr20xx_is_receiving() returned false unconditionally on
+	 * every duty-cycled node, blinding the TX gate, the noise-floor sampler
+	 * and the CAD probe alike.
+	 *
+	 * This IS the split the SX126x driver uses, which the old comment
+	 * claimed while doing something else: preamble off DIO1, header on. */
 	rc = lr20xx_system_set_dio_irq_cfg(ctx, lr20xx_irq_dio(cfg),
 		LR20XX_SYSTEM_IRQ_RX_DONE |
+		LR20XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID |
 		LR20XX_SYSTEM_IRQ_TX_DONE |
 		LR20XX_SYSTEM_IRQ_CAD_DONE |
 		LR20XX_SYSTEM_IRQ_CAD_DETECTED |
@@ -1856,6 +1878,35 @@ static void lr20xx_dio1_work_handler(struct k_work *work)
 		return;
 	}
 
+	/* ── Header valid ──
+	 * A packet is past sync word and header CRC and is now in its payload
+	 * phase.  Stamp the latch lr20xx_is_receiving() answers from; bounded
+	 * there by lr20xx_max_payload_ms(), and cleared by the terminal event's
+	 * lr20xx_reset_rx_busy_signals().
+	 *
+	 * Gated on no terminal bit in this same pass -- those branches above own
+	 * the outcome and have already reset the signals, so stamping after them
+	 * would re-arm a gate for a packet that is finished.  (The header-error
+	 * branch above returns, so it cannot reach here at all.)
+	 *
+	 * rx_restarted, for the same reason the CAD_RX branch sets it: nothing
+	 * needs restarting, the chip is mid-packet, and letting the safety net
+	 * below fire here would destroy the very packet this branch exists to
+	 * protect -- the failure that kept this IRQ off DIO1 in the first
+	 * place. */
+	if ((irq & LR20XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID) &&
+	    !(irq & (LR20XX_SYSTEM_IRQ_RX_DONE | LR20XX_SYSTEM_IRQ_CRC_ERROR |
+		     LR20XX_SYSTEM_IRQ_TIMEOUT))) {
+		uint32_t now = k_uptime_get_32();
+
+		/* 1 as the "set" sentinel if k_uptime is 0 right after boot. */
+		data->header_seen_at_ms = (now == 0) ? 1U : now;
+		/* The latch is the truth source now; a preamble timestamp left
+		 * behind would outlive it and be read as a live grace window. */
+		data->preamble_seen_at_ms = 0;
+		rx_restarted = true;
+	}
+
 safety_check:
 	/* A zero IRQ word means the edge was already consumed — a duplicate
 	 * re-submit, or the restart path cleared it. Nothing failed, so do not
@@ -2434,6 +2485,46 @@ static int lr20xx_lora_recv(const struct device *dev, uint8_t *buf,
 
 /* ── LR20xx extension API ───────────────────────────────────────────── */
 
+/* Front-end settle to wait after entering Rx before the first GetRssiInst.
+ *
+ * DS Table 13-82 puts the RSSI averaging window at ~936 us*kHz / BW and the
+ * post-Rx-entry delay at 12-15 of those windows; the C++ sampler will not read
+ * until 16 have passed (rssi_settle_delay_us(), radio_common.h).  An Rx entry
+ * made HERE has to clear the same bar, or the reading it brackets comes from a
+ * front end the firmware itself considers unsettled.
+ *
+ * The flat 1 ms this replaces clears it from BW20.83 up but not below --
+ * BW15.63 wants 1008 us, BW10.42 1504 us, BW7.81 2144 us -- and `set radio`
+ * accepts bandwidths that low.  Floored at 1000 so no preset that works today
+ * waits less than it did.  Deliberately the same 936/16 the C++ side uses: two
+ * settle models that could disagree would be worse than one that is wrong. */
+static uint32_t lr20xx_rssi_settle_us(struct lr20xx_data *data)
+{
+	uint32_t bw_khz = (uint32_t)bw_enum_to_khz(data->modem_cfg.bandwidth);
+	uint32_t settle;
+
+	if (bw_khz == 0) {
+		return 1000U;
+	}
+	settle = ((936U + bw_khz - 1U) / bw_khz) * 16U;
+
+	return settle < 1000U ? 1000U : settle;
+}
+
+/* Sleep the whole millisecond, busy-wait only the remainder.  k_sleep() rounds
+ * up to a tick and the tick period is a board Kconfig, so asking it for a
+ * sub-millisecond excess is not portable; this keeps the old wait exactly and
+ * adds the deficit on top. */
+static void lr20xx_rssi_settle(struct lr20xx_data *data)
+{
+	uint32_t settle_us = lr20xx_rssi_settle_us(data);
+
+	k_sleep(K_MSEC(1));
+	if (settle_us > 1000U) {
+		k_busy_wait(settle_us - 1000U);
+	}
+}
+
 int16_t lr20xx_get_rssi_inst(const struct device *dev)
 {
 	struct lr20xx_data *data = dev->data;
@@ -2453,12 +2544,13 @@ int16_t lr20xx_get_rssi_inst(const struct device *dev)
 		/* GetRssiInst reads a live receiver; the stand-down left the chip
 		 * in standby, where there is nothing to measure.  Enter
 		 * continuous Rx for the reading and hand the cycle back after.
-		 * 1 ms clears the front-end settle at every bandwidth this
-		 * firmware offers, and against a noise-floor interval measured in
-		 * seconds it costs well under a hundredth of a percent of airtime. */
+		 * lr20xx_rssi_settle() sizes the front-end settle from the
+		 * bandwidth (a flat 1 ms was short of it below BW20.83), and
+		 * against a noise-floor interval measured in seconds it costs
+		 * well under a hundredth of a percent of airtime. */
 		lr20xx_radio_common_set_rx_with_timeout_in_rtc_step(
 			&data->hal_ctx, 0xFFFFFF);
-		k_sleep(K_MSEC(1));
+		lr20xx_rssi_settle(data);
 	}
 
 	if (lr20xx_radio_common_get_rssi_inst(&data->hal_ctx, &rssi,
@@ -2530,6 +2622,100 @@ static uint32_t lr20xx_max_payload_ms(struct lr20xx_data *data)
 	return ms + (ms / 4U) + 100U;
 }
 
+int lr20xx_get_rssi_burst(const struct device *dev, int16_t *out, int n,
+			 uint32_t spacing_us)
+{
+	struct lr20xx_data *data = dev->data;
+	int got = 0;
+
+	/* One stand-down for the WHOLE burst, not one per sample.
+	 *
+	 * lr20xx_get_rssi_inst() has to suspend the duty cycle, enter continuous
+	 * Rx, wait 1 ms for the front end, read, and then hand the cycle back --
+	 * and lr20xx_dc_resume() clears every IRQ and zeroes the RX-busy latch,
+	 * because a re-armed cycle must start from a known point.  The noise-floor
+	 * sampler wants a median of eight, and calling the single-shot read eight
+	 * times therefore cost eight cycle tear-downs, eight latch wipes and 8 ms
+	 * of settle every sampling interval -- on a receiver whose whole job is to
+	 * be listening.  That is the same fault the CAD classifier had, in a
+	 * different function; here it fires whether or not a probe follows.
+	 *
+	 * Bracketing once collapses it to one of each.  It also holds the SPI
+	 * mutex for a single short span instead of taking it eight times, and the
+	 * reads are spaced by the caller's averaging window exactly as before, so
+	 * they stay independent. */
+	if (k_mutex_lock(&data->spi_mutex, K_NO_WAIT) != 0) {
+		return 0;
+	}
+
+	bool armed = lr20xx_dc_suspend(data);
+
+	if (armed) {
+		lr20xx_radio_common_set_rx_with_timeout_in_rtc_step(
+			&data->hal_ctx, 0xFFFFFF);
+		/* Start the window clean so the check after the loop reports
+		 * only what arrived INSIDE it -- these bits are latched (DS 5.7)
+		 * and nothing clears them between duty-cycle re-arms, so a stale
+		 * preamble from earlier in the cycle would otherwise condemn
+		 * every burst.  Safe here and nowhere else: the cycle is already
+		 * torn down and dc_resume() clears the lot again on the way out,
+		 * so this destroys no state the poll path could still want.
+		 * CMD_ERROR is deliberately absent -- that is an LR11xx quirk
+		 * with no LR20xx equivalent, as lr20xx_is_receiving() notes. */
+		lr20xx_system_clear_irq_status(&data->hal_ctx,
+					       LR20XX_SYSTEM_IRQ_PREAMBLE_DETECTED |
+					       LR20XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID);
+		lr20xx_rssi_settle(data);
+	}
+
+	for (int i = 0; i < n; i++) {
+		int16_t rssi = 0;
+		uint8_t half_dbm = 0;
+
+		if (i) {
+			k_busy_wait(spacing_us);
+		}
+		if (lr20xx_radio_common_get_rssi_inst(&data->hal_ctx, &rssi,
+						  &half_dbm) != LR20XX_STATUS_OK) {
+			break;
+		}
+		out[i] = rssi;
+		got++;
+	}
+
+	/* Did a transmitter turn up inside the window?  Then these samples
+	 * measure it, not the floor, and the caller must throw them away.
+	 *
+	 * This covers a gap the caller's own guards cannot.  cadMaintenance()
+	 * re-checks isReceiving() immediately before its CAD probe, and that
+	 * now works on this family -- but dc_resume() below zeroes
+	 * header_seen_at_ms on its way out, one call earlier, so a reception
+	 * that began inside this bracket is invisible to the re-check by the
+	 * time it runs.  Reporting the contamination from in here, where the
+	 * evidence still exists, closes it: the sampler abandons the burst,
+	 * _sample_fresh stays clear, and the probe -- which rides on that flag
+	 * -- does not run this pass.
+	 *
+	 * Only meaningful with a cycle armed.  Without one this function makes
+	 * no Rx entry of its own and clears nothing, so the caller's guards see
+	 * the reception unaided.  get_status() clears nothing. */
+	if (armed) {
+		lr20xx_system_irq_mask_t irq = 0;
+
+		if (lr20xx_system_get_status(&data->hal_ctx, NULL, NULL, &irq) ==
+		    LR20XX_STATUS_OK &&
+		    (irq & (LR20XX_SYSTEM_IRQ_PREAMBLE_DETECTED |
+			    LR20XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID))) {
+			got = -EAGAIN;
+		}
+	}
+
+	lr20xx_dc_resume(data, armed);
+	k_mutex_unlock(&data->spi_mutex);
+
+	return got;
+}
+
 bool lr20xx_is_receiving(const struct device *dev)
 {
 	struct lr20xx_data *data = dev->data;
@@ -2547,22 +2733,41 @@ bool lr20xx_is_receiving(const struct device *dev)
 	 * is the truthful answer, not just the safe one.  CAD still gates TX,
 	 * so the channel check is not lost.  Same guard the LR11xx applies.
 	 *
-	 * With a cycle armed, answer from the DIO1-driven latch and issue no SPI
-	 * at all.  This path cannot bracket itself in suspend/resume the way the
-	 * samplers do — standing the cycle down to ask "am I receiving?" would
-	 * end the very reception being asked about.  It does not need to:
-	 * header_seen_at_ms is stamped by the DIO1 work handler and needs no bus
-	 * access to be current.  Nor may it fall back to a BUSY read, because
-	 * BUSY is high through ordinary Rx on this family too — a BUSY-high
-	 * "not receiving" is wrong exactly when it matters, mid-packet, with the
-	 * TX gate asking permission to transmit over it. */
-	if (data->rx_duty_cycle_enabled) {
-		uint32_t seen = data->header_seen_at_ms;
+	 * Payload phase, from the latch the DIO1 handler stamps on
+	 * SYNC_WORD_HEADER_VALID.  Read before the duty-cycle split because it
+	 * is the one signal both sides share — and the only one the armed side
+	 * has at all.  That path cannot bracket itself in suspend/resume the way
+	 * the samplers do (standing the cycle down to ask "am I receiving?"
+	 * would end the very reception being asked about), nor fall back to a
+	 * BUSY read, because BUSY is high through ordinary Rx on this family too
+	 * — a BUSY-high "not receiving" is wrong exactly when it matters,
+	 * mid-packet, with the TX gate asking permission to transmit over it.
+	 *
+	 * That leaves the latch, which is why the header IRQ is routed to DIO1
+	 * (see the set_dio_irq_cfg call): the handler needs no bus access to keep
+	 * this current, and until it did the armed side had nothing to read. */
+	uint32_t hdr_seen = data->header_seen_at_ms;
 
-		if (seen == 0) {
-			return false;
+	if (hdr_seen != 0 &&
+	    (k_uptime_get_32() - hdr_seen) < lr20xx_max_payload_ms(data)) {
+		return true;
+	}
+
+	if (data->rx_duty_cycle_enabled) {
+		/* Never stamped, or the payload deadline has blown.  No bus
+		 * access is permitted here to look any further, and none is
+		 * wanted: the latch is the whole answer on this side.  Drop a
+		 * stale one so the compare above stops repeating, but only if
+		 * the mutex is free — the DIO1 handler owns this field, and if
+		 * it is mid-update it will maintain the field itself. */
+		if (hdr_seen != 0 &&
+		    k_mutex_lock(&data->spi_mutex, K_NO_WAIT) == 0) {
+			LOG_WRN("RX header latched %u ms with no packet, releasing TX gate",
+				k_uptime_get_32() - hdr_seen);
+			data->header_seen_at_ms = 0;
+			k_mutex_unlock(&data->spi_mutex);
 		}
-		return (k_uptime_get_32() - seen) < lr20xx_max_payload_ms(data);
+		return false;
 	}
 
 	/* Use non-destructive get_status to check for preamble/header
@@ -2584,19 +2789,20 @@ bool lr20xx_is_receiving(const struct device *dev)
 	 * never completes would otherwise mute TX until reboot. */
 	if (irq & LR20XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID) {
 		uint32_t now = k_uptime_get_32();
-		uint32_t seen = data->header_seen_at_ms;
 
-		if (seen == 0) {
+		/* The DIO1 handler normally stamps this before any poll sees
+		 * the bit; the poll can still get there first in the window
+		 * before the work item runs, so it stays able to stamp.  A latch
+		 * still inside its deadline already returned true at the top of
+		 * the function, so reaching here with one set means the deadline
+		 * is blown and the gate has to be released. */
+		if (data->header_seen_at_ms == 0) {
 			data->header_seen_at_ms = (now == 0) ? 1U : now;
 			k_mutex_unlock(&data->spi_mutex);
 			return true;
 		}
-		if ((now - seen) < lr20xx_max_payload_ms(data)) {
-			k_mutex_unlock(&data->spi_mutex);
-			return true;
-		}
 		LOG_WRN("RX header latched %u ms with no packet, releasing TX gate",
-			now - seen);
+			now - data->header_seen_at_ms);
 		lr20xx_system_clear_irq_status(&data->hal_ctx,
 					       LR20XX_SYSTEM_IRQ_PREAMBLE_DETECTED |
 					       LR20XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID |

@@ -834,6 +834,16 @@ void ZephyrDataStore::loadPrefs(NodePrefs &prefs)
 		prefs.input_rotate = buf[off++];
 	}
 
+	/* Offset 170: cad_base (ZephCore extension).  Absent in pre-existing
+	 * files → stays 0, which setCadParams() reads as "no base recorded" and
+	 * leaves the stored offset exactly where it is.  That is the right
+	 * migration: a node upgrading across the table change has no way to know
+	 * which base its offset was learned against, so re-anchoring it would be
+	 * guessing, and the staircase re-converges on its own either way. */
+	if (off < len) {
+		prefs.cad_base = buf[off++];
+	}
+
 	sanitizeNodePrefs(&prefs);
 }
 
@@ -939,7 +949,10 @@ void ZephyrDataStore::savePrefs(const NodePrefs &prefs)
 	/* Offset 168-169: display_rotate / input_rotate (ZephCore extension) */
 	buf[off++] = prefs.display_rotate;
 	buf[off++] = prefs.input_rotate;
-	/* Total: 170 bytes */
+	/* Offset 170: cad_base (ZephCore extension, family base detPeak the
+	 * cad_offset above was learned against) */
+	buf[off++] = prefs.cad_base;
+	/* Total: 171 bytes */
 
 	bool ok = atomicReplaceFile(PREFS_FILE, buf, off);
 	LOG_DBG("savePrefs: wrote %s, ok=%d (%d bytes), name='%.16s'",

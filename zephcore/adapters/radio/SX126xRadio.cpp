@@ -141,6 +141,16 @@ int SX126xRadio::hwCadProbe(int8_t level)
 	return sx126x_cad_probe(_dev, level);
 }
 
+int SX126xRadio::hwCadRxOutcome()
+{
+	return sx126x_cad_rx_outcome(_dev);
+}
+
+uint32_t SX126xRadio::hwCadRxTimeoutMs()
+{
+	return sx126x_cad_rx_timeout_ms(_dev);
+}
+
 void SX126xRadio::hwCadSetPeakOffset(int8_t offset)
 {
 	sx126x_cad_set_peak_offset(_dev, offset);

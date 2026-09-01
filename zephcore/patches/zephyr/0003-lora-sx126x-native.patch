@@ -486,14 +486,38 @@ BW500 column SF+13 is ten counts too sensitive at SF12, and `set bw` accepts
 octave and drove field units onto the offset rail.
 
 Below BW125 Semtech declines to tabulate, and BW62.5 is our default preset, so
-that gap is where we normally operate.  SF+13 is kept there, and it is not a
-guess: it sits ~1 count below Semtech's BW125 column at every SF, which is the
-correct direction for a narrower bandwidth, and a field SX1262 at SF7/BW62.5
-converged to detPeak 19 against this table's 20 -- one rung of adaptive
-correction.  SF+13 is also already a 4-symbol figure (RadioLib programs it with
-CAD_ON_4_SYMB citing DS rev 1.1 p.92), so the symbol correction must not be
-applied to it a second time.  Net effect: no behaviour change at the default
-preset, and a real table where there was none at BW250/500.
+that gap is where we normally operate.  There we take the BW125 column minus a
+constant 1 and let the shared symbol correction apply normally, which happens
+to reproduce the old SF+13 heuristic exactly at SF5, SF6, SF7, SF9, SF10 and
+SF12, and to differ from it by a single count at SF8 and SF11.
+
+Why not simply keep SF+13, given it was measured right at SF7?  Because SF+13
+has a uniform +1 slope and Semtech's measured row does not:
+
+  SF        5   6   7   8   9  10  11  12
+  Semtech  20  21  22  24  24  25  27  27    steps +1 +1 +2  0 +1 +2  0
+  SF+13    18  19  20  21  22  23  24  25    steps +1 +1 +1 +1 +1 +1 +1
+
+detPeak is empirical PER data; there is no reason for it to be linear in SF,
+and we adopt Semtech's shape for BW125, BW250 and BW500 in this very function.
+Keeping SF+13 below BW125 would mean the driver used two different SF shapes
+depending on bandwidth -- but bandwidth shifts the level, it does not reshape
+the curve.  The sub-125 constant (-1 here, against -7 on the LR11xx) is that
+level shift; Semtech's row is the shape.
+
+Field agreement: three SX1262s at SF7/BW62.5 -- a house, a roof and a very busy
+mountaintop -- converged to 19/19/20 against this row's base of 20, which this
+edit does not move.  The only SF8 datum we have (that hilltop, offset +2/+3
+against SF+13's 21) points the same way as Semtech's +2 step at SF8.  Nothing
+points the other way.
+
+SF+13 was already a 4-symbol figure (RadioLib programs it with CAD_ON_4_SYMB
+citing DS rev 1.1 p.92), which is why it was excluded from the symbol
+correction.  The sub-125 row is a raw table value like every other bracket, so
+it takes the correction like every other bracket -- that is the whole point of
+removing the special case.  Net effect: no behaviour change at the default
+preset, a real table where there was none at BW250/500, and a one-count move at
+SF8 and SF11 below BW125.
 
 The clamp around the adaptive offset moves from 15-40 to SX126X_CAD_PEAK_MIN/
 MAX (12-48) and is now exported through sx126x_cad_peak_min/max().  Both halves
@@ -553,10 +577,10 @@ Regenerate with:
 appended to this preamble.
 
 diff --git a/drivers/lora/native/sx126x/sx126x.c b/drivers/lora/native/sx126x/sx126x.c
-index 30243ba5dc7..16823387b1d 100644
+index 30243ba5dc7..a2c57493caf 100644
 --- a/drivers/lora/native/sx126x/sx126x.c
 +++ b/drivers/lora/native/sx126x/sx126x.c
-@@ -6,72 +6,220 @@
+@@ -6,72 +6,236 @@
  #include <zephyr/kernel.h>
  #include <zephyr/device.h>
  #include <zephyr/drivers/lora.h>
@@ -722,6 +746,22 @@ index 30243ba5dc7..16823387b1d 100644
 + * so the fields never drift out of sync.  Called from every RX (re)start
 + * site, every terminal-event handler (RX_DONE / CRC_ERR / RX_TX_TIMEOUT),
 + * and on TX-state entry. */
++/* cad_rx_state values -- see the field comment in sx126x.h. */
++#define SX126X_CAD_RX_IDLE   0
++#define SX126X_CAD_RX_ARMED  1
++#define SX126X_CAD_RX_PACKET 2
++#define SX126X_CAD_RX_TMOUT  3
++
++/* Resolve an in-flight CAD_RX with the terminal event that just arrived.
++ * A no-op unless a CAD_RX is actually armed, so the packet path pays one
++ * atomic compare for it.  Returns true when this call is the one that
++ * resolved it, which is how sx126x_handle_irq_timeout() tells the probe's own
++ * cadTimeout apart from a duty-cycle timeout raising the identical IRQ. */
++static inline bool sx126x_cad_rx_resolve(struct sx126x_data *data, int outcome)
++{
++	return atomic_cas(&data->cad_rx_state, SX126X_CAD_RX_ARMED, outcome);
++}
++
 +static inline void sx126x_reset_rx_busy_signals(struct sx126x_data *data)
 +{
 +	data->rx_packet_active = false;
@@ -745,7 +785,7 @@ index 30243ba5dc7..16823387b1d 100644
 +	if (bandwidth_to_hz(data->config.bandwidth, &bw_hz) < 0 ||
 +	    sf < 5 || sf > 12) {
 +		return 1000;  /* safe default ~1 s if config is uninitialised */
- 	}
++	}
 +	/* (preamble + 8) syms * 2^sf * 1000000 / bw_hz -> us; +999/1000 -> ms */
 +	uint64_t us = ((uint64_t)(preamble + 8U) << sf) * 1000000ULL / bw_hz;
 +
@@ -790,7 +830,7 @@ index 30243ba5dc7..16823387b1d 100644
 +
 +	if (numer > 4U * (uint32_t)sf) {
 +		numer -= 4U * (uint32_t)sf;
-+	}
+ 	}
 +	uint32_t n_sym = 8U + ((numer + denom - 1U) / denom) * 8U;
 +
 +	/* n_sym * 2^sf * 1000000 / bw_hz -> us, then +25% and +100 ms margin. */
@@ -801,7 +841,7 @@ index 30243ba5dc7..16823387b1d 100644
  }
  
  static bool should_enable_ldro(enum lora_datarate sf, enum lora_signal_bandwidth bw,
-@@ -81,7 +229,11 @@ static bool should_enable_ldro(enum lora_datarate sf, enum lora_signal_bandwidth
+@@ -81,7 +245,11 @@ static bool should_enable_ldro(enum lora_datarate sf, enum lora_signal_bandwidth
  		return true;
  	}
  
@@ -814,7 +854,7 @@ index 30243ba5dc7..16823387b1d 100644
  	/* Symbol time = 2^SF / BW (in seconds) */
  	/* 16.38 ms = 16380 us */
  	/* 2^SF / BW > 0.01638 => 2^SF * 1000000 / BW > 16380 */
-@@ -216,12 +368,43 @@ static int sx126x_set_modulation_params(const struct device *dev,
+@@ -216,12 +384,43 @@ static int sx126x_set_modulation_params(const struct device *dev,
  	return sx126x_hal_write_cmd(dev, SX126X_CMD_SET_MODULATION_PARAMS, buf, 4);
  }
  
@@ -858,7 +898,7 @@ index 30243ba5dc7..16823387b1d 100644
  
  	sys_put_be16(preamble_len, &buf[0]);
  	buf[2] = header_type;
-@@ -229,7 +412,31 @@ static int sx126x_set_packet_params(const struct device *dev,
+@@ -229,7 +428,31 @@ static int sx126x_set_packet_params(const struct device *dev,
  	buf[4] = crc_mode;
  	buf[5] = invert_iq;
  
@@ -891,7 +931,7 @@ index 30243ba5dc7..16823387b1d 100644
  }
  
  static int sx126x_set_sync_word(const struct device *dev, bool public_network)
-@@ -243,10 +450,128 @@ static int sx126x_set_sync_word(const struct device *dev, bool public_network)
+@@ -243,10 +466,128 @@ static int sx126x_set_sync_word(const struct device *dev, bool public_network)
  	return sx126x_hal_write_regs(dev, SX126X_REG_LORA_SYNC_WORD_MSB, buf, 2);
  }
  
@@ -1022,7 +1062,7 @@ index 30243ba5dc7..16823387b1d 100644
  	return sx126x_hal_write_regs(dev, SX126X_REG_RX_GAIN, &val, 1);
  }
  
-@@ -296,7 +621,7 @@ static int sx126x_get_packet_status(const struct device *dev,
+@@ -296,7 +637,7 @@ static int sx126x_get_packet_status(const struct device *dev,
  	uint8_t buf[3];
  	int ret;
  
@@ -1031,7 +1071,7 @@ index 30243ba5dc7..16823387b1d 100644
  	if (ret == 0) {
  		/* RSSI is -value/2 dBm */
  		*rssi = -((int16_t)buf[0] >> 1);
-@@ -307,6 +632,140 @@ static int sx126x_get_packet_status(const struct device *dev,
+@@ -307,6 +648,140 @@ static int sx126x_get_packet_status(const struct device *dev,
  	return ret;
  }
  
@@ -1172,7 +1212,7 @@ index 30243ba5dc7..16823387b1d 100644
  static int sx126x_chip_init(const struct device *dev)
  {
  	const struct sx126x_hal_config *config = dev->config;
-@@ -367,6 +826,26 @@ static int sx126x_chip_init(const struct device *dev)
+@@ -367,6 +842,26 @@ static int sx126x_chip_init(const struct device *dev)
  		return ret;
  	}
  
@@ -1199,7 +1239,7 @@ index 30243ba5dc7..16823387b1d 100644
  	/* Set packet type to LoRa */
  	ret = sx126x_set_packet_type(dev, SX126X_PACKET_TYPE_LORA);
  	if (ret < 0) {
-@@ -374,10 +853,23 @@ static int sx126x_chip_init(const struct device *dev)
+@@ -374,10 +869,23 @@ static int sx126x_chip_init(const struct device *dev)
  		return ret;
  	}
  
@@ -1226,7 +1266,7 @@ index 30243ba5dc7..16823387b1d 100644
  	if (ret < 0) {
  		LOG_ERR("Set IRQ params failed: %d", ret);
  		return ret;
-@@ -390,6 +882,10 @@ static int sx126x_chip_init(const struct device *dev)
+@@ -390,6 +898,10 @@ static int sx126x_chip_init(const struct device *dev)
  		return ret;
  	}
  
@@ -1237,7 +1277,7 @@ index 30243ba5dc7..16823387b1d 100644
  	LOG_INF("SX126x initialized");
  	return 0;
  }
-@@ -398,15 +894,44 @@ static void sx126x_dio1_callback(const struct device *dev)
+@@ -398,15 +910,44 @@ static void sx126x_dio1_callback(const struct device *dev)
  {
  	struct sx126x_data *data = dev->data;
  
@@ -1284,7 +1324,7 @@ index 30243ba5dc7..16823387b1d 100644
  		sx126x_hal_set_rf_switch(dev, enable, tx);
  	}
  }
-@@ -426,6 +951,7 @@ static void sx126x_disconnect_rf_gpios(const struct device *dev)
+@@ -426,6 +967,7 @@ static void sx126x_disconnect_rf_gpios(const struct device *dev)
  	sx126x_disconnect_gpio(&config->antenna_enable);
  	sx126x_disconnect_gpio(&config->tx_enable);
  	sx126x_disconnect_gpio(&config->rx_enable);
@@ -1292,7 +1332,7 @@ index 30243ba5dc7..16823387b1d 100644
  }
  
  static int sx126x_reconnect_rf_gpios(const struct device *dev)
-@@ -451,10 +977,238 @@ static int sx126x_reconnect_rf_gpios(const struct device *dev)
+@@ -451,10 +993,238 @@ static int sx126x_reconnect_rf_gpios(const struct device *dev)
  		return ret;
  	}
  
@@ -1531,7 +1571,7 @@ index 30243ba5dc7..16823387b1d 100644
  static int sx126x_set_sleep(const struct device *dev)
  {
  	struct sx126x_data *data = dev->data;
-@@ -533,8 +1287,16 @@ static void sx126x_handle_irq_rx_done(const struct device *dev, uint16_t irq_sta
+@@ -533,8 +1303,16 @@ static void sx126x_handle_irq_rx_done(const struct device *dev, uint16_t irq_sta
  	struct sx126x_data *data = dev->data;
  	struct sx126x_rx_result result = { 0 };
  	uint8_t payload_len = 0, offset = 0;
@@ -1548,7 +1588,7 @@ index 30243ba5dc7..16823387b1d 100644
  	/* Get received packet info */
  	ret = sx126x_get_rx_buffer_status(dev, &payload_len, &offset);
  	if (ret < 0) {
-@@ -544,9 +1306,26 @@ static void sx126x_handle_irq_rx_done(const struct device *dev, uint16_t irq_sta
+@@ -544,9 +1322,26 @@ static void sx126x_handle_irq_rx_done(const struct device *dev, uint16_t irq_sta
  		/* Get signal quality */
  		sx126x_get_packet_status(dev, &result.rssi, &result.snr);
  
@@ -1578,7 +1618,7 @@ index 30243ba5dc7..16823387b1d 100644
  			result.status = -EIO;
  		} else {
  			/* Read payload into shared buffer */
-@@ -564,23 +1343,55 @@ static void sx126x_handle_irq_rx_done(const struct device *dev, uint16_t irq_sta
+@@ -564,23 +1359,55 @@ static void sx126x_handle_irq_rx_done(const struct device *dev, uint16_t irq_sta
  		}
  	}
  
@@ -1610,17 +1650,17 @@ index 30243ba5dc7..16823387b1d 100644
 +			 * sx126x_retention_debug_check().  Compiles to nothing
 +			 * without CONFIG_ZEPHCORE_LORA_RETENTION_DEBUG. */
 +			sx126x_retention_debug_check(dev, "dc-rx", true);
-+		}
+ 		}
+-		/* Restart RX unless the callback stopped reception */
+-		if (data->rx_cb != NULL) {
+-			sx126x_set_rx(dev, 0);
 +		sx126x_restart_rx(dev, data);
 +
 +		k_mutex_lock(&data->lock, K_FOREVER);
 +		if ((data->rx_cb != rx_cb) ||
 +		    (atomic_get(&data->rx_cb_gen) != rx_cb_gen)) {
 +			rx_cb = NULL;
- 		}
--		/* Restart RX unless the callback stopped reception */
--		if (data->rx_cb != NULL) {
--			sx126x_set_rx(dev, 0);
++		}
 +		k_mutex_unlock(&data->lock);
 +
 +		if (rx_cb != NULL && result.status < 0) {
@@ -1647,13 +1687,20 @@ index 30243ba5dc7..16823387b1d 100644
  		sx126x_set_sleep(dev);
  		k_msgq_put(&data->rx_msgq, &result, K_NO_WAIT);
  	}
-@@ -589,8 +1400,83 @@ static void sx126x_handle_irq_rx_done(const struct device *dev, uint16_t irq_sta
+@@ -589,8 +1416,99 @@ static void sx126x_handle_irq_rx_done(const struct device *dev, uint16_t irq_sta
  static void sx126x_handle_irq_timeout(const struct device *dev)
  {
  	struct sx126x_data *data = dev->data;
 +	lora_recv_cb rx_cb = NULL;
++	bool was_cad_rx;
  
  	LOG_DBG("Timeout");
++
++	/* cadTimeout expired with nothing decoded: the CAD_RX detection had no
++	 * packet behind it.  Resolved first, before anything below re-arms the
++	 * node's normal Rx mode, and the verdict is kept because the duty-cycle
++	 * branch must not count this timeout (see there). */
++	was_cad_rx = sx126x_cad_rx_resolve(data, SX126X_CAD_RX_TMOUT);
 +
 +	/* Terminal event -- clear the RX-busy latch and preamble-grace
 +	 * timestamp.  Fires for DC preamble false-positive re-arm and any
@@ -1692,7 +1739,16 @@ index 30243ba5dc7..16823387b1d 100644
 +	    atomic_get(&data->state) != SX126X_STATE_TX) {
 +		int ret;
 +
-+		atomic_inc(&data->dc_timeout_restarts);
++		/* Not when this timeout is the CAD_RX probe's own cadTimeout:
++		 * that is a calibration false positive, it raises the identical
++		 * IRQ, and counting it would mix one tick per busy probe into a
++		 * figure that is supposed to describe duty-cycle preamble
++		 * behaviour.  The re-arm below still runs -- CAD_RX left the
++		 * chip in a plain Rx, so the duty cycle does need handing
++		 * back. */
++		if (!was_cad_rx) {
++			atomic_inc(&data->dc_timeout_restarts);
++		}
 +		ret = sx126x_restart_rx(dev, data);
 +		if (ret < 0) {
 +			LOG_WRN("Duty-cycle restart failed (%d), retry from sleep", ret);
@@ -1731,15 +1787,38 @@ index 30243ba5dc7..16823387b1d 100644
  	sx126x_set_sleep(dev);
  
  	if (data->tx_async_signal != NULL) {
-@@ -633,10 +1519,54 @@ static void sx126x_irq_work_handler(struct k_work *work)
- 		sx126x_handle_irq_rx_done(dev, irq_status);
+@@ -630,13 +1548,80 @@ static void sx126x_irq_work_handler(struct k_work *work)
  	}
  
+ 	if (irq_status & SX126X_IRQ_RX_DONE) {
++		/* Before the handler, which re-arms Rx and clears the latches:
++		 * a packet completing is the ground truth a CAD_RX was waiting
++		 * for.  CRC_ERR rides in the same status word and counts too --
++		 * a corrupt packet is still a real transmitter, which is the
++		 * question the probe is asking. */
++		sx126x_cad_rx_resolve(data, SX126X_CAD_RX_PACKET);
+ 		sx126x_handle_irq_rx_done(dev, irq_status);
+ 	}
++	if ((irq_status & SX126X_IRQ_CRC_ERR) &&
++	    !(irq_status & SX126X_IRQ_RX_DONE)) {
++		sx126x_cad_rx_resolve(data, SX126X_CAD_RX_PACKET);
++	}
++
 +	if (irq_status & SX126X_IRQ_CAD_DONE) {
 +		bool detected = (irq_status & SX126X_IRQ_CAD_ACTIVITY_DETECTED) != 0;
 +
 +		LOG_DBG("CAD done: %s", detected ? "activity" : "free");
 +		data->cad_active = false;
++
++		/* CAD_RX with a positive verdict: the chip did NOT return to
++		 * standby, it is in Rx on the signal it found.  Arm the outcome
++		 * tracker so whichever terminal IRQ follows -- RX_DONE, CRC_ERR
++		 * or RX_TX_TIMEOUT at cadTimeout -- records what it was.  A
++		 * negative CAD_RX exits to STDBY_RC exactly like CAD_ONLY, so
++		 * there is nothing to track. */
++		if (data->cad_exit_rx && detected) {
++			atomic_set(&data->cad_rx_state, SX126X_CAD_RX_ARMED);
++		}
 +
 +		if (data->cad_cb) {
 +			lora_cad_cb cb = data->cad_cb;
@@ -1753,8 +1832,11 @@ index 30243ba5dc7..16823387b1d 100644
 +			k_sem_give(&data->cad_sem);
 +		}
 +	}
-+
+ 
  	if (irq_status & SX126X_IRQ_RX_TX_TIMEOUT) {
++		/* The CAD_RX resolve for this event lives at the top of
++		 * sx126x_handle_irq_timeout(), which needs its verdict to keep
++		 * the probe's own cadTimeout out of dc_timeout_restarts. */
  		sx126x_handle_irq_timeout(dev);
  	}
  
@@ -1786,7 +1868,7 @@ index 30243ba5dc7..16823387b1d 100644
  	/* Re-enable the DIO1 interrupt for the next event (unless sleeping) */
  	if (atomic_get(&data->state) != SX126X_REST_STATE) {
  		sx126x_hal_dio1_irq_enable(dev);
-@@ -648,6 +1578,7 @@ static int sx126x_lora_config(const struct device *dev,
+@@ -648,6 +1633,7 @@ static int sx126x_lora_config(const struct device *dev,
  {
  	struct sx126x_data *data = dev->data;
  	const struct sx126x_hal_config *hal_config = dev->config;
@@ -1794,10 +1876,11 @@ index 30243ba5dc7..16823387b1d 100644
  	bool ldro;
  	int ret;
  
-@@ -679,25 +1610,45 @@ static int sx126x_lora_config(const struct device *dev,
+@@ -679,25 +1665,45 @@ static int sx126x_lora_config(const struct device *dev,
  		goto out;
  	}
  
+-	/* Configure PA and TX power based on chip variant and frequency */
 +	/* Install the band's RSSI/AGC calibration (DS Sec 6.1.6) before the
 +	 * RX gain write below, which consumes the AgcSensiAdjust this caches.
 +	 * Re-run on every config so a runtime frequency change switches bands
@@ -1807,7 +1890,7 @@ index 30243ba5dc7..16823387b1d 100644
 +		goto out;
 +	}
 +
- 	/* Configure PA and TX power based on chip variant and frequency */
++	/* Configure PA and TX power based on chip variant and frequency */
  	ret = sx126x_hal_configure_tx_params(dev, config->tx_power,
  						config->frequency,
 -						SX126X_RAMP_200_US);
@@ -1842,7 +1925,7 @@ index 30243ba5dc7..16823387b1d 100644
  	/* Set sync word */
  	ret = sx126x_set_sync_word(dev, config->public_network);
  	if (ret < 0) {
-@@ -721,6 +1672,10 @@ out:
+@@ -721,6 +1727,10 @@ out:
  	return ret;
  }
  
@@ -1853,7 +1936,7 @@ index 30243ba5dc7..16823387b1d 100644
  static int sx126x_lora_send_async(const struct device *dev,
  				  uint8_t *data_buf, uint32_t data_len,
  				  struct k_poll_signal *async)
-@@ -738,11 +1693,27 @@ static int sx126x_lora_send_async(const struct device *dev,
+@@ -738,11 +1748,27 @@ static int sx126x_lora_send_async(const struct device *dev,
  		return -EINVAL;
  	}
  
@@ -1883,7 +1966,7 @@ index 30243ba5dc7..16823387b1d 100644
  	k_mutex_lock(&data->lock, K_FOREVER);
  
  	ret = sx126x_ensure_ready(dev);
-@@ -752,6 +1723,59 @@ static int sx126x_lora_send_async(const struct device *dev,
+@@ -752,6 +1778,59 @@ static int sx126x_lora_send_async(const struct device *dev,
  		return ret;
  	}
  
@@ -1943,7 +2026,7 @@ index 30243ba5dc7..16823387b1d 100644
  	data->tx_async_signal = async;
  	k_msgq_purge(&data->tx_msgq);
  
-@@ -777,8 +1801,99 @@ static int sx126x_lora_send_async(const struct device *dev,
+@@ -777,8 +1856,99 @@ static int sx126x_lora_send_async(const struct device *dev,
  	/* Enable antenna and set TX path */
  	sx126x_set_rf_path(dev, true, true);
  
@@ -2045,7 +2128,7 @@ index 30243ba5dc7..16823387b1d 100644
  	if (ret < 0) {
  		goto out_error;
  	}
-@@ -847,6 +1962,8 @@ static int sx126x_lora_recv(const struct device *dev, uint8_t *data_buf,
+@@ -847,6 +2017,8 @@ static int sx126x_lora_recv(const struct device *dev, uint8_t *data_buf,
  	}
  
  	data->rx_cb = NULL;
@@ -2054,7 +2137,7 @@ index 30243ba5dc7..16823387b1d 100644
  	k_msgq_purge(&data->rx_msgq);
  
  	/* Set packet parameters for variable length reception */
-@@ -918,6 +2035,8 @@ static int sx126x_lora_recv_async(const struct device *dev,
+@@ -918,6 +2090,8 @@ static int sx126x_lora_recv_async(const struct device *dev,
  		/* Stop async reception */
  		data->rx_cb = NULL;
  		data->rx_cb_user_data = NULL;
@@ -2063,7 +2146,7 @@ index 30243ba5dc7..16823387b1d 100644
  		if (atomic_cas(&data->state, SX126X_STATE_RX, SX126X_STATE_IDLE)) {
  			sx126x_set_standby(dev, SX126X_STANDBY_RC);
  			sx126x_set_sleep(dev);
-@@ -932,6 +2051,19 @@ static int sx126x_lora_recv_async(const struct device *dev,
+@@ -932,6 +2106,19 @@ static int sx126x_lora_recv_async(const struct device *dev,
  		return -EINVAL;
  	}
  
@@ -2083,7 +2166,7 @@ index 30243ba5dc7..16823387b1d 100644
  	if (!atomic_cas(&data->state, SX126X_REST_STATE, SX126X_STATE_RX)) {
  		LOG_ERR("Busy");
  		k_mutex_unlock(&data->lock);
-@@ -945,8 +2077,18 @@ static int sx126x_lora_recv_async(const struct device *dev,
+@@ -945,8 +2132,18 @@ static int sx126x_lora_recv_async(const struct device *dev,
  		return ret;
  	}
  
@@ -2102,7 +2185,7 @@ index 30243ba5dc7..16823387b1d 100644
  
  	/* Set packet parameters */
  	ret = sx126x_set_packet_params(dev,
-@@ -959,6 +2101,7 @@ static int sx126x_lora_recv_async(const struct device *dev,
+@@ -959,6 +2156,7 @@ static int sx126x_lora_recv_async(const struct device *dev,
  				       SX126X_LORA_IQ_INVERTED : SX126X_LORA_IQ_STANDARD);
  	if (ret < 0) {
  		data->rx_cb = NULL;
@@ -2110,7 +2193,7 @@ index 30243ba5dc7..16823387b1d 100644
  		sx126x_set_sleep(dev);
  		k_mutex_unlock(&data->lock);
  		return ret;
-@@ -971,11 +2114,21 @@ static int sx126x_lora_recv_async(const struct device *dev,
+@@ -971,11 +2169,21 @@ static int sx126x_lora_recv_async(const struct device *dev,
  	ret = sx126x_set_rx(dev, 0);
  	if (ret < 0) {
  		data->rx_cb = NULL;
@@ -2132,7 +2215,7 @@ index 30243ba5dc7..16823387b1d 100644
  	k_mutex_unlock(&data->lock);
  	return 0;
  }
-@@ -993,7 +2146,9 @@ static uint32_t sx126x_lora_airtime(const struct device *dev, uint32_t data_len)
+@@ -993,7 +2201,9 @@ static uint32_t sx126x_lora_airtime(const struct device *dev, uint32_t data_len)
  	}
  
  	/* Calculate symbol time in microseconds */
@@ -2143,7 +2226,7 @@ index 30243ba5dc7..16823387b1d 100644
  	sf = data->config.datarate;
  
  	/* Symbol time = 2^SF / BW (seconds) */
-@@ -1051,7 +2206,7 @@ static int sx126x_lora_test_cw(const struct device *dev, uint32_t frequency,
+@@ -1051,7 +2261,7 @@ static int sx126x_lora_test_cw(const struct device *dev, uint32_t frequency,
  
  	/* Set PA config and TX power */
  	ret = sx126x_hal_configure_tx_params(dev, tx_power, frequency,
@@ -2152,7 +2235,7 @@ index 30243ba5dc7..16823387b1d 100644
  	if (ret < 0) {
  		sx126x_set_sleep(dev);
  		k_mutex_unlock(&data->lock);
-@@ -1083,14 +2238,983 @@ static int sx126x_lora_test_cw(const struct device *dev, uint32_t frequency,
+@@ -1083,14 +2293,1067 @@ static int sx126x_lora_test_cw(const struct device *dev, uint32_t frequency,
  	return 0;
  }
  
@@ -2561,14 +2644,37 @@ index 30243ba5dc7..16823387b1d 100644
 + * wide-band preset, and `set bw` accepts 250 and 500.
 + *
 + * Below BW125 Semtech returns RAL_STATUS_UNKNOWN_VALUE.  Our default preset is
-+ * BW62.5, so that gap is where we normally live, and there we keep SF+13 — it
-+ * is not a guess: it sits ~1 count below Semtech's BW125 column at every SF,
-+ * which is the correct direction for a narrower bandwidth, and it is confirmed
-+ * on hardware.  A field SX1262 at SF7/BW62.5 converged to detPeak 19 against
-+ * this table's 20, i.e. the adaptive controller moved it a single rung.  Note
-+ * SF+13 is already a 4-symbol figure (RadioLib programs it with CAD_ON_4_SYMB,
-+ * citing DS rev 1.1 p.92), so the symbol correction below must NOT be applied
-+ * to it a second time. */
++ * BW62.5, so that gap is where we normally live.  There we use the BW125 column
++ * minus a constant 1, and then let the shared symbol correction below apply
++ * normally — which happens to reproduce the old SF+13 heuristic exactly at SF5,
++ * SF6, SF7, SF9, SF10 and SF12, and differ from it by a single count at SF8 and
++ * SF11.
++ *
++ * Why not just keep SF+13, given it was measured right at SF7?  Because SF+13
++ * has a uniform +1 slope and Semtech's measured row does not:
++ *
++ *     SF        5   6   7   8   9  10  11  12
++ *     Semtech  20  21  22  24  24  25  27  27     steps +1 +1 +2  0 +1 +2  0
++ *     SF+13    18  19  20  21  22  23  24  25     steps +1 +1 +1 +1 +1 +1 +1
++ *
++ * detPeak is empirical PER data; there is no reason for it to be linear in SF,
++ * and we already adopted Semtech's shape for BW125, BW250 and BW500 in this
++ * very function.  Keeping SF+13 below BW125 would mean the driver used two
++ * different SF shapes depending on bandwidth — but bandwidth shifts the level,
++ * it does not reshape the curve.  The sub-125 constant (-1 here, against -7 on
++ * the LR11xx) is the level shift; Semtech's row is the shape.
++ *
++ * Field agreement: three SX1262s at SF7/BW62.5 — a house, a roof and a very busy
++ * mountaintop — converged to 19/19/20 against this row's base of 20, unchanged
++ * by this edit.  The only SF8 datum we have (that hilltop, offset +2/+3 against
++ * SF+13's 21) points the same way as Semtech's +2 step at SF8.  Nothing points
++ * the other way.
++ *
++ * Note SF+13 was already a 4-symbol figure (RadioLib programs it with
++ * CAD_ON_4_SYMB, citing DS rev 1.1 p.92), which is why it was excluded from the
++ * symbol correction.  The row below is a raw table value like every other
++ * bracket, so it takes the correction like every other bracket — that is the
++ * whole point of removing the special case. */
 +static uint8_t sx126x_cad_detect_peak(uint8_t sf, uint32_t bw_hz, uint8_t symb_nb)
 +{
 +	/*        SF5 SF6 SF7 SF8 SF9 SF10 SF11 SF12 */
@@ -2582,14 +2688,16 @@ index 30243ba5dc7..16823387b1d 100644
 +		sf = 12;
 +	}
 +
-+	/* Narrower than BW125: Semtech offers nothing, SF+13 is measured. */
-+	if (bw_hz < 125000U) {
-+		return sf + 13;
-+	}
-+
 +	/* Semtech brackets only >=500 and >=125 on this family — BW250 shares
-+	 * the BW125 column, unlike the LR11xx which gives it its own. */
-+	peak = (int)(bw_hz >= 500000U ? bw500[sf - 5] : bw125[sf - 5]);
++	 * the BW125 column, unlike the LR11xx which gives it its own.  Below
++	 * BW125 they publish nothing; see the note above for the -1. */
++	if (bw_hz >= 500000U) {
++		peak = (int)bw500[sf - 5];
++	} else if (bw_hz >= 125000U) {
++		peak = (int)bw125[sf - 5];
++	} else {
++		peak = (int)bw125[sf - 5] - 1;
++	}
 +
 +	/* More symbols means more looks at the same correlation, so the same
 +	 * detection quality is reached at a lower threshold.  We run 4 symbols
@@ -2634,8 +2742,10 @@ index 30243ba5dc7..16823387b1d 100644
 + * that disagreed with the peak actually programmed would make every rung the
 + * C++ staircase reasons about a lie.
 + *
-+ * An unresolvable bandwidth falls through to the sub-125 branch, i.e. SF+13,
-+ * which is what this driver did unconditionally before the table existed. */
++ * An unresolvable bandwidth (bw_hz forced to 0) falls through to the sub-125
++ * branch, the most sensitive of the three — the safe direction for an unknown
++ * configuration, since too sensitive costs airtime while too insensitive costs
++ * collisions. */
 +static uint8_t sx126x_cad_base_peak_cfg(struct lora_modem_config *mc)
 +{
 +	uint32_t bw_hz;
@@ -2710,16 +2820,31 @@ index 30243ba5dc7..16823387b1d 100644
 +	}
 +
 +	/* SetCadParams: symb_nb, detect_peak, detect_min, exit_mode,
-+	 * timeout (3 bytes, unused for STANDBYRC exit) */
++	 * timeout (3 bytes, used only by CAD_RX).
++	 *
++	 * Exit mode is per-CAD, not global.  The calibration probe arms CAD_RX
++	 * (DS §13.4.7 0x01) so a positive detection flows straight into Rx on
++	 * the signal it found; the pre-TX LBT keeps CAD_ONLY, because there the
++	 * verdict is all the caller wants and entering Rx would put the chip
++	 * somewhere the transmit path does not expect.  Detection itself is
++	 * identical either way -- same symbol count, same detPeak, same detMin --
++	 * so the probe still measures exactly the configuration LBT runs.
++	 *
++	 * The timeout bounds the Rx that a positive CAD_RX enters, in 15.625 us
++	 * steps (DS §13.1.5's unit, the same one SX126X_MS_TO_TIMEOUT converts
++	 * to).  Max-length-packet airtime at the current SF/BW is the right
++	 * bound: shorter would cut off the very packet the detection was for.
++	 * It is a chip-side deadline that always raises RX_TX_TIMEOUT, which is
++	 * what lets the outcome be *observed* rather than polled for. */
 +	uint8_t buf[7];
++	uint32_t cad_timeout = data->cad_exit_rx
++		? SX126X_MS_TO_TIMEOUT(sx126x_max_payload_ms(data)) : 0U;
 +
 +	buf[0] = symb_nb;
 +	buf[1] = detect_peak;
 +	buf[2] = mc->cad.detection_minimum ? mc->cad.detection_minimum : 10;
-+	buf[3] = 0x00;	/* CAD_ONLY (exit to STANDBYRC) */
-+	buf[4] = 0;	/* timeout[23:16] */
-+	buf[5] = 0;	/* timeout[15:8] */
-+	buf[6] = 0;	/* timeout[7:0] */
++	buf[3] = data->cad_exit_rx ? 0x01 : 0x00;  /* CAD_RX : CAD_ONLY */
++	sys_put_be24(cad_timeout & 0xFFFFFFU, &buf[4]);
 +
 +	ret = sx126x_hal_write_cmd(dev, SX126X_CMD_SET_CAD_PARAMS, buf, 7);
 +	if (ret < 0) {
@@ -2795,7 +2920,16 @@ index 30243ba5dc7..16823387b1d 100644
 +		return ret;
 +	}
 +
-+	atomic_set(&data->state, SX126X_REST_STATE);
++	/* A positive CAD_RX left the chip in Rx.  Say so, rather than reporting
++	 * REST_STATE and letting every later CAS reason about a chip that is
++	 * somewhere else: the RX_DONE and timeout handlers both gate on state,
++	 * and sx126x_lora_send_async's RX -> TX entry has to abort a real Rx
++	 * rather than assume standby. */
++	if (data->cad_result > 0 && data->cad_exit_rx) {
++		atomic_set(&data->state, SX126X_STATE_RX);
++	} else {
++		atomic_set(&data->state, SX126X_REST_STATE);
++	}
 +	return data->cad_result;
 +}
 +
@@ -2874,12 +3008,45 @@ index 30243ba5dc7..16823387b1d 100644
 +	}
 +
 +	/* One-shot absolute override consumed by sx126x_do_cad().  Probes and
-+	 * LBT both run on the mesh loop thread, so no concurrent CAD exists. */
++	 * LBT both run on the mesh loop thread, so no concurrent CAD exists --
++	 * which is also what makes cad_exit_rx safe as a plain flag. */
 +	data->cad_probe_peak = (uint8_t)peak;
++	data->cad_exit_rx = true;
++	atomic_set(&data->cad_rx_state, SX126X_CAD_RX_IDLE);
 +	ret = sx126x_lora_cad(dev, K_MSEC(sx126x_cad_timeout_ms(data)));
++	data->cad_exit_rx = false;
 +	data->cad_probe_peak = 0;
 +
++	/* 2 rather than 1 tells the caller the chip is in Rx on the signal it
++	 * detected, so it must NOT re-enter Rx itself, and that an outcome will
++	 * be readable from sx126x_cad_rx_outcome() once the chip resolves it. */
++	if (ret > 0) {
++		return 2;
++	}
++
 +	return ret;
++}
++
++uint32_t sx126x_cad_rx_timeout_ms(const struct device *dev)
++{
++	struct sx126x_data *data = dev->data;
++
++	/* The same figure do_cad() programs into cadTimeout, so the caller's
++	 * wait and the chip's deadline cannot drift apart. */
++	return sx126x_max_payload_ms(data);
++}
++
++int sx126x_cad_rx_outcome(const struct device *dev)
++{
++	struct sx126x_data *data = dev->data;
++	atomic_val_t st = atomic_get(&data->cad_rx_state);
++
++	if (st != SX126X_CAD_RX_PACKET && st != SX126X_CAD_RX_TMOUT) {
++		return 0;  /* nothing armed, or still awaiting the terminal IRQ */
++	}
++
++	atomic_set(&data->cad_rx_state, SX126X_CAD_RX_IDLE);
++	return (st == SX126X_CAD_RX_PACKET) ? 1 : 2;
 +}
 +
 +/* -- Driver API: recv_duty_cycle -- */
@@ -3143,7 +3310,7 @@ index 30243ba5dc7..16823387b1d 100644
  };
  
  #ifdef CONFIG_PM_DEVICE
-@@ -1112,6 +3236,7 @@ static int sx126x_pm_action(const struct device *dev,
+@@ -1112,6 +3375,7 @@ static int sx126x_pm_action(const struct device *dev,
  static int sx126x_init(const struct device *dev)
  {
  	struct sx126x_data *data = dev->data;
@@ -3151,7 +3318,7 @@ index 30243ba5dc7..16823387b1d 100644
  	int ret;
  
  	/* Initialize data structures */
-@@ -1121,9 +3246,33 @@ static int sx126x_init(const struct device *dev)
+@@ -1121,9 +3385,33 @@ static int sx126x_init(const struct device *dev)
  	k_msgq_init(&data->rx_msgq, (char *)&data->rx_result,
  		    sizeof(struct sx126x_rx_result), 1);
  	k_work_init(&data->irq_work, sx126x_irq_work_handler);
@@ -3185,7 +3352,7 @@ index 30243ba5dc7..16823387b1d 100644
  
  	/* Initialize HAL */
  	ret = sx126x_hal_init(dev);
-@@ -1185,6 +3334,8 @@ static int sx126x_init(const struct device *dev)
+@@ -1185,6 +3473,8 @@ static int sx126x_init(const struct device *dev)
  						      {0}),			\
  		.rx_enable = GPIO_DT_SPEC_INST_GET_OR(inst, rx_enable_gpios,	\
  						      {0}),			\
@@ -3194,7 +3361,7 @@ index 30243ba5dc7..16823387b1d 100644
  		.dio2_tx_enable = DT_INST_PROP(inst, dio2_tx_enable),		\
  		.dio3_tcxo_enable = DT_INST_NODE_HAS_PROP(inst, dio3_tcxo_voltage), \
  		.dio3_tcxo_voltage = DT_INST_PROP_OR(inst, dio3_tcxo_voltage, 0), \
-@@ -1239,6 +3390,8 @@ DT_INST_FOREACH_STATUS_OKAY_VARGS(SX126X_INIT, true)
+@@ -1239,6 +3529,8 @@ DT_INST_FOREACH_STATUS_OKAY_VARGS(SX126X_INIT, true)
  						      {0}),			\
  		.rx_enable = GPIO_DT_SPEC_INST_GET_OR(inst, rx_enable_gpios,	\
  						      {0}),			\
@@ -3204,10 +3371,10 @@ index 30243ba5dc7..16823387b1d 100644
  		.dio3_tcxo_enable = DT_INST_NODE_HAS_PROP(inst, dio3_tcxo_voltage), \
  		.dio3_tcxo_voltage = DT_INST_PROP_OR(inst, dio3_tcxo_voltage, 0), \
 diff --git a/drivers/lora/native/sx126x/sx126x.h b/drivers/lora/native/sx126x/sx126x.h
-index 9dbf3f26586..51fb808bb46 100644
+index 9dbf3f26586..1d528604d1c 100644
 --- a/drivers/lora/native/sx126x/sx126x.h
 +++ b/drivers/lora/native/sx126x/sx126x.h
-@@ -56,13 +56,121 @@ struct sx126x_data {
+@@ -56,13 +56,143 @@ struct sx126x_data {
  	/* Async RX callback */
  	lora_recv_cb rx_cb;
  	void *rx_cb_user_data;
@@ -3324,6 +3491,28 @@ index 9dbf3f26586..51fb808bb46 100644
 +	/* Adaptive-CAD: signed offset applied to the per-SF base detPeak on
 +	 * every LBT CAD (set via sx126x_cad_set_peak_offset).  cad_probe_peak,
 +	 * when non-zero, overrides everything for one calibration probe. */
++	/* CAD_RX exit-mode bookkeeping.
++	 *
++	 * With cadExitMode = CAD_RX (DS §13.4.7) a positive CAD does not return
++	 * to standby: the chip stays in Rx on the signal it just found, until a
++	 * packet completes or cadTimeout expires.  That removes the
++	 * standby->SetRx round trip that otherwise eats the preamble which
++	 * triggered the detection, so the calibration probe can be told whether
++	 * what it heard was real instead of having to guess from a poll.
++	 *
++	 * cad_exit_rx marks the CAD currently in flight as one armed that way,
++	 * so the CAD_DONE handler knows the chip is in Rx rather than standby.
++	 * cad_rx_state then records which terminal event resolved it -- the
++	 * whole point being that the chip always raises one, so nothing has to
++	 * poll or infer:
++	 *   IDLE   nothing in flight
++	 *   ARMED  positive CAD, chip in Rx, awaiting a terminal IRQ
++	 *   PACKET RX_DONE or CRC_ERR arrived -- the detection was real
++	 *   TMOUT  RX_TX_TIMEOUT at cadTimeout -- nothing decodable followed
++	 * Read and consumed by sx126x_cad_rx_outcome(). */
++	bool cad_exit_rx;
++	atomic_t cad_rx_state;
++
 +	int8_t cad_peak_offset;
 +	uint8_t cad_probe_peak;
  };

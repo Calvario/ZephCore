@@ -146,6 +146,19 @@ struct lr11xx_data {
 	 * every LBT CAD; cad_probe_peak overrides for one calibration probe. */
 	int8_t cad_peak_offset;
 	uint8_t cad_probe_peak;
+	/* CAD_RX exit-mode bookkeeping.  With LR11XX_RADIO_CAD_EXIT_MODE_RX a
+	 * positive CAD keeps the chip in Rx on the signal it just found instead
+	 * of dropping to standby, so the calibration probe can be TOLD whether
+	 * the detection was real -- by a packet arriving, or by the chip's own
+	 * cad_timeout expiring -- rather than having to guess from a poll.  On a
+	 * negative CAD the chip enters standby exactly as with STANDBYRC
+	 * (lr11xx_radio_types.h: "If the CAD operation is negative with
+	 * RADIO_CAD_EXIT_MODE_RX ... the LR11XX enters Standby RC mode").
+	 *
+	 * cad_exit_rx marks the CAD in flight as armed that way; cad_rx_state
+	 * records which terminal interrupt resolved it. */
+	bool cad_exit_rx;
+	atomic_t cad_rx_state;
 
 	/* Deferred hardware init — heavy SPI/radio work runs on first config() */
 	bool hw_initialized;
@@ -167,16 +180,23 @@ struct lr11xx_data {
 	 * bit is cleared and TX released.  All accesses under spi_mutex. */
 	uint32_t preamble_seen_at_ms;
 
-	/* Timestamp (k_uptime_get_32(), ms) at which lr11xx_is_receiving()
-	 * first saw SYNC_WORD_HEADER_VALID latched in the current RX cycle;
-	 * 0 = no payload phase being timed.  Bounds the payload phase the same
-	 * way preamble_seen_at_ms bounds the preamble phase: the header bit is
-	 * cleared only by the terminal DIO1 event's bulk clear, and continuous
-	 * RX (SetRx 0xFFFFFF) has no symbol timer, so a header whose packet
-	 * never completes produces no terminal IRQ and would pin the TX gate
-	 * true forever — the node keeps receiving but never transmits again,
-	 * silently.  Released after lr11xx_max_payload_ms().  All accesses
-	 * under spi_mutex. */
+	/* Timestamp (k_uptime_get_32(), ms) at which SYNC_WORD_HEADER_VALID was
+	 * seen for the reception in progress; 0 = no payload phase being timed.
+	 *
+	 * Stamped by the DIO1 work handler, which is why that IRQ is routed to
+	 * DIO1: with a duty cycle armed lr11xx_is_receiving() may not touch the
+	 * bus, so this timestamp is the ONLY thing it can answer from, and while
+	 * nothing wrote it there the RX-busy gate was dead on every duty-cycled
+	 * node.  The poll path still stamps it too, for the window before the
+	 * work item runs.
+	 *
+	 * Bounds the payload phase the same way preamble_seen_at_ms bounds the
+	 * preamble phase: continuous RX (SetRx 0xFFFFFF) has no symbol timer, so
+	 * a header whose packet never completes produces no terminal IRQ and
+	 * would pin the TX gate true forever — the node keeps receiving but
+	 * never transmits again, silently.  Released after
+	 * lr11xx_max_payload_ms(), and cleared by every RX (re)start through
+	 * lr11xx_reset_rx_busy_signals().  All writes under spi_mutex. */
 	uint32_t header_seen_at_ms;
 
 	/* Wedge-recovery watchdog: the LR1110 can rarely be left BUSY-high with
@@ -200,6 +220,22 @@ struct lr11xx_data {
  * the two never drift out of sync — same shape as the SX126x driver's
  * sx126x_reset_rx_busy_signals().  Called from every RX (re)start site and
  * before TX / CAD entry. */
+/* cad_rx_state values -- see the field comment in the data struct. */
+#define LR11XX_CAD_RX_IDLE   0
+#define LR11XX_CAD_RX_ARMED  1
+#define LR11XX_CAD_RX_PACKET 2
+#define LR11XX_CAD_RX_TMOUT  3
+
+/* Resolve an in-flight CAD_RX with the terminal event that just arrived.
+ * A no-op unless one is armed, so the packet path pays one atomic compare.
+ * Returns true when this call is the one that resolved it, which is also how
+ * the caller tells "the probe's own cad_timeout" apart from an unrelated
+ * timeout that happens to raise the same IRQ. */
+static inline bool lr11xx_cad_rx_resolve(struct lr11xx_data *data, int outcome)
+{
+	return atomic_cas(&data->cad_rx_state, LR11XX_CAD_RX_ARMED, outcome);
+}
+
 static inline void lr11xx_reset_rx_busy_signals(struct lr11xx_data *data)
 {
 	data->preamble_seen_at_ms = 0;
@@ -373,6 +409,26 @@ static void lr11xx_apply_modem_config(struct lr11xx_data *data,
 		LR11XX_SYSTEM_IRQ_RX_DONE | LR11XX_SYSTEM_IRQ_TX_DONE |
 		LR11XX_SYSTEM_IRQ_TIMEOUT | LR11XX_SYSTEM_IRQ_CRC_ERROR |
 		LR11XX_SYSTEM_IRQ_HEADER_ERROR |
+		/* SYNC_WORD_HEADER_VALID is routed because it is the ONLY thing
+		 * that can stamp header_seen_at_ms, and that timestamp is the
+		 * entire RX-busy answer once a duty cycle is armed: the poll path
+		 * below is forbidden to touch the bus there, so with this bit off
+		 * DIO1 nothing ever wrote the field and lr11xx_is_receiving()
+		 * returned false unconditionally on every duty-cycled node --
+		 * blinding the TX gate, the noise-floor sampler and the CAD probe
+		 * alike.
+		 *
+		 * It is safe to route where PREAMBLE_DETECTED is not: a header
+		 * only latches after a sync-word match AND a header CRC, so it
+		 * fires at most once per real packet rather than on noise.  This
+		 * is the same split the SX126x driver makes for the same reason
+		 * (preamble off DIO1, header on) -- the two families now agree.
+		 *
+		 * The cost is one extra wake per header-decoded packet, on
+		 * packets the node is receiving anyway, and it needs a handler
+		 * branch that treats the event as "reception continues" rather
+		 * than letting the safety net restart RX over it (see there). */
+		LR11XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID |
 		/* CAD_DONE/CAD_DETECTED MUST be redirected to DIO1 or the blocking
 		 * LBT CAD (run before every TX, cad.mode=LBT) never completes — its
 		 * semaphore is signaled from the DIO1 handler, so without this the
@@ -635,6 +691,21 @@ static void lr11xx_dio1_work_handler(struct k_work *work)
 		data->dio1_stuck_count = 0;
 	}
 
+	/* "A valid header has been seen for the reception in progress" — from
+	 * this IRQ word, or from the latch an earlier pass stamped.
+	 *
+	 * The latch half is load-bearing now that SYNC_WORD_HEADER_VALID is
+	 * routed to DIO1: the handler fires mid-packet and bulk-clears the IRQ
+	 * register, so by the time RX_DONE arrives the live bit is gone and only
+	 * the latch remembers the header.  Testing the live bit alone would read
+	 * a foreign header error landing on our good packet as a genuine one and
+	 * drop the packet — precisely the ~7-10% under-load LR1110 loss the two
+	 * tests below exist to prevent.  Computed here, before any branch can
+	 * reset the latch. */
+	bool hdr_valid_seen =
+		(irq & LR11XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID) != 0 ||
+		data->header_seen_at_ms != 0;
+
 	/* ── RX done ──
 	 * Deliver on RX_DONE unless it is a GENUINE reception failure:
 	 *   - CRC_ERROR: a CRC-failed packet asserts RX_DONE+CRC_ERROR together
@@ -647,10 +718,18 @@ static void lr11xx_dio1_work_handler(struct k_work *work)
 	 * the SX126x path never routes HEADER_ERROR at all.  Dropping these good
 	 * packets was the LR1110 under-load packet-loss bug (verified 2026-07-24:
 	 * ~7-10% loss vs SX1262, load-dependent, size-skewed). */
+	/* Ground truth for a CAD_RX probe: anything that proves a transmitter
+	 * was actually there.  A CRC or header error counts as much as a clean
+	 * packet -- the probe is asking whether the detection was real, not
+	 * whether the packet was usable. */
+	if (irq & (LR11XX_SYSTEM_IRQ_RX_DONE | LR11XX_SYSTEM_IRQ_CRC_ERROR |
+		   LR11XX_SYSTEM_IRQ_HEADER_ERROR)) {
+		lr11xx_cad_rx_resolve(data, LR11XX_CAD_RX_PACKET);
+	}
+
 	if ((irq & LR11XX_SYSTEM_IRQ_RX_DONE) &&
 	    !(irq & LR11XX_SYSTEM_IRQ_CRC_ERROR) &&
-	    !((irq & LR11XX_SYSTEM_IRQ_HEADER_ERROR) &&
-	      !(irq & LR11XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID))) {
+	    !((irq & LR11XX_SYSTEM_IRQ_HEADER_ERROR) && !hdr_valid_seen)) {
 		lr11xx_radio_rx_buffer_status_t rx_stat;
 		lr11xx_radio_get_rx_buffer_status(ctx, &rx_stat);
 
@@ -718,6 +797,25 @@ static void lr11xx_dio1_work_handler(struct k_work *work)
 	if (irq & LR11XX_SYSTEM_IRQ_CAD_DONE) {
 		bool detected = (irq & LR11XX_SYSTEM_IRQ_CAD_DETECTED) != 0;
 
+		/* CAD_RX with a positive verdict: the chip is in Rx on the
+		 * signal it found, not in standby.  Arm the tracker so whichever
+		 * terminal interrupt follows records what it was.
+		 *
+		 * rx_restarted is what stops the safety net at the bottom of
+		 * this handler from undoing that.  in_rx_mode is now true and no
+		 * branch below sets the flag, so without it every positive probe
+		 * ended in "DIO1 safety: no IRQ handled" + lr11xx_restart_rx(),
+		 * which forced standby and tore down the very reception the
+		 * probe exists to observe: no terminal IRQ ever followed, the
+		 * outcome read back as unresolved, and every busy sample was
+		 * discarded.  Same meaning as the foreign-header-error branch
+		 * below -- reception continues, nothing needs restarting. */
+		if (data->cad_exit_rx && detected) {
+			data->in_rx_mode = true;
+			atomic_set(&data->cad_rx_state, LR11XX_CAD_RX_ARMED);
+			rx_restarted = true;
+		}
+
 		if (data->cad_cb) {
 			lora_cad_cb cb = data->cad_cb;
 			void *ud = data->cad_user_data;
@@ -750,6 +848,12 @@ static void lr11xx_dio1_work_handler(struct k_work *work)
 
 	/* ── Timeout ── */
 	if (irq & LR11XX_SYSTEM_IRQ_TIMEOUT) {
+		/* cad_timeout expired with nothing decoded: the detection had
+		 * no packet behind it.  Resolved before the branches below,
+		 * which put the receiver back on air. */
+		bool was_cad_rx = lr11xx_cad_rx_resolve(data,
+							LR11XX_CAD_RX_TMOUT);
+
 		if (data->tx_active) {
 			/* The chip's Tx timeout fired, so the transmission was
 			 * stopped and TX_DONE will never arrive.  This branch
@@ -771,8 +875,14 @@ static void lr11xx_dio1_work_handler(struct k_work *work)
 			 * the 2*RxPeriod + SleepPeriod window the preamble
 			 * detect restarted (UM §7.2.6) expired with no packet,
 			 * so the chip left the loop.  Counting it is what makes
-			 * `get dc.restarts` mean something on this radio. */
-			if (data->rx_duty_cycle_enabled) {
+			 * `get dc.restarts` mean something on this radio.
+			 *
+			 * Not when this timeout is the CAD_RX probe's own
+			 * cad_timeout: that is a calibration false positive, it
+			 * raises the identical IRQ, and counting it would mix
+			 * one tick per busy probe into a figure that is supposed
+			 * to describe duty-cycle preamble behaviour. */
+			if (data->rx_duty_cycle_enabled && !was_cad_rx) {
 				atomic_inc(&data->dc_timeout_restarts);
 			}
 			if (lr11xx_restart_rx(data, false) < 0) {
@@ -797,8 +907,7 @@ static void lr11xx_dio1_work_handler(struct k_work *work)
 	 * error under load is what cost the LR1110 packets (the SX126x never routes
 	 * HEADER_ERROR for exactly this reason).  Leave the chip in RX; the good
 	 * packet's own RX_DONE delivers it above. */
-	if ((irq & LR11XX_SYSTEM_IRQ_HEADER_ERROR) &&
-	    (irq & LR11XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID) &&
+	if ((irq & LR11XX_SYSTEM_IRQ_HEADER_ERROR) && hdr_valid_seen &&
 	    !(irq & LR11XX_SYSTEM_IRQ_RX_DONE)) {
 		LOG_DBG("RX: foreign HDR err during valid header — not aborting");
 		rx_restarted = true;  /* reception continues; skip safety-net restart */
@@ -836,6 +945,37 @@ static void lr11xx_dio1_work_handler(struct k_work *work)
 					  data->async_rx_user_data);
 		}
 		return;
+	}
+
+	/* ── Header valid ──
+	 * A packet is past sync word and header CRC and is now in its payload
+	 * phase.  Stamp the latch lr11xx_is_receiving() answers from; bounded
+	 * there by lr11xx_max_payload_ms(), and cleared by the terminal event's
+	 * lr11xx_reset_rx_busy_signals().
+	 *
+	 * Gated on no terminal bit for OUR packet in this same pass -- those
+	 * branches above own the outcome and have already reset the signals, so
+	 * stamping after them would re-arm a gate for a packet that is finished.
+	 * HEADER_ERROR is deliberately NOT in that gate: with a valid header it
+	 * means a foreign signal errored while our packet is still arriving,
+	 * which is exactly a reception to keep the gate closed for.
+	 *
+	 * rx_restarted, for the same reason the CAD_RX branch sets it: nothing
+	 * needs restarting, the chip is mid-packet, and letting the safety net
+	 * below fire here would destroy the very packet this branch exists to
+	 * protect -- the failure that kept this IRQ off DIO1 in the first
+	 * place. */
+	if ((irq & LR11XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID) &&
+	    !(irq & (LR11XX_SYSTEM_IRQ_RX_DONE | LR11XX_SYSTEM_IRQ_CRC_ERROR |
+		     LR11XX_SYSTEM_IRQ_TIMEOUT))) {
+		uint32_t now = k_uptime_get_32();
+
+		/* 1 as the "set" sentinel if k_uptime is 0 right after boot. */
+		data->header_seen_at_ms = (now == 0) ? 1U : now;
+		/* The latch is the truth source now; a preamble timestamp left
+		 * behind would outlive it and be read as a live grace window. */
+		data->preamble_seen_at_ms = 0;
+		rx_restarted = true;
 	}
 
 safety_check:
@@ -1281,6 +1421,46 @@ static void lr11xx_dc_resume(struct lr11xx_data *data, bool was_armed)
 	data->in_rx_mode = true;
 }
 
+/* Front-end settle to wait after entering Rx before the first GetRssiInst.
+ *
+ * DS Table 13-82 puts the RSSI averaging window at ~936 us*kHz / BW and the
+ * post-Rx-entry delay at 12-15 of those windows; the C++ sampler will not read
+ * until 16 have passed (rssi_settle_delay_us(), radio_common.h).  An Rx entry
+ * made HERE has to clear the same bar, or the reading it brackets comes from a
+ * front end the firmware itself considers unsettled.
+ *
+ * The flat 1 ms this replaces clears it from BW20.83 up but not below --
+ * BW15.63 wants 1008 us, BW10.42 1504 us, BW7.81 2144 us -- and `set radio`
+ * accepts bandwidths that low.  Floored at 1000 so no preset that works today
+ * waits less than it did.  Deliberately the same 936/16 the C++ side uses: two
+ * settle models that could disagree would be worse than one that is wrong. */
+static uint32_t lr11xx_rssi_settle_us(struct lr11xx_data *data)
+{
+	uint32_t bw_khz = (uint32_t)bw_enum_to_khz(data->modem_cfg.bandwidth);
+	uint32_t settle;
+
+	if (bw_khz == 0) {
+		return 1000U;
+	}
+	settle = ((936U + bw_khz - 1U) / bw_khz) * 16U;
+
+	return settle < 1000U ? 1000U : settle;
+}
+
+/* Sleep the whole millisecond, busy-wait only the remainder.  k_sleep() rounds
+ * up to a tick and the tick period is a board Kconfig, so asking it for a
+ * sub-millisecond excess is not portable; this keeps the old wait exactly and
+ * adds the deficit on top. */
+static void lr11xx_rssi_settle(struct lr11xx_data *data)
+{
+	uint32_t settle_us = lr11xx_rssi_settle_us(data);
+
+	k_sleep(K_MSEC(1));
+	if (settle_us > 1000U) {
+		k_busy_wait(settle_us - 1000U);
+	}
+}
+
 int16_t lr11xx_get_rssi_inst(const struct device *dev)
 {
 	struct lr11xx_data *data = dev->data;
@@ -1302,13 +1482,14 @@ int16_t lr11xx_get_rssi_inst(const struct device *dev)
 		 *
 		 * The settle wait is the receiver's, not the bus's: UM Rx timing
 		 * has the value valid once the front end has settled after Rx
-		 * entry, and 1 ms clears that at every bandwidth this firmware
-		 * offers.  It is also the entire cost of the manoeuvre — against
-		 * a noise-floor interval measured in seconds, the receiver is
-		 * off air for well under a hundredth of a percent of the time. */
+		 * entry, and lr11xx_rssi_settle() sizes that from the bandwidth
+		 * (a flat 1 ms was short of it below BW20.83).  It is also the
+		 * entire cost of the manoeuvre — against a noise-floor interval
+		 * measured in seconds, the receiver is off air for well under a
+		 * hundredth of a percent of the time. */
 		lr11xx_radio_set_rx_with_timeout_in_rtc_step(&data->hal_ctx,
 							     0xFFFFFF);
-		k_sleep(K_MSEC(1));
+		lr11xx_rssi_settle(data);
 	}
 
 	if (lr11xx_radio_get_rssi_inst(&data->hal_ctx, &rssi) ==
@@ -1385,30 +1566,163 @@ static uint32_t lr11xx_max_payload_ms(struct lr11xx_data *data)
 	return ms + (ms / 4U) + 100U;
 }
 
+/* The cad_timeout a CAD_RX probe programs, in RTC steps at 32768 Hz.
+ *
+ * Computed here rather than through lr11xx_radio_convert_time_in_ms_to_rtc_step()
+ * for the reason the Tx path already documents: that helper is
+ * `(uint32_t)(time_in_ms * LR11XX_RTC_FREQ_IN_HZ / 1000)`, so the multiply
+ * overflows uint32 above 131071 ms.  lr11xx_max_payload_ms() crosses that at
+ * SF12/BW15.63 (~136 s), SF12/BW10.42 (~204 s), SF12/BW7.81 (~286 s) and
+ * SF11/BW7.81 (~152 s), where the wrapped value would end the Rx almost
+ * immediately -- truncating a real reception (UM: the chip stays in Rx until a
+ * packet is demodulated or the timer expires) and booking the probe as a false
+ * positive.  Same 64-bit maths and same 24-bit saturation as the Tx timeout;
+ * the ceiling is 512 s, which no preset reaches. */
+static uint32_t lr11xx_cad_rx_timeout_steps(struct lr11xx_data *data)
+{
+	uint64_t steps = ((uint64_t)lr11xx_max_payload_ms(data) * 32768U) / 1000U;
+
+	if (steps > 0x00FFFFFFU) {
+		steps = 0x00FFFFFFU;
+	}
+	return (uint32_t)steps;
+}
+
+int lr11xx_get_rssi_burst(const struct device *dev, int16_t *out, int n,
+			 uint32_t spacing_us)
+{
+	struct lr11xx_data *data = dev->data;
+	int got = 0;
+
+	/* One stand-down for the WHOLE burst, not one per sample.
+	 *
+	 * lr11xx_get_rssi_inst() has to suspend the duty cycle, enter continuous
+	 * Rx, wait 1 ms for the front end, read, and then hand the cycle back --
+	 * and lr11xx_dc_resume() clears every IRQ and zeroes the RX-busy latch,
+	 * because a re-armed cycle must start from a known point.  The noise-floor
+	 * sampler wants a median of eight, and calling the single-shot read eight
+	 * times therefore cost eight cycle tear-downs, eight latch wipes and 8 ms
+	 * of settle every sampling interval -- on a receiver whose whole job is to
+	 * be listening.  That is the same fault the CAD classifier had, in a
+	 * different function; here it fires whether or not a probe follows.
+	 *
+	 * Bracketing once collapses it to one of each.  It also holds the SPI
+	 * mutex for a single short span instead of taking it eight times, and the
+	 * reads are spaced by the caller's averaging window exactly as before, so
+	 * they stay independent. */
+	if (k_mutex_lock(&data->spi_mutex, K_NO_WAIT) != 0) {
+		return 0;
+	}
+
+	bool armed = lr11xx_dc_suspend(data);
+
+	if (armed) {
+		lr11xx_radio_set_rx_with_timeout_in_rtc_step(&data->hal_ctx,
+							     0xFFFFFF);
+		/* Start the window clean so the check after the loop reports
+		 * only what arrived INSIDE it -- these bits are latched and
+		 * nothing clears them between duty-cycle re-arms, so a stale
+		 * preamble from earlier in the cycle would otherwise condemn
+		 * every burst.  Safe here and nowhere else: the cycle is already
+		 * torn down and dc_resume() clears the lot again on the way out,
+		 * so this destroys no state the poll path could still want.
+		 * CMD_ERROR rides along because the LR1110 raises it on any
+		 * ClearIrq whose mask excludes it (all FW versions). */
+		lr11xx_system_clear_irq_status(&data->hal_ctx,
+					       LR11XX_SYSTEM_IRQ_PREAMBLE_DETECTED |
+					       LR11XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID |
+					       LR11XX_SYSTEM_IRQ_CMD_ERROR);
+		lr11xx_rssi_settle(data);
+	}
+
+	for (int i = 0; i < n; i++) {
+		int8_t rssi;
+
+		if (i) {
+			k_busy_wait(spacing_us);
+		}
+		if (lr11xx_radio_get_rssi_inst(&data->hal_ctx, &rssi) != LR11XX_STATUS_OK) {
+			break;
+		}
+		out[i] = (int16_t)rssi;
+		got++;
+	}
+
+	/* Did a transmitter turn up inside the window?  Then these samples
+	 * measure it, not the floor, and the caller must throw them away.
+	 *
+	 * This covers a gap the caller's own guards cannot.  cadMaintenance()
+	 * re-checks isReceiving() immediately before its CAD probe, and that
+	 * now works on this family -- but dc_resume() below zeroes
+	 * header_seen_at_ms on its way out, one call earlier, so a reception
+	 * that began inside this bracket is invisible to the re-check by the
+	 * time it runs.  Reporting the contamination from in here, where the
+	 * evidence still exists, closes it: the sampler abandons the burst,
+	 * _sample_fresh stays clear, and the probe -- which rides on that flag
+	 * -- does not run this pass.
+	 *
+	 * Only meaningful with a cycle armed.  Without one this function makes
+	 * no Rx entry of its own and clears nothing, so the caller's guards see
+	 * the reception unaided. */
+	if (armed) {
+		lr11xx_system_irq_mask_t irq = 0;
+
+		if (lr11xx_system_get_irq_status(&data->hal_ctx, &irq) ==
+		    LR11XX_STATUS_OK &&
+		    (irq & (LR11XX_SYSTEM_IRQ_PREAMBLE_DETECTED |
+			    LR11XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID))) {
+			got = -EAGAIN;
+		}
+	}
+
+	lr11xx_dc_resume(data, armed);
+	k_mutex_unlock(&data->spi_mutex);
+
+	return got;
+}
+
 bool lr11xx_is_receiving(const struct device *dev)
 {
 	struct lr11xx_data *data = dev->data;
 
-	/* With a cycle armed, answer from the DIO1-driven latch and issue no SPI
-	 * at all.
+	/* Payload phase, from the latch the DIO1 handler stamps on
+	 * SYNC_WORD_HEADER_VALID.  Read before the duty-cycle split because it
+	 * is the one signal both sides share — and the only one the armed side
+	 * has at all.
 	 *
 	 * This path runs on every TX gate, so it cannot bracket itself in
 	 * suspend/resume the way the samplers do — standing the cycle down to
 	 * ask "am I receiving?" would end the very reception being asked about.
-	 * It does not need to: header_seen_at_ms is stamped by the DIO1 work
-	 * handler, which needs no bus access to be current.
-	 *
-	 * It must not fall back to a BUSY read either.  BUSY is high both in the
+	 * It must not fall back to a BUSY read either: BUSY is high both in the
 	 * sleep phase and through ordinary Rx on this family, so a BUSY-high
 	 * "not receiving" answer is wrong exactly when it matters — mid-packet,
-	 * with the TX gate asking for permission to transmit over it. */
-	if (data->rx_duty_cycle_enabled) {
-		uint32_t seen = data->header_seen_at_ms;
+	 * with the TX gate asking for permission to transmit over it.
+	 *
+	 * That leaves the latch, which is why the header IRQ is routed to DIO1
+	 * (see lr11xx_configure_irq): the handler needs no bus access to keep
+	 * this current, and until it did the armed side had nothing to read. */
+	uint32_t hdr_seen = data->header_seen_at_ms;
 
-		if (seen == 0) {
-			return false;
+	if (hdr_seen != 0 &&
+	    (k_uptime_get_32() - hdr_seen) < lr11xx_max_payload_ms(data)) {
+		return true;
+	}
+
+	if (data->rx_duty_cycle_enabled) {
+		/* Never stamped, or the payload deadline has blown.  No bus
+		 * access is permitted here to look any further, and none is
+		 * wanted: the latch is the whole answer on this side.  Drop a
+		 * stale one so the compare above stops repeating, but only if
+		 * the mutex is free — the DIO1 handler owns this field, and if
+		 * it is mid-update it will maintain the field itself. */
+		if (hdr_seen != 0 &&
+		    k_mutex_lock(&data->spi_mutex, K_NO_WAIT) == 0) {
+			LOG_WRN("RX header latched %u ms with no packet, releasing TX gate",
+				k_uptime_get_32() - hdr_seen);
+			data->header_seen_at_ms = 0;
+			k_mutex_unlock(&data->spi_mutex);
 		}
-		return (k_uptime_get_32() - seen) < lr11xx_max_payload_ms(data);
+		return false;
 	}
 
 	/* Non-blocking — skip if SPI busy */
@@ -1426,19 +1740,20 @@ bool lr11xx_is_receiving(const struct device *dev)
 	 * never completes would otherwise mute TX until reboot. */
 	if (irq & LR11XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID) {
 		uint32_t now = k_uptime_get_32();
-		uint32_t seen = data->header_seen_at_ms;
 
-		if (seen == 0) {
+		/* The DIO1 handler normally stamps this before any poll sees
+		 * the bit; the poll can still get there first in the window
+		 * before the work item runs, so it stays able to stamp.  A latch
+		 * still inside its deadline already returned true at the top of
+		 * the function, so reaching here with one set means the deadline
+		 * is blown and the gate has to be released. */
+		if (data->header_seen_at_ms == 0) {
 			data->header_seen_at_ms = (now == 0) ? 1U : now;
 			k_mutex_unlock(&data->spi_mutex);
 			return true;
 		}
-		if ((now - seen) < lr11xx_max_payload_ms(data)) {
-			k_mutex_unlock(&data->spi_mutex);
-			return true;
-		}
 		LOG_WRN("RX header latched %u ms with no packet, releasing TX gate",
-			now - seen);
+			now - data->header_seen_at_ms);
 		/* Drop the sticky reception bits so the next poll starts clean.
 		 * CMD_ERROR goes with them — the LR1110 sets it whenever ClearIrq
 		 * is called with a mask that excludes it (all FW versions). */
@@ -1718,19 +2033,44 @@ int16_t lr11xx_get_chip_temp_c(const struct device *dev)
  * the SX1262 in the same room settled at offset -1 while these walked to -8.
  *
  * Below BW125 Semtech returns RAL_STATUS_UNKNOWN_VALUE and offers nothing.  We
- * run BW62.5 by default, so that gap is our normal operating point.  We reuse
- * the BW125 row there rather than extrapolating the trend downward: the curve
- * is empirical PER-test data with visible noise (SF9 breaks monotonicity in all
- * three brackets), a one-octave extrapolation at SF7 would invent ~40, and we
- * already run a closed-loop controller whose entire job is to find the local
- * value.  Reusing BW125 leaves the adaptive offset a short, well-centred walk
- * instead of substituting a guess for a measurement we take anyway. */
+ * run BW62.5 by default, so that gap is our normal operating point, and the
+ * sub-125 row below is MEASURED rather than published.
+ *
+ * Provenance and its honest limit: over 2026-08-30..09-01 two LR1110 T1000-Es —
+ * one here, one in another country, on different sites — both converged to an
+ * absolute detPeak of 44 at SF7/BW62.5, i.e. offset -7 against the BW125 row's
+ * 51 (52 minus the 4-symbol correction).  Two independent sites agreeing to the
+ * count is what makes this a measurement; three SX1262s in the same campaign
+ * landed within one count of each other across a house, a roof and a
+ * mountaintop, which is the general finding that the site scales the FP curve
+ * without moving its bend.
+ *
+ * The correction is applied FLAT, as a -7 translation of the whole BW125 row.
+ * A constant preserves the per-SF shape Semtech actually measured; scaling each
+ * SF by its own bandwidth slope would lean on their noisiest dimension (SF9
+ * steps +5 then +15 across the two published octaves) and distort that shape
+ * from a single anchor point.  Flat also errs more sensitive at high SF, the
+ * safe side of an asymmetric offset range (-8 down, +12 up).
+ *
+ * Sanity check on the magnitude, since only one SF was measured: Semtech's own
+ * SF7 trend is 52/64/77 across BW125/250/500, about 12 counts per octave, so a
+ * linear extrapolation one octave down would predict -12 and a base of 40.  The
+ * measured -7 sits between zero (what we shipped before) and that, which is the
+ * shape expected from a curve flattening at the narrow end.  The measurement is
+ * not fighting the trend; it lands inside the bracket the trend allows.
+ *
+ * ONE SF MEASURED, SEVEN EXTRAPOLATED.  That is the real limit of this row, and
+ * it is acceptable only because the closed-loop staircase exists to find the
+ * local value from a starting point — this makes the start honest, it does not
+ * claim to be the answer. */
 static uint8_t lr11xx_cad_detect_peak(uint8_t sf, uint16_t bw_khz, uint8_t symb_nb)
 {
 	/*        SF5 SF6 SF7 SF8 SF9 SF10 SF11 SF12 */
 	static const uint8_t bw500[8] = { 65, 70, 77, 85, 78, 80, 79, 82 };
 	static const uint8_t bw250[8] = { 60, 61, 64, 72, 63, 71, 73, 75 };
 	static const uint8_t bw125[8] = { 56, 52, 52, 58, 58, 62, 66, 68 };
+	/* bw125 - 7, measured at SF7/BW62.5 on two sites.  See the note above. */
+	static const uint8_t bw_sub125[8] = { 49, 45, 45, 51, 51, 55, 59, 61 };
 	const uint8_t *row;
 	int peak;
 
@@ -1742,9 +2082,11 @@ static uint8_t lr11xx_cad_detect_peak(uint8_t sf, uint16_t bw_khz, uint8_t symb_
 		row = bw500;
 	} else if (bw_khz >= 250) {
 		row = bw250;
-	} else {
-		/* BW125 and everything narrower — see the note above. */
+	} else if (bw_khz >= 125) {
 		row = bw125;
+	} else {
+		/* Narrower than BW125: Semtech publishes nothing, we measured. */
+		row = bw_sub125;
 	}
 	peak = (int)row[sf - 5];
 
@@ -1770,14 +2112,34 @@ static uint8_t lr11xx_cad_detect_peak(uint8_t sf, uint16_t bw_khz, uint8_t symb_
  * documented failure mode on the LR2021 (see LR2021Radio::hwCadPeakMin), and
  * the old 48 floor here reproduced it on the LR1110 at SF7.
  *
- * The bounds are chosen so the clamp never truncates the offset window itself:
- * the lowest base this table yields is 51 (SF6/SF7, BW<=125, 4 symbols), and
- * CAD_LEVEL_MIN is -8, so anything above 43 would silently collapse the bottom
- * rungs; the highest base is 85 (SF8, BW500) and CAD_LEVEL_MAX is +12.  Within
- * those, CAD_LEVEL_MIN/MAX remain the real limit and this is only a guardrail
- * against "CAD never fires" / "CAD always busy".  40 is also roughly where
- * Semtech's own BW trend extrapolates for the sub-125 bandwidths it declines to
- * tabulate, which is where our default preset lives. */
+ * 40 is DELIBERATELY left where it was when the sub-125 row was measured down
+ * to 45 (base 44 after the 4-symbol correction), which means it now binds:
+ * 44 + CAD_LEVEL_MIN(-8) = 36 is below it, so cadLevelMinEff() narrows the
+ * offset window to -4..+12 at SF6 and SF7 below BW125.  That narrowing is
+ * intended, and it must not be "fixed" by lowering this constant.
+ *
+ * The reason is what the sub-125 row is built on: two LR1110s, on different
+ * sites in different countries, converged to the SAME absolute detPeak.  A base
+ * anchored by two independent agreeing measurements does not need eight rungs
+ * of downward travel — it needs to be centred, which it now is.  The old -8
+ * window was sized for a base that was wrong by seven counts; carrying that
+ * much headroom onto a corrected base would be carrying the symptom across the
+ * fix.  CAD_SWEEP_MIN is -4, so the dry-run sweep still fits exactly.
+ *
+ * Only SF6 and SF7 below BW125 narrow at all.  SF5 keeps the full window by one
+ * count (48 - 8 = 40), and every other cell sits well clear:
+ *
+ *   sub-125 base (4 sym)   SF5 48  SF6 44  SF7 44  SF8 50 ... SF12 60
+ *   effective min offset       -8      -4      -4      -8         -8
+ *
+ * SF7/BW62.5 is of course the default preset, so the one configuration that
+ * narrows is the one that matters — which is the point, since it is also the
+ * only one anyone has measured.  The upper bound is untouched: the highest base
+ * is 85 (SF8, BW500) against CAD_LEVEL_MAX +12.
+ *
+ * Watch item: if a third, quieter LR1110 site ever rails at -4, that is the
+ * signal to revisit this — and it is the third data point the sub-125 row wants
+ * in any case. */
 #define LR11XX_CAD_PEAK_MIN 40
 #define LR11XX_CAD_PEAK_MAX 100
 
@@ -1826,8 +2188,28 @@ static int lr11xx_do_cad(struct lr11xx_data *data)
 		.cad_symb_nb = symb_nb,
 		.cad_detect_peak = detect_peak,
 		.cad_detect_min = mc->cad.detection_minimum ? mc->cad.detection_minimum : 10,
-		.cad_exit_mode = LR11XX_RADIO_CAD_EXIT_MODE_STANDBYRC,
-		.cad_timeout = 0,
+		/* Exit mode is per-CAD.  The calibration probe arms CAD_RX so a
+		 * positive detection flows straight into Rx on the signal it
+		 * found; the pre-TX LBT keeps STANDBYRC, where the verdict is
+		 * all the caller wants and entering Rx would leave the chip
+		 * somewhere the transmit path does not expect.  Detection is
+		 * identical either way -- same symbols, same detPeak, same
+		 * detMin -- so the probe still measures what LBT runs.
+		 *
+		 * cad_timeout bounds the Rx a positive CAD_RX enters, in RTC
+		 * steps at 32768 Hz -- the unit LR11XX_RTC_FREQ_IN_HZ names
+		 * (30.5176 us), not the 31.25 us the header's prose claims, and
+		 * the LR20xx driver already documents that these doc comments
+		 * are not reliable.  Max-length-packet airtime is the right
+		 * bound: anything shorter would cut off the packet the detection
+		 * was for.  See lr11xx_cad_rx_timeout_steps() for why the
+		 * vendor's millisecond wrapper is not used to convert it. */
+		.cad_exit_mode = data->cad_exit_rx
+					 ? LR11XX_RADIO_CAD_EXIT_MODE_RX
+					 : LR11XX_RADIO_CAD_EXIT_MODE_STANDBYRC,
+		.cad_timeout = data->cad_exit_rx
+			? lr11xx_cad_rx_timeout_steps(data)
+			: 0,
 	};
 
 	lr11xx_radio_set_cad_params(ctx, &cad);
@@ -1947,12 +2329,47 @@ int lr11xx_cad_probe(const struct device *dev, int8_t peak_offset)
 	}
 
 	/* One-shot absolute override consumed by lr11xx_do_cad().  Probes and
-	 * LBT both run on the mesh loop thread, so no concurrent CAD exists. */
+	 * LBT both run on the mesh loop thread, so no concurrent CAD exists --
+	 * which is also what makes cad_exit_rx safe as a plain flag. */
 	data->cad_probe_peak = (uint8_t)peak;
+	data->cad_exit_rx = true;
+	atomic_set(&data->cad_rx_state, LR11XX_CAD_RX_IDLE);
 	ret = lr11xx_lora_cad(dev, K_MSEC(lr11xx_cad_timeout_ms(data)));
+	data->cad_exit_rx = false;
 	data->cad_probe_peak = 0;
 
+	/* 2 rather than 1 tells the caller the chip is in Rx on the signal it
+	 * detected, so it must NOT re-enter Rx itself, and that an outcome will
+	 * be readable from lr11xx_cad_rx_outcome() once the chip resolves it. */
+	if (ret > 0) {
+		return 2;
+	}
+
 	return ret;
+}
+
+uint32_t lr11xx_cad_rx_timeout_ms(const struct device *dev)
+{
+	struct lr11xx_data *data = dev->data;
+
+	/* Derived from the exact step count do_cad() programs, so the caller's
+	 * wait and the chip's deadline cannot drift apart -- including when the
+	 * 24-bit saturation in lr11xx_cad_rx_timeout_steps() shortens it. */
+	return (uint32_t)(((uint64_t)lr11xx_cad_rx_timeout_steps(data) * 1000U)
+			  / 32768U);
+}
+
+int lr11xx_cad_rx_outcome(const struct device *dev)
+{
+	struct lr11xx_data *data = dev->data;
+	atomic_val_t st = atomic_get(&data->cad_rx_state);
+
+	if (st != LR11XX_CAD_RX_PACKET && st != LR11XX_CAD_RX_TMOUT) {
+		return 0;  /* nothing armed, or still awaiting the terminal IRQ */
+	}
+
+	atomic_set(&data->cad_rx_state, LR11XX_CAD_RX_IDLE);
+	return (st == LR11XX_CAD_RX_PACKET) ? 1 : 2;
 }
 
 /* ── Deferred hardware init ─────────────────────────────────────────── */

@@ -188,7 +188,10 @@ protected:
     }
     void applyCadPrefs() override {
         _radio->setCadParams(_prefs.cad_auto != 0, _prefs.cad_offset,
-                             _prefs.probe_interval, _prefs.cad_busycap);
+                             _prefs.probe_interval, _prefs.cad_busycap,
+                             _prefs.cad_base);
+        _prefs.cad_offset = _radio->getCadOffset();
+        _prefs.cad_base = _radio->cadBasePeak();
     }
     void resetCadStats() override {
         _radio->resetCadStats();

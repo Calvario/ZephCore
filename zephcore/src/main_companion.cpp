@@ -780,7 +780,10 @@ public:
 		lora_radio.setCadParams(companion_mesh.prefs.cad_auto != 0,
 					companion_mesh.prefs.cad_offset,
 					companion_mesh.prefs.probe_interval,
-					companion_mesh.prefs.cad_busycap);
+					companion_mesh.prefs.cad_busycap,
+					companion_mesh.prefs.cad_base);
+		companion_mesh.prefs.cad_offset = lora_radio.getCadOffset();
+		companion_mesh.prefs.cad_base = lora_radio.cadBasePeak();
 	}
 	void resetCadStats() override {
 		lora_radio.resetCadStats();
@@ -1626,7 +1629,18 @@ int main(void)
 	lora_radio.setCadParams(companion_mesh.prefs.cad_auto != 0,
 				companion_mesh.prefs.cad_offset,
 				companion_mesh.prefs.probe_interval,
-				companion_mesh.prefs.cad_busycap);
+				companion_mesh.prefs.cad_busycap,
+				companion_mesh.prefs.cad_base);
+	/* Write back the (offset, base) actually in force.  setCadParams() may
+	 * have re-anchored the offset across a base-table change, and the pair
+	 * has to be persisted for the NEXT upgrade to have an anchor of its own.
+	 * Guarded so a node whose base has not moved never writes flash at boot. */
+	if (companion_mesh.prefs.cad_base != lora_radio.cadBasePeak() ||
+	    companion_mesh.prefs.cad_offset != lora_radio.getCadOffset()) {
+		companion_mesh.prefs.cad_offset = lora_radio.getCadOffset();
+		companion_mesh.prefs.cad_base = lora_radio.cadBasePeak();
+		data_store.savePrefs(companion_mesh.prefs);
+	}
 
 	/* LR2021 side detectors (multi-SF RX) from prefs.  extra_sf is a
 	 * zero-terminated list; a rejected set (SF/BW changed since it was

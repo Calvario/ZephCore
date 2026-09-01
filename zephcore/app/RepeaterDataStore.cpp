@@ -277,6 +277,12 @@ bool RepeaterDataStore::loadPrefs(NodePrefs& prefs) {
      * stock orientation every already-deployed node runs. */
     fs_read(&file, &prefs.display_rotate, sizeof(prefs.display_rotate));
     fs_read(&file, &prefs.input_rotate, sizeof(prefs.input_rotate));
+    /* Family base detPeak cad_offset was learned against, offset 307.  Absent
+     * in <308-byte files; the no-op EOF read leaves 0, which setCadParams()
+     * reads as "no base recorded" and acts on by leaving the stored offset
+     * alone — correct, since a node upgrading across a table change cannot
+     * know which base its offset came from. */
+    fs_read(&file, &prefs.cad_base, sizeof(prefs.cad_base));
 
     fs_close(&file);
 
@@ -427,6 +433,8 @@ bool RepeaterDataStore::savePrefs(const NodePrefs& prefs) {
     /* Mounting orientation (offsets 305-306) */
     fs_write(&file, &prefs.display_rotate, sizeof(prefs.display_rotate));
     fs_write(&file, &prefs.input_rotate, sizeof(prefs.input_rotate));
+    /* Family base detPeak cad_offset was learned against (offset 307) */
+    fs_write(&file, &prefs.cad_base, sizeof(prefs.cad_base));
 
     ret = fs_sync(&file);
     fs_close(&file);

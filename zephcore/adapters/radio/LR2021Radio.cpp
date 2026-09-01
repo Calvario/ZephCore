@@ -108,6 +108,11 @@ int16_t LR2021Radio::hwGetCurrentRSSI()
 	return lr20xx_get_rssi_inst(_dev);
 }
 
+int LR2021Radio::hwGetRssiBurst(int16_t *out, int n, uint32_t spacing_us)
+{
+	return lr20xx_get_rssi_burst(_dev, out, n, spacing_us);
+}
+
 /* Deliberately no hwIsChipBusy() override, matching the LR11xx.
  *
  * It backs LoRaRadioBase::isRadioReady(), which gates TX in startSendRaw() as

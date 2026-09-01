@@ -44,6 +44,7 @@ protected:
 	int hwSendAsync(uint8_t *buf, uint32_t len,
 			struct k_poll_signal *sig) override;
 	int16_t hwGetCurrentRSSI() override;
+	int hwGetRssiBurst(int16_t *out, int n, uint32_t spacing_us) override;
 	bool hwIsReceiving() override;
 	void hwSetRxBoost(bool enable) override;
 	int hwCadProbe(int8_t level) override;

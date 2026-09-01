@@ -728,6 +728,12 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
              * _prefs->cad_offset, and _cad_offset inside the radio, which
              * applyCadPrefs() reloads through setCadParams(). */
             _prefs->cad_offset = cliDefaults()->cad_offset;
+            /* Clear the recorded base too.  applyCadPrefs() below re-stamps it
+             * from the radio, so a reset always leaves offset and base
+             * describing the same configuration -- leaving a stale base here
+             * would make the NEXT base-table change re-anchor a freshly reset
+             * offset away from zero. */
+            _prefs->cad_base = 0;
             _callbacks->resetCadStats();
             _callbacks->applyCadPrefs();
             savePrefs();

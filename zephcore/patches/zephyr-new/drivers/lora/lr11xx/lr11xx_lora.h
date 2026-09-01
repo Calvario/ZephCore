@@ -29,6 +29,17 @@ extern "C" {
  */
 int16_t lr11xx_get_rssi_inst(const struct device *dev);
 
+/* Read n RSSI samples spaced spacing_us apart, bracketing the duty-cycle
+ * stand-down ONCE for the whole burst instead of once per sample.  Returns the
+ * number of valid samples written; fewer than n means the read was refused
+ * partway and the caller should discard the burst.  A NEGATIVE return (-EAGAIN)
+ * means discard for a different reason: the receiver detected a preamble or
+ * header inside the window, so the samples describe that signal rather than the
+ * noise floor.  The two are worth distinguishing -- one indicts the sampler,
+ * the other reports the channel. */
+int lr11xx_get_rssi_burst(const struct device *dev, int16_t *out, int n,
+			 uint32_t spacing_us);
+
 /**
  * @brief Check if radio is actively receiving a packet
  *
@@ -165,7 +176,24 @@ uint8_t lr11xx_cad_peak_max(void);
  * @param peak_offset Signed offset from the base table value
  * @return 1 = activity detected, 0 = channel free, <0 = error
  */
+/* Armed with the CAD_RX exit mode: a NEGATIVE CAD exits to standby and the
+ * caller must restart Rx, a POSITIVE one leaves the chip in Rx on the signal it
+ * detected and the caller must not.
+ * Returns 2 = detected, chip in Rx (see lr11xx_cad_rx_outcome());
+ *         0 = channel free, chip in standby; <0 = error. */
 int lr11xx_cad_probe(const struct device *dev, int8_t peak_offset);
+
+/* Outcome of the Rx a positive lr11xx_cad_probe() entered.  The chip always
+ * resolves it with a terminal interrupt, so this reports an observed event
+ * rather than an inference.  Call once after the cad_timeout deadline; it
+ * consumes the result.
+ * Returns 1 = a packet arrived (detection was real);
+ *         2 = cad_timeout expired with nothing decoded;
+ *         0 = nothing armed, or the terminal interrupt has not arrived yet. */
+int lr11xx_cad_rx_outcome(const struct device *dev);
+
+/* The cad_timeout a CAD_RX probe programs, in milliseconds. */
+uint32_t lr11xx_cad_rx_timeout_ms(const struct device *dev);
 
 #ifdef __cplusplus
 }

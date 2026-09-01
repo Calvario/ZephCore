@@ -107,11 +107,14 @@ struct NodePrefs {
 	uint8_t _reserved_apc_margin;
 	uint8_t meshtimesync;           // 1 = mesh time-sync clock correction on (default off)
 	uint8_t cad_auto;               // 1 = adaptive-CAD staircase acts on probe stats (default ON)
-	int8_t cad_offset;              // operating detPeak offset from family base (-4..4)
+	int8_t cad_offset;              // operating detPeak offset from family base (CAD_OFFSET_MIN..MAX, -8..+12)
 	uint8_t probe_interval;         // seconds between periodic radio measurements:
 	                                // one noise-floor sample, and the CAD probe that
 	                                // consumes it (0 = CAD probing off, default 15)
-	uint8_t cad_busycap;            // airtime-protection: max % of TX attempts deferred before backing off detPeak (0 = off, default 25)
+	uint8_t cad_busycap;            // faint-tolerance / airtime cap: raise detPeak once more than this %
+	                                // of QUIET-MOMENT PROBES trip on a faint signal (0 = off, default 15).
+	                                // Not "% of TX attempts deferred" -- probes are prefiltered to quiet
+	                                // moments, so strong traffic never enters the statistic at all.
 	/* LR2021 side detectors: extra spreading factors received concurrently
 	 * with `sf`, on the same bandwidth.  Zero-terminated list — the first 0
 	 * ends it, so an all-zero array means the feature is off (which is what
@@ -132,6 +135,21 @@ struct NodePrefs {
 	 * be remounted without moving the stick. */
 	uint8_t display_rotate;         // 1 = panel rotated 180 degrees
 	uint8_t input_rotate;           // 1 = joystick up/down and left/right swapped
+
+	/* The family base detPeak that cad_offset was learned against (0 = never
+	 * stored, i.e. a node upgrading from a build without this field).
+	 *
+	 * cad_offset is a SIGNED OFFSET from a per-SF/per-bandwidth base table
+	 * that lives in the driver, so changing that table silently re-points a
+	 * stored offset at a different absolute detPeak.  The probe statistics
+	 * behind the offset are RAM-only and die at the reboot a firmware upgrade
+	 * involves, but the offset itself is persisted and survives — so after a
+	 * table change a converged node quietly starts operating somewhere it
+	 * never measured.  Recording the base turns that into something the
+	 * firmware can correct at boot (see LoRaRadioBase::setCadParams), instead
+	 * of a "run set cad.reset after upgrading" line in the release notes that
+	 * most users will not read. */
+	uint8_t cad_base;
 
 	/* ---- Companion-only fields ---- */
 	uint8_t manual_add_contacts;
@@ -344,7 +362,7 @@ static inline void initNodePrefs(NodePrefs* prefs) {
 	prefs->cad_auto = 1;              // Default ON — adaptive staircase acts on probe stats
 	prefs->cad_offset = 0;            // Start at family base detPeak (SF+13 on SX126x)
 	prefs->probe_interval = 15;       // floor sample + CAD probe; staircase responds in ~1-2 h
-	prefs->cad_busycap = 25;          // back off detPeak once >25% of TX attempts are deferred
+	prefs->cad_busycap = 15;          // back off detPeak once >15% of quiet-moment probes trip on faint signals
 	prefs->wake_on_msg = 1;           // Default ON — wake display when message arrives
 	prefs->display_rotate = 0;        // Default OFF — panel in the stock case orientation
 	prefs->input_rotate = 0;          // Default OFF — joystick axes as the board wires them

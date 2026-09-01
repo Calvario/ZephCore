@@ -41,11 +41,22 @@ public:
 
 	/* Adaptive CAD (LBT detPeak calibration).  Default no-ops for radios
 	 * without hardware CAD (SX127x). */
+	/* stored_base is the family base detPeak `offset` was learned against,
+	 * or 0 when none was recorded.  When it disagrees with the base the
+	 * driver reports now — i.e. the base table moved under a stored offset —
+	 * the implementation re-anchors so the ABSOLUTE detPeak is preserved.
+	 * Read cadOffset()/cadBasePeak() afterwards to persist the corrected
+	 * pair. */
 	virtual void setCadParams(bool auto_enabled, int8_t offset,
-				  uint16_t probe_interval_s, uint8_t busycap_pct) {
+				  uint16_t probe_interval_s, uint8_t busycap_pct,
+				  uint8_t stored_base = 0) {
 		(void)auto_enabled; (void)offset; (void)probe_interval_s;
-		(void)busycap_pct;
+		(void)busycap_pct; (void)stored_base;
 	}
+	/* Family base detPeak actually in force.  Pair it with getCadOffset() to
+	 * persist the (base, offset) the node is really operating at; 0 means the
+	 * radio has no adaptive CAD, so there is nothing to store. */
+	virtual uint8_t cadBasePeak() { return 0; }
 	/* One housekeeping tick of the CAD calibrator: maybe run a probe,
 	 * update stats, maybe step the staircase (auto mode). */
 	virtual void cadMaintenance() {}

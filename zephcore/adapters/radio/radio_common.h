@@ -96,13 +96,19 @@ static inline uint32_t rssi_settle_delay_us(uint16_t bw_khz)
  * Housekeeping-tick CAD probes accumulate per-level busy/free statistics;
  * a one-sided staircase converges on the lowest detPeak offset whose
  * false-positive rate stays under target.  Levels are signed offsets from
- * the chip family's per-SF base detPeak (SX126x: SF+13; LR11xx/LR20xx:
- * 56-68 table) so the C++ layer stays scale-independent. */
+ * the chip family's per-SF base detPeak, so the C++ layer stays
+ * scale-independent.  Those bases are per-SF AND per-bandwidth tables taken
+ * from Semtech's own reference stack (LoRa Basics Modem v4.9.0,
+ * ral_{sx126x,lr11xx}.c) plus the LR2021 datasheet's symbol-indexed Table 6-19;
+ * the flat "SX126x: SF+13 / LR: 56-68" this comment used to quote has not been
+ * the whole story since 2026-08-29. */
 /* Operating-offset range (levels from the per-SF family base detPeak).  Wide
  * on purpose — a dense hilltop may need a much higher detPeak than a quiet
- * valley node; the per-family absolute clamp in the driver (SX126x 15-40,
- * LR 48-90) is a firmware guardrail against "CAD never/always fires", NOT a
- * chip limit (cadDetPeak is a full uint8_t).
+ * valley node; the per-family absolute clamp in the driver (SX126x 12-48,
+ * LR11xx 40-100, LR20xx 48-90) is a firmware guardrail against "CAD
+ * never/always fires", NOT a chip limit (cadDetPeak is a full uint8_t).  The
+ * clamps are exported via hwCadPeakMin/Max so cadLevelMinEff/MaxEff can narrow
+ * this window honestly where a base sits close to one of them.
  * MUST match CAD_OFFSET_MIN/MAX in helpers/NodePrefs.h. */
 #define CAD_LEVEL_MIN            (-8)  /* most sensitive probe level */
 #define CAD_LEVEL_MAX            12    /* least sensitive probe level */
@@ -134,9 +140,20 @@ static inline uint32_t rssi_settle_delay_us(uint16_t bw_khz)
  * cap, step UP (less sensitive) regardless of FP — self-targeting, since a
  * quiet node's busy rate never reaches it.  HYST keeps a descend from bouncing
  * straight back into the cap.  The cap itself is a per-node pref
- * (`cad_busycap`, percent, `set cad.busycap`; default 25, 0 = off) since it is
+ * (`cad_busycap`, percent, `set cad.busycap`; default 15, 0 = off) since it is
  * a policy call (airtime vs. collision/capture), not a physical constant. */
-#define CAD_BUSY_DEFER_HYST_PERMILLE 100  /* descend only if frontier busy <= cap-10% */
+/* Descend hysteresis, as a PERCENTAGE OF THE CAP rather than a fixed permille
+ * subtrahend.  It used to be a flat 100‰, which works at the old default cap of
+ * 25% (threshold 15%, hysteresis 40% of the cap) and degenerates as the cap
+ * falls: at cap 15% the threshold is 5%, and at cap 10% — the value
+ * docs/ADAPTIVE_CAD.md recommends for saturated hilltops, and also the CLI's
+ * minimum non-zero setting — it reaches ZERO. There, descent requires exactly
+ * zero busy probes at the frontier, so the staircase becomes a one-way upward
+ * ratchet at precisely the setting the documentation recommends.
+ *
+ * 40% reproduces the old behaviour exactly at cap 25 and holds that same share
+ * at every other setting. */
+#define CAD_BUSY_DEFER_HYST_PCT      40   /* descend only if frontier busy <= 60% of cap */
 #define CAD_PROBE_RSSI_GUARD     7     /* dB above floor = channel visibly busy, skip probe */
 #define CAD_STATS_DECAY_MS       (6UL * 3600UL * 1000UL)  /* halve counters every 6 h */
 /* NOTE: the probe has no retry deadline and no wake of its own.  It runs off

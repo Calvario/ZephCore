@@ -54,7 +54,8 @@ LoRaRadioBase::LoRaRadioBase(const struct device *lora_dev, MainBoard &board,
 	  _rx_entry_cyc(0),
 	  _rssi_bursts(0), _rssi_spread_sum(0), _rssi_degenerate(0),
 	  _cad_auto(false), _cad_offset(0), _probe_interval_s(0),
-	  _cad_busycap_pct(0),
+	  _cad_busycap_pct(0), _cad_pending_level(INT8_MIN),
+	  _cad_pending_deadline_ms(0),
 	  _cad_last_probe_ms(0), _cad_last_decay_ms(0),
 	  _cad_probe_rr(0),
 	  _rx_duty_cycle_enabled(IS_ENABLED(CONFIG_ZEPHCORE_LORA_RX_DUTY_CYCLE)),
@@ -63,6 +64,7 @@ LoRaRadioBase::LoRaRadioBase(const struct device *lora_dev, MainBoard &board,
 	  _agc_rx_count_shadow(0), _agc_last_activity_ms(0),
 	  _agc_rssi_last(0), _agc_rssi_frozen(0),
 	  _rssi_reads_ok(0), _rssi_reads_busy(0), _rssi_bursts_abandoned(0),
+	  _rssi_dc_blocked(0),
 	  _silence_last_report_ms(0),
 	  _image_cal_last_temp_c(INT16_MIN),
 	  _image_cal_last_ms(0), _image_cal_wait_ms(0),
@@ -842,6 +844,20 @@ float LoRaRadioBase::getLastSNR() const
 	return _last_snr;
 }
 
+int LoRaRadioBase::hwGetRssiBurst(int16_t *out, int n, uint32_t spacing_us)
+{
+	for (int i = 0; i < n; i++) {
+		if (i) {
+			k_busy_wait(spacing_us);
+		}
+		out[i] = hwGetCurrentRSSI();
+		if (out[i] == -128) {
+			return i;  /* refused partway; caller abandons */
+		}
+	}
+	return n;
+}
+
 bool LoRaRadioBase::isRadioReady()
 {
 	/* BUSY high means the radio cannot accept SPI commands now
@@ -938,8 +954,17 @@ void LoRaRadioBase::triggerNoiseFloorCalibrate(int threshold)
 	}
 
 	/* Skip when the radio cannot accept commands right now
-	 * (e.g. duty-cycle sleep BUSY window). */
+	 * (e.g. duty-cycle sleep BUSY window).
+	 *
+	 * Counted, because this refusal was invisible and a whole line of
+	 * reasoning was built on the wrong counter: the r/b/a figures only move
+	 * when a read fails from INSIDE an already-started burst, so they say
+	 * nothing about how often the sampler is turned away here.  Whether the
+	 * noise floor actually goes stale under duty cycle — and therefore
+	 * whether the CAD prefilter admits probes at moments that are not quiet —
+	 * cannot be answered without this number. */
 	if (!isRadioReady()) {
+		_rssi_dc_blocked++;
 		return;
 	}
 
@@ -994,23 +1019,37 @@ void LoRaRadioBase::triggerNoiseFloorCalibrate(int threshold)
 	 * whole burst. */
 	uint32_t window_us = rssi_avg_window_us(bw_khz);
 	int16_t samples[NOISE_FLOOR_SAMPLES_PER_TICK];
-	for (int i = 0; i < NOISE_FLOOR_SAMPLES_PER_TICK; i++) {
-		if (i) {
-			k_busy_wait(window_us);
-		}
-		samples[i] = hwGetCurrentRSSI();
-		if (samples[i] == -128) {
-			/* Chip busy or RSSI read contended — keep the short
-			 * retry deadline set above and try again shortly.
-			 *
-			 * Counted, not yet tolerated: whether to accept a partial
-			 * burst depends on how these reads fail, which is exactly
-			 * what the counters are here to establish. */
-			_rssi_reads_busy++;
-			_rssi_bursts_abandoned++;
-			return;
-		}
-		_rssi_reads_ok++;
+	int got = hwGetRssiBurst(samples, NOISE_FLOOR_SAMPLES_PER_TICK, window_us);
+
+	if (got < 0) {
+		/* A preamble or header landed inside the window, so these
+		 * samples measure that signal and not the floor.  Not a sampler
+		 * fault: charging it to the read counters would report a busy
+		 * channel as a failing bus, which is the distinction those
+		 * counters exist to draw.  Only the abandoned count moves, and
+		 * the short retry deadline set above stands.
+		 *
+		 * Leaving _sample_fresh clear is load-bearing beyond the floor.
+		 * On the LR families the CAD probe's own isReceiving() re-check
+		 * below cannot see this — with a duty cycle armed it answers
+		 * from a latch the sampler's re-arm has just zeroed — so this is
+		 * what actually keeps a calibration CAD off the air while a
+		 * neighbour is transmitting. */
+		_rssi_bursts_abandoned++;
+		return;
+	}
+
+	_rssi_reads_ok += (uint32_t)got;
+	if (got < NOISE_FLOOR_SAMPLES_PER_TICK) {
+		/* Chip busy or RSSI read contended — keep the short retry
+		 * deadline set above and try again shortly.
+		 *
+		 * Counted, not yet tolerated: whether to accept a partial burst
+		 * depends on how these reads fail, which is exactly what the
+		 * counters are here to establish. */
+		_rssi_reads_busy++;
+		_rssi_bursts_abandoned++;
+		return;
 	}
 
 	/* A full sample landed: next one is a full interval away. */
@@ -1053,6 +1092,14 @@ void LoRaRadioBase::triggerNoiseFloorCalibrate(int threshold)
 		_rssi_bursts >>= 1;
 		_rssi_spread_sum >>= 1;
 		_rssi_degenerate >>= 1;
+		/* The read counters are printed alongside the burst count as
+		 * (N rX/bY/aZ), so a reader computes ratios across the two sets.
+		 * Halving only the burst side made those ratios wrong by 2x
+		 * after the first rescale and 4x after the next. */
+		_rssi_reads_ok >>= 1;
+		_rssi_reads_busy >>= 1;
+		_rssi_bursts_abandoned >>= 1;
+		_rssi_dc_blocked >>= 1;
 	}
 
 	/* Publish this sample for cadMaintenance().  The CAD probe needs exactly
@@ -1275,13 +1322,14 @@ void LoRaRadioBase::radioMaintenance()
 		    (_silence_last_report_ms == 0 ||
 		     (now - _silence_last_report_ms) >= SILENCE_REPORT_MS)) {
 			_silence_last_report_ms = now ? now : 1;
-			LOG_INF("silence: %u s no RX | in_rx=%d dc=%d rssi_ok=%u rssi_busy=%u abandoned=%u floor=%d",
+			LOG_INF("silence: %u s no RX | in_rx=%d dc=%d rssi_ok=%u rssi_busy=%u abandoned=%u dc_blocked=%u floor=%d",
 				(unsigned)(silent_ms / 1000U),
 				(int)atomic_get(&_in_recv_mode),
 				(int)_rx_duty_cycle_enabled,
 				(unsigned)_rssi_reads_ok,
 				(unsigned)_rssi_reads_busy,
 				(unsigned)_rssi_bursts_abandoned,
+				(unsigned)_rssi_dc_blocked,
 				(int)_noise_floor);
 		}
 	}
@@ -1484,10 +1532,43 @@ int8_t LoRaRadioBase::cadLevelMaxEff()
 }
 
 void LoRaRadioBase::setCadParams(bool auto_enabled, int8_t offset,
-				 uint16_t probe_interval_s, uint8_t busycap_pct)
+				 uint16_t probe_interval_s, uint8_t busycap_pct,
+				 uint8_t stored_base)
 {
 	const int8_t lo = cadLevelMinEff();
 	const int8_t hi = cadLevelMaxEff();
+	const uint8_t base = hwCadBasePeak();
+
+	/* Re-anchor across a base-table change.
+	 *
+	 * cad_offset is persisted; the per-level probe statistics that justified
+	 * it are not (RAM only, cleared by reconfigure() and lost at every
+	 * reboot).  So when a firmware update moves the family base table, a
+	 * converged node wakes up with an offset that names a different absolute
+	 * detPeak than the one it spent days measuring.
+	 *
+	 * Preserve the PEAK, not the offset: the peak is the physical quantity
+	 * the node actually measured, and the offset is only how we address it.
+	 * A node at base 51 / offset -7 lands on base 44 / offset 0 — the same
+	 * detPeak 44, now centred in its window instead of one rung off the rail.
+	 *
+	 * Resetting to 0 instead would throw away real convergence for no reason,
+	 * and is only the right answer when the preserved peak falls outside the
+	 * window the new base can reach — which the clamp below handles, because
+	 * a peak that is no longer addressable is not a peak we can operate at.
+	 *
+	 * stored_base == 0 means "never recorded" (a node upgrading from a build
+	 * without the field), and is deliberately a no-op: with no record of
+	 * which base the offset came from, any adjustment would be a guess. */
+	if (stored_base != 0 && base != 0 && stored_base != base) {
+		int adj = (int)offset + (int)stored_base - (int)base;
+
+		LOG_INF("cad: base %u -> %u, re-anchoring offset %d -> %d "
+			"(peak %d held)",
+			(unsigned)stored_base, (unsigned)base,
+			(int)offset, adj, (int)stored_base + (int)offset);
+		offset = (int8_t)(adj < -128 ? -128 : (adj > 127 ? 127 : adj));
+	}
 
 	if (offset < lo) offset = lo;
 	if (offset > hi) offset = hi;
@@ -1511,9 +1592,14 @@ void LoRaRadioBase::setCadParams(bool auto_enabled, int8_t offset,
 
 	hwCadSetPeakOffset(_cad_offset);
 
-	LOG_INF("cad: auto=%d offset=%d measure_interval=%ums busycap=%u%%",
-		(int)auto_enabled, (int)offset, (unsigned)_measure_interval_ms,
-		(unsigned)busycap_pct);
+	LOG_INF("cad: auto=%d offset=%d base=%u measure_interval=%ums busycap=%u%%",
+		(int)auto_enabled, (int)offset, (unsigned)base,
+		(unsigned)_measure_interval_ms, (unsigned)busycap_pct);
+}
+
+uint8_t LoRaRadioBase::cadBasePeak()
+{
+	return hwCadBasePeak();
 }
 
 void LoRaRadioBase::resetCadStats()
@@ -1631,7 +1717,8 @@ void LoRaRadioBase::cadStaircaseStep()
 	 * airtime cap and bouncing straight back up. */
 	int b_dn = busy_rate(oi - 1);
 	bool busy_ok = (cap_permille == 0) ||
-		       (b_dn <= cap_permille - CAD_BUSY_DEFER_HYST_PERMILLE);
+		       (b_dn <= cap_permille -
+				(cap_permille * CAD_BUSY_DEFER_HYST_PCT) / 100);
 	if (_cad_offset > cadLevelMinEff() && r_dn >= 0 &&
 	    r_dn - r_op < CAD_KNEE_SLOPE_PERMILLE &&
 	    r_op <= CAD_PLATEAU_CLEAN_PERMILLE && busy_ok) {
@@ -1662,6 +1749,47 @@ void LoRaRadioBase::cadMaintenance()
 		_cad_last_decay_ms = now;
 	}
 
+	/* A CAD_RX probe from an earlier pass, now resolvable.
+	 *
+	 * This replaces the four-poll confirmation window that used to run
+	 * inline after every busy probe.  That window existed only because the
+	 * old CAD_ONLY exit threw away the reception which triggered the
+	 * detection, leaving nothing to wait for and no choice but to guess from
+	 * a poll -- and it guessed badly, confirming about a quarter of busies on
+	 * the best node and one in forty-five on a duty-cycled LR1110.
+	 *
+	 * With CAD_RX the chip keeps that reception and always resolves it with
+	 * a terminal interrupt: a packet, or its own cadTimeout.  So there is a
+	 * real event to observe, the answer is read once after the chip's own
+	 * deadline, and it costs no chip access at all. */
+	if (_cad_pending_level != INT8_MIN && now >= _cad_pending_deadline_ms) {
+		CadLevelStats &ps = _cad_stats[_cad_pending_level - CAD_LEVEL_MIN];
+		int outcome = hwCadRxOutcome();
+
+		if (outcome == 1) {
+			ps.tp++;
+		} else if (outcome == 2) {
+			ps.fp++;
+		} else {
+			/* Past the chip's own deadline with neither terminal
+			 * interrupt seen.  Nothing to infer from that, and
+			 * inventing a verdict would poison the very curve the
+			 * staircase reads -- so un-count the sample entirely
+			 * rather than book it as either.  Dropping the busy with
+			 * it keeps busy_rate and fp_rate describing the same
+			 * population. */
+			if (ps.probes) ps.probes--;
+			if (ps.busy) ps.busy--;
+			LOG_WRN("cad: probe at %+d unresolved past deadline, discarded",
+				(int)_cad_pending_level);
+		}
+		_cad_pending_level = INT8_MIN;
+
+		if (_cad_auto) {
+			cadStaircaseStep();
+		}
+	}
+
 	/* No separate probe-interval check: the probe interval IS the measurement
 	 * interval (setCadParams derives _measure_interval_ms from it), so a
 	 * fresh sample means a probe is due by construction. */
@@ -1685,7 +1813,48 @@ void LoRaRadioBase::cadMaintenance()
 	}
 	_sample_fresh = false;
 
+	/* One probe in flight at a time.  A second CAD while the first is still
+	 * in its CAD_RX window would abort that Rx -- destroying the reception
+	 * being measured -- and there is only one pending slot to book it to. */
+	if (_cad_pending_level != INT8_MIN) {
+		return;
+	}
+
+	/* No CAD_RX ground truth on this radio means no probing at all.
+	 *
+	 * The staircase reads a FALSE-positive rate, so a probe whose outcome
+	 * can never be established is not a weaker sample, it is a poisoned one:
+	 * every busy verdict would be booked as neither fp nor tp, fp_rate would
+	 * read zero at every level, the curve would look perfectly clean, and
+	 * the controller would walk to the most sensitive rail on a channel it
+	 * has learned nothing about.  Silently collecting unusable data is worse
+	 * than collecting none.
+	 *
+	 * The one radio this currently excludes is the LR2021.  Its cad_timeout
+	 * is 24 bits of 32 MHz periods (DS 6.3.11), i.e. 524 ms, while a
+	 * max-length packet at the default SF7/BW62.5 preset runs 1704 ms -- and
+	 * the datasheet is explicit that the chip "stays in Rx until a packet is
+	 * demodulated or the timer reaches the timeout", so that bound truncates
+	 * receptions rather than merely ending a wait.  Enabling CAD_RX there
+	 * would trade a measurement for lost packets, which is the wrong way
+	 * round.  `set cad.offset` still works by hand.
+	 *
+	 * (The SX126x's ceiling is 262 s at 15.625 us steps and the LR11xx's is
+	 * 512 s at 32768 Hz RTC steps, so neither comes close to binding.) */
+	if (hwCadRxTimeoutMs() == 0) {
+		return;
+	}
+
 	if (!_sample_channel_quiet) {
+		return;
+	}
+
+	/* Re-check immediately before the CAD.  The sampler's own isReceiving()
+	 * guard ran BEFORE its 8-read burst, so by the time we get here it is
+	 * about a millisecond stale — long enough for a packet to have started.
+	 * Calibration must never cost a reception, and abandoning the probe is
+	 * free: the next interval is 15 s away and nothing depends on this one. */
+	if (isReceiving()) {
 		return;
 	}
 
@@ -1693,13 +1862,23 @@ void LoRaRadioBase::cadMaintenance()
 
 	int8_t level = pickCadProbeLevel();
 	int ret = hwCadProbe(level);
+	/* hwCadProbe() BLOCKS for the whole CAD, so `now` is already stale here
+	 * and must not be used as the base of the CAD_RX deadline below. */
+	int64_t probe_done_ms = k_uptime_get();
 
-	/* The probe leaves the chip in STANDBY (driver state REST) — re-arm
-	 * RX immediately so an incoming packet isn't lost while we classify.
-	 * In duty-cycle mode this re-enters the DC cycle (same path as the
-	 * parked-RX watchdog re-arm). */
-	atomic_set(&_in_recv_mode, 0);
-	startReceive();
+	/* Where the chip is now depends on the verdict, and the caller must not
+	 * guess:
+	 *   free (0)  -> standby; re-enter RX exactly as before.
+	 *   busy (2)  -> the chip is ALREADY in RX, locked on the signal CAD
+	 *                found, and re-entering would tear down the reception
+	 *                this probe exists to observe.  Leave it alone.
+	 *   busy (1)  -> a radio still on the CAD_ONLY exit (no CAD_RX support):
+	 *                standby, re-enter RX, and no ground truth is available.
+	 *   error     -> standby; re-enter RX and give up on this pass. */
+	if (ret != 2) {
+		atomic_set(&_in_recv_mode, 0);
+		startReceive();
+	}
 
 	if (ret < 0) {
 		if (ret != -ENOSYS) {
@@ -1717,53 +1896,31 @@ void LoRaRadioBase::cadMaintenance()
 
 	if (ret > 0) {
 		s.busy++;
+	}
 
-		/* Ground-truth post-check: was the CAD hit a REAL signal or a
-		 * correlator false positive?  A real transmitter that tripped
-		 * CAD keeps radiating, so over the next preamble+header window
-		 * one of two things shows up:
-		 *   (a) the restarted RX syncs on it   -> isReceiving(), or
-		 *   (b) instantaneous RSSI climbs above the noise floor.
-		 * (b) is the important addition: the probe tears RX down to run
-		 * CAD, and the STANDBY->RX restart routinely eats the preamble of
-		 * a real packet, so RX never re-syncs — the old isReceiving()-only
-		 * snapshot booked those strong-but-missed packets as false
-		 * positives, a ~detPeak-independent floor that flattened the FP
-		 * curve and drove the staircase to the ceiling.  Channel energy
-		 * doesn't depend on winning the preamble race, so it recovers
-		 * them.  Neither signal over the whole window => genuine FP.  A
-		 * below-floor packet we can neither sync nor see stays ambiguous
-		 * and counts as FP — bias toward higher detPeak (the safe side).
-		 * The prefilter above guaranteed RSSI <= floor+guard pre-probe,
-		 * so a rise past that threshold now is a newly-arrived signal. */
-		uint8_t sf = getActiveSpreadingFactor();
-		uint16_t bw_x10 = getActiveBandwidthKHzX10();
-		uint32_t tsym_us = bw_x10 ? (uint32_t)(((1UL << sf) * 10000UL)
-						       / bw_x10) : 1024;
-		uint32_t step_ms = (3U * tsym_us) / 1000U;  /* ~3 symbols/sample */
-
-		if (step_ms < 5) step_ms = 5;
-		if (step_ms > 100) step_ms = 100;
-
-		bool floor_valid = (_noise_floor != DEFAULT_NOISE_FLOOR);
-		int16_t rssi_thresh = _noise_floor + CAD_PROBE_RSSI_GUARD;
-
-		bool real = false;
-		for (int k = 0; k < 4 && !real; k++) {  /* ~12 symbols total */
-			k_sleep(K_MSEC(step_ms));
-			if (isReceiving()) {
-				real = true;
-			} else if (floor_valid &&
-				   hwGetCurrentRSSI() > rssi_thresh) {
-				real = true;
-			}
-		}
-
-		if (real) {
-			s.tp++;
-		} else {
-			s.fp++;
-		}
+	if (ret == 2) {
+		/* Book the rung and come back once the chip's own cadTimeout has
+		 * passed, when a terminal interrupt is guaranteed to have landed.
+		 * The extra 100 ms is interrupt-to-work-queue latency, not a
+		 * safety margin against the chip: the deadline itself is the
+		 * chip's.
+		 *
+		 * Measured from AFTER the probe, because the chip's cadTimeout
+		 * starts when CAD_DONE hands it into Rx — which is exactly when
+		 * the blocking hwCadProbe() returns.  Based on `now` instead, it
+		 * was short by the whole CAD duration, and a 4-symbol CAD is
+		 * ~131 ms at SF11/BW62.5 and ~262 ms at SF12 (the figure
+		 * sx126x_cad_timeout_ms() sizes its own wait from), i.e. more
+		 * than the margin.  The outcome was then read before the chip
+		 * could raise its timeout, so every FALSE positive was discarded
+		 * while true positives — which land early, on a packet — still
+		 * counted: fp_rate read ~0 at every rung and the staircase
+		 * descended to the sensitive rail on a curve it had not
+		 * measured. */
+		_cad_pending_level = level;
+		_cad_pending_deadline_ms =
+			probe_done_ms + (int64_t)hwCadRxTimeoutMs() + 100;
+		return;
 	}
 
 	if (_cad_auto) {
@@ -1808,7 +1965,17 @@ uint32_t LoRaRadioBase::msUntilNextMaintenance()
 	 * off the noise-floor sampler's measurement (see cadMaintenance), so its
 	 * wake is already accounted for above.  Giving it a second deadline is
 	 * what produced two independent 15 s grids ~3 s apart — one extra wake
-	 * per interval, forever, on every repeater. */
+	 * per interval, forever, on every repeater.
+	 *
+	 * A CAD_RX probe awaiting its terminal event is the one exception, and it
+	 * is not a second grid: it is one wake, only while a probe is actually
+	 * pending, at the moment the chip has guaranteed an answer exists.  It
+	 * would otherwise wait for the next sampler tick, leaving the node in the
+	 * plain RX that CAD_RX entered instead of handing the duty cycle back. */
+	if (_cad_pending_level != INT8_MIN) {
+		next = mesh::maintenanceSooner(
+			next, clampDeadline(_cad_pending_deadline_ms - now));
+	}
 
 	/* Stats decay. _cad_last_decay_ms == 0 means the first call latches it
 	 * rather than decaying, so treat that as due now. */
@@ -1878,17 +2045,29 @@ int LoRaRadioBase::formatCadStatus(char *buf, int cap)
 		      (int)base + _cad_offset, base,
 		      spread_mean10 / 10U, spread_mean10 % 10U, degen_pct);
 	if (room_for_count) {
-		/* bursts(ok reads/busy reads/abandoned bursts) — the busy and
-		 * abandoned figures are what distinguish a sampler that is losing
-		 * the odd read from one that is being refused outright. */
-		n += snprintf(buf + n, cap > n ? cap - n : 0, "(%u r%u/b%u/a%u)",
+		/* bursts(ok reads/busy reads/abandoned bursts/dc-blocked) — the
+		 * busy and abandoned figures distinguish a sampler that is losing
+		 * the odd read from one that is being refused mid-burst, and the
+		 * dc figure distinguishes both from one that never gets to start
+		 * because the duty-cycle sleep window turns it away.  Without the
+		 * last one, "refused constantly" and "running perfectly" both
+		 * print b0/a0. */
+		n += snprintf(buf + n, cap > n ? cap - n : 0,
+			      "(%u r%u/b%u/a%u/d%u)",
 			      (unsigned)_rssi_bursts,
 			      (unsigned)_rssi_reads_ok,
 			      (unsigned)_rssi_reads_busy,
-			      (unsigned)_rssi_bursts_abandoned);
+			      (unsigned)_rssi_bursts_abandoned,
+			      (unsigned)_rssi_dc_blocked);
 	}
 	n += snprintf(buf + n, cap > n ? cap - n : 0, " bc:%u%%",
 		      (unsigned)_cad_busycap_pct);
+	/* Probing off because the radio cannot supply CAD_RX ground truth (see
+	 * cadMaintenance).  Stated rather than left to be inferred from level
+	 * counters that never move. */
+	if (hwCadRxTimeoutMs() == 0) {
+		n += snprintf(buf + n, cap > n ? cap - n : 0, " probe:n/a");
+	}
 
 	/* Only the 3 rungs around the operating offset — the far rungs are mildly
 	 * irrelevant; what matters is where we sit on the ladder.  The window is

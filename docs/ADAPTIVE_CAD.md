@@ -92,7 +92,7 @@ says "keep raising detPeak until fewer than *N*% of quiet moments trip on
 faint signals." A **lower** cap rejects faint traffic more aggressively
 (ignore echoes and stragglers); a higher cap tolerates more of it. On a
 saturated hilltop that should react only to strong contention, set the cap
-low (e.g. `10`); the default `25` is a moderate setting suited to mixed
+low (e.g. `10`); the default `15` is a moderate setting suited to mixed
 and leaf nodes. This is the same mechanism as "airtime protection" below —
 two names for one lever, because the airtime a busy node wastes *is* the
 airtime spent deferring for faint traffic.
@@ -167,7 +167,7 @@ neighbour a quarter) so the staircase can read the local curve *slope*:
 
 - **Airtime protection** (highest priority): step up when the operating
   level's *total* busy rate — real traffic plus false positives — exceeds
-  the busy cap (`set cad.busycap`, percent; default **25%**, 0 = off). The
+  the busy cap (`set cad.busycap`, percent; default **15%**, 0 = off). The
   knee logic only minimises *false* busy, but on a congested hilltop most
   busy verdicts are real distant traffic we'd win on capture anyway;
   deferring for all of it starves the node's own airtime. Self-targeting —
@@ -323,7 +323,7 @@ a knee to resolve clearly, longer to capture day/night variation.
 | `set cad.auto <on\|off>` | **on** | Staircase controller acts on the stats. Off = observe/hand-tune. |
 | `set cad.offset <n>` | 0 | Operating offset, −8…12. Negative = more sensitive. Applied live. |
 | `set probe.interval <sec>` | 15 | Shared cadence for the noise-floor sample and the CAD probe that consumes it; 0 disables probing (and freezes auto), 10–255 otherwise. |
-| `set cad.busycap <pct>` | 25 | Faint-tolerance / airtime cap: raise detPeak once more than this % of (quiet-moment) probes trip on faint signals. Lower = reject faint/echo harder (busy backbones); 0 = off. 10–90 otherwise. |
+| `set cad.busycap <pct>` | 15 | Faint-tolerance / airtime cap: raise detPeak once more than this % of (quiet-moment) probes trip on faint signals. Lower = reject faint/echo harder (busy backbones); 0 = off. 10–90 otherwise. |
 | `set cad.reset` | | Clear accumulated statistics (RAM only). |
 
 All settings persist in prefs and apply to every role — repeater, room

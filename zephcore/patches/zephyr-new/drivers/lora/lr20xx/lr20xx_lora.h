@@ -26,6 +26,17 @@ extern "C" {
  */
 int16_t lr20xx_get_rssi_inst(const struct device *dev);
 
+/* Read n RSSI samples spaced spacing_us apart, bracketing the duty-cycle
+ * stand-down ONCE for the whole burst instead of once per sample.  Returns the
+ * number of valid samples written; fewer than n means the read was refused
+ * partway and the caller should discard the burst.  A NEGATIVE return (-EAGAIN)
+ * means discard for a different reason: the receiver detected a preamble or
+ * header inside the window, so the samples describe that signal rather than the
+ * noise floor.  The two are worth distinguishing -- one indicts the sampler,
+ * the other reports the channel. */
+int lr20xx_get_rssi_burst(const struct device *dev, int16_t *out, int n,
+			 uint32_t spacing_us);
+
 /**
  * @brief Running carrier-frequency-error statistics
  *
