@@ -206,6 +206,31 @@ static uint8_t calc_battery_pct(uint16_t mv)
 	return (uint8_t)((mv - 3000) * 100 / 1200);
 }
 
+/* ========== Helper: local wall clock ==========
+ *
+ * state.rtc_epoch is ALWAYS UTC.  The timezone offset is applied here, at
+ * format time, and nowhere else: shifting the clock itself would read as a
+ * backward jump to every timestamp consumer on the node (advert timestamps,
+ * the repeater ACL's monotonic gate, MeshTimeSync), and a backward clock is a
+ * silent mesh-wide mute.  Never write these values back into state. */
+static uint32_t local_epoch(void)
+{
+	return state.rtc_epoch + (int32_t)state.tz_offset * 3600;
+}
+
+/* The zone the displayed digits are actually in: "UTC", "UTC+2", "UTC-11".
+ * Static buffer -- every caller is on the UI thread inside ui_pages_render(). */
+static const char *tz_label(void)
+{
+	static char label[8];
+
+	if (state.tz_offset == 0) {
+		return "UTC";
+	}
+	snprintf(label, sizeof(label), "UTC%+d", (int)state.tz_offset);
+	return label;
+}
+
 /* ========== Helper: Top Bar (Node Name + Battery) ========== */
 
 /* One-char tag for where the displayed clock was last freshly synced from
@@ -239,7 +264,7 @@ static void render_top_bar(void)
 	 * Before sync, getCurrentTime() returns bare uptime (~seconds),
 	 * so check for a sane epoch (after Jan 1 2025 = 1735689600). */
 	if (state.rtc_epoch > 1735689600) {
-		uint32_t day_sec = state.rtc_epoch % 86400;
+		uint32_t day_sec = local_epoch() % 86400;
 		uint8_t hh = day_sec / 3600;
 		uint8_t mm = (day_sec % 3600) / 60;
 
@@ -1554,10 +1579,11 @@ static void render_status(void)
 		draw_centered(centered_row(0, 3), buf);
 
 		if (state.rtc_epoch > 1735689600) {
-			uint32_t ds = state.rtc_epoch % 86400;
+			uint32_t ds = local_epoch() % 86400;
 
-			snprintf(buf, sizeof(buf), "%02u:%02u UTC",
-				 (unsigned)(ds / 3600), (unsigned)((ds % 3600) / 60));
+			snprintf(buf, sizeof(buf), "%02u:%02u %s",
+				 (unsigned)(ds / 3600), (unsigned)((ds % 3600) / 60),
+				 tz_label());
 		} else {
 			snprintf(buf, sizeof(buf), "no time");
 		}
@@ -1598,12 +1624,16 @@ static void render_status(void)
 
 	/* Clock — only if RTC has been synced (after Jan 1 2025) */
 	if (state.rtc_epoch > 1735689600) {
-		uint32_t day_sec = state.rtc_epoch % 86400;
+		uint32_t day_sec = local_epoch() % 86400;
 		uint8_t hh = day_sec / 3600;
 		uint8_t mm = (day_sec % 3600) / 60;
 		uint8_t ss = day_sec % 60;
 
-		snprintf(buf, sizeof(buf), "Time: %02u:%02u:%02u UTC", hh, mm, ss);
+		/* "T:" rather than "Time:" so a two-digit zone still fits the
+		 * 20-column budget of the 200x200 e-paper boards, which pair
+		 * CONFIG_ZEPHCORE_DISPLAY_LARGE_FONT (10x16) with this page. */
+		snprintf(buf, sizeof(buf), "T: %02u:%02u:%02u %s", hh, mm, ss,
+			 tz_label());
 		if (color) {
 			draw_color_segments(y, "CLK ", buf, UI_COLOR_OK);
 		} else {
@@ -1613,7 +1643,7 @@ static void render_status(void)
 		if (color) {
 			draw_color_segments(y, "CLK ", "not synced", UI_COLOR_WARN);
 		} else {
-			mc_display_text(0, y, "Time: not synced", false);
+			mc_display_text(0, y, "T: not synced", false);
 		}
 	}
 	y += LINE_H;

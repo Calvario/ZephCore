@@ -844,6 +844,14 @@ void ZephyrDataStore::loadPrefs(NodePrefs &prefs)
 		prefs.cad_base = buf[off++];
 	}
 
+	/* Offset 171: tz_offset (ZephCore extension, signed whole hours).
+	 * Absent in pre-existing files → stays 0 = UTC, which is exactly what
+	 * every already-deployed node displays today.  Range is re-checked by
+	 * sanitizeNodePrefs() below. */
+	if (off < len) {
+		prefs.tz_offset = (int8_t)buf[off++];
+	}
+
 	sanitizeNodePrefs(&prefs);
 }
 
@@ -952,7 +960,10 @@ void ZephyrDataStore::savePrefs(const NodePrefs &prefs)
 	/* Offset 170: cad_base (ZephCore extension, family base detPeak the
 	 * cad_offset above was learned against) */
 	buf[off++] = prefs.cad_base;
-	/* Total: 171 bytes */
+	/* Offset 171: tz_offset (ZephCore extension, signed whole hours from UTC,
+	 * display only — the stored clock is always UTC) */
+	buf[off++] = (uint8_t)prefs.tz_offset;
+	/* Total: 172 bytes */
 
 	bool ok = atomicReplaceFile(PREFS_FILE, buf, off);
 	LOG_DBG("savePrefs: wrote %s, ok=%d (%d bytes), name='%.16s'",

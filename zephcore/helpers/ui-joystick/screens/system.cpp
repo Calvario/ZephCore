@@ -328,11 +328,31 @@ int SystemTimeScreen::render(JoystickDisplay &display)
 	display.setTextSize(1);
 	display.setColor(JoystickDisplay::GREEN);
 
-	char timeText[16], dateText[16];
-	formatUnixDateTime(_rtc->getCurrentTime(), timeText, sizeof(timeText), dateText, sizeof(dateText));
+	/* The RTC is UTC; the offset is applied here, at format time only.  It
+	 * must never reach the clock itself -- see NodePrefs::tz_offset. */
+	NodePrefs *prefs = _task->getPrefs();
+	int8_t tz = prefs ? prefs->tz_offset : 0;
+	uint32_t epoch = _rtc->getCurrentTime();
+
+	/* Before a sync getCurrentTime() returns bare uptime, and a negative
+	 * offset would underflow it into a garbage far-future date.  Same
+	 * "time is set" threshold (2025-01-01) the other UI uses. */
+	if (epoch > 1735689600) {
+		epoch += (int32_t)tz * 3600;
+	} else {
+		tz = 0;
+	}
+
+	char timeText[16], dateText[16], tzText[8];
+	formatUnixDateTime(epoch, timeText, sizeof(timeText), dateText, sizeof(dateText));
+	if (tz == 0) {
+		strcpy(tzText, "UTC");
+	} else {
+		snprintf(tzText, sizeof(tzText), "UTC%+d", (int)tz);
+	}
 
 	const char *labels[4] = { "Time:", "Date:", "TZ:", "Source:" };
-	const char *values[4] = { timeText, dateText, "UTC",
+	const char *values[4] = { timeText, dateText, tzText,
 							   time_sync_display_label() };
 	int y = kContentY + 2;
 	for (int i = 0; i < 4; i++) {

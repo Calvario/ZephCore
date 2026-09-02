@@ -56,6 +56,11 @@
  * ConfigureSideDetectors limit of 3. */
 #define EXTRA_SF_MAX    3
 
+/* Display timezone offset range, whole hours from UTC.  Matches upstream
+ * MeshCore's `set tz.offset` so the same command works against both trees. */
+#define TZ_OFFSET_MIN   (-12)
+#define TZ_OFFSET_MAX   14
+
 struct NodePrefs {
 	/* ---- Common fields (both roles) ---- */
 	float airtime_factor;
@@ -135,6 +140,23 @@ struct NodePrefs {
 	 * be remounted without moving the stick. */
 	uint8_t display_rotate;         // 1 = panel rotated 180 degrees
 	uint8_t input_rotate;           // 1 = joystick up/down and left/right swapped
+
+	/* Whole-hour offset from UTC, -12..+14, applied ONLY when formatting a
+	 * clock for the local display.  It must never reach RTCClock or any
+	 * timestamp that leaves this node: a negative offset applied to the clock
+	 * itself reads as a backward jump to every timestamp consumer at once
+	 * (advert timestamps, the repeater ACL's monotonic sender_timestamp gate,
+	 * discovery_mod_timestamp, MeshTimeSync), and a backward clock is a silent
+	 * mesh-wide mute.  The CLI's `clock` / `time` commands stay UTC for the
+	 * same reason -- they round-trip with each other and apps parse them.
+	 *
+	 * Whole hours only, matching upstream's `set tz.offset` so an app that
+	 * speaks to both trees behaves the same.  Half-hour zones (India +5:30,
+	 * Newfoundland -3:30) therefore cannot be expressed.
+	 *
+	 * Common to both roles: a repeater with an OLED shows a clock too.  On a
+	 * headless repeater the field is simply inert. */
+	int8_t tz_offset;
 
 	/* The family base detPeak that cad_offset was learned against (0 = never
 	 * stored, i.e. a node upgrading from a build without this field).
@@ -282,6 +304,8 @@ static inline void sanitizeNodePrefs(NodePrefs* p) {
 	/* Neutral, not the boundary — a garbage offset is not a request to run
 	 * the CAD staircase at one end of its range. */
 	if (p->cad_offset < CAD_OFFSET_MIN || p->cad_offset > CAD_OFFSET_MAX) p->cad_offset = 0;
+	/* UTC, not a boundary zone, for a byte that carries no user intent. */
+	if (p->tz_offset < TZ_OFFSET_MIN || p->tz_offset > TZ_OFFSET_MAX) p->tz_offset = 0;
 	if (p->probe_interval != 0 && p->probe_interval < 10) p->probe_interval = 10;
 
 	/* 6-digit BLE passkey — anything else is rejected at pairing time and

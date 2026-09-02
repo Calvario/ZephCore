@@ -362,8 +362,11 @@ extern "C" void mesh_housekeeping_ui_refresh(void)
 	/* Battery is now refreshed lazily from ui_pages_render() with a 30 s
 	 * freshness guard — no periodic ADC fire here. */
 
-	/* Update top bar clock from RTC */
+	/* Update top bar clock from RTC.  The epoch pushed here is UTC; the
+	 * display offset is a separate push so nothing downstream is tempted to
+	 * bake a timezone into a timestamp (see NodePrefs::tz_offset). */
 	ui_set_clock(s_rtc_clock->getCurrentTime());
+	ui_set_tz(s_mesh->prefs.tz_offset);
 
 	ui_set_radio_params(
 		s_lora_radio->getActiveFrequencyHz(),

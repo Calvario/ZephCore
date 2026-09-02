@@ -43,7 +43,9 @@ struct ui_state {
 	char     node_name[24];    /* device node name for top bar */
 	uint16_t battery_mv;
 	uint8_t  battery_pct;
-	uint32_t rtc_epoch;        /* Unix epoch from RTC (0 = not set) */
+	uint32_t rtc_epoch;        /* Unix epoch from RTC, ALWAYS UTC (0 = not set) */
+	int8_t   tz_offset;        /* whole hours from UTC, applied at format time
+				    * only -- rtc_epoch itself is never shifted */
 
 	/* Messages page */
 	uint16_t msg_count;

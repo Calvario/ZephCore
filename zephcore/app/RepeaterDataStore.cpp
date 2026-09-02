@@ -283,6 +283,10 @@ bool RepeaterDataStore::loadPrefs(NodePrefs& prefs) {
      * alone — correct, since a node upgrading across a table change cannot
      * know which base its offset came from. */
     fs_read(&file, &prefs.cad_base, sizeof(prefs.cad_base));
+    /* Display timezone offset, offset 308.  Absent in <309-byte files; the
+     * no-op EOF read leaves 0 = UTC, which is what every already-deployed
+     * node shows today.  Range is re-checked by sanitizeNodePrefs(). */
+    fs_read(&file, &prefs.tz_offset, sizeof(prefs.tz_offset));
 
     fs_close(&file);
 
@@ -435,6 +439,9 @@ bool RepeaterDataStore::savePrefs(const NodePrefs& prefs) {
     fs_write(&file, &prefs.input_rotate, sizeof(prefs.input_rotate));
     /* Family base detPeak cad_offset was learned against (offset 307) */
     fs_write(&file, &prefs.cad_base, sizeof(prefs.cad_base));
+    /* Display timezone offset (offset 308) — signed whole hours from UTC,
+     * applied only when formatting the on-device clock */
+    fs_write(&file, &prefs.tz_offset, sizeof(prefs.tz_offset));
 
     ret = fs_sync(&file);
     fs_close(&file);

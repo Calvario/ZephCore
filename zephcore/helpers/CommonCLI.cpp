@@ -511,6 +511,8 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
 #endif
         } else if (memcmp(config, "input.rotate", 12) == 0) {
             snprintf(reply, CLI_REPLY_SIZE, "> %d", zephcore_input_is_flipped() ? 1 : 0);
+        } else if (memcmp(config, "tz.offset", 9) == 0) {
+            snprintf(reply, CLI_REPLY_SIZE, "> %d", (int)_prefs->tz_offset);
         } else if (memcmp(config, "gps diag", 8) == 0) {
             // What the last module-configuration attempt actually did.
             reply[0] = '>'; reply[1] = ' ';
@@ -1208,6 +1210,28 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                 snprintf(reply, CLI_REPLY_SIZE, "OK - input.rotate=%d", val);
             } else {
                 strcpy(reply, "Error: must be 0, 1, on, or off");
+            }
+        } else if (memcmp(config, "tz.offset ", 10) == 0) {
+            // Whole-hour offset from UTC for the ON-DEVICE CLOCK DISPLAY only.
+            // The RTC, `clock` and `time <epoch>` all stay UTC: they round-trip
+            // with each other, apps parse them, and a timezone that reached the
+            // clock would look like a backward jump to every timestamp consumer
+            // on the node (see NodePrefs::tz_offset).
+            //
+            // Whole hours, matching upstream MeshCore's command of the same
+            // name, so an app that speaks to both trees behaves identically.
+            // Half-hour zones (+5:30, -3:30) cannot be expressed.
+            long val;
+            if (!cliNum(&config[10], cliDefaults()->tz_offset, &val)) {
+                snprintf(reply, CLI_REPLY_SIZE, "Error: expected %d..%d or default",
+                         TZ_OFFSET_MIN, TZ_OFFSET_MAX);
+            } else if (val < TZ_OFFSET_MIN || val > TZ_OFFSET_MAX) {
+                snprintf(reply, CLI_REPLY_SIZE, "Error: offset range is %d..%d",
+                         TZ_OFFSET_MIN, TZ_OFFSET_MAX);
+            } else {
+                _prefs->tz_offset = (int8_t)val;
+                savePrefs();
+                snprintf(reply, CLI_REPLY_SIZE, "OK - tz.offset=%d", (int)val);
             }
         } else if (memcmp(config, "gps diag", 8) == 0) {
             // set gps diag <0|1|on|off> — arm module-configuration reporting.

@@ -1092,6 +1092,20 @@ void ui_set_clock(uint32_t epoch)
 	}
 }
 
+void ui_set_tz(int8_t hours)
+{
+	struct ui_state *s = get_state();
+
+	if (s->tz_offset == hours) {
+		return;
+	}
+	s->tz_offset = hours;
+
+	/* EPD only redraws on demand, so a timezone change would otherwise not
+	 * appear until something else forced a repaint. */
+	schedule_render();
+}
+
 void ui_add_recent(const char *name, int16_t rssi, uint32_t age_s)
 {
 	struct ui_state *s = get_state();

@@ -82,6 +82,11 @@ WEAK void ui_set_clock(uint32_t epoch)
 	ARG_UNUSED(epoch);
 }
 
+WEAK void ui_set_tz(int8_t hours)
+{
+	ARG_UNUSED(hours);
+}
+
 WEAK void ui_add_recent(const char *name, int16_t rssi, uint32_t age_s)
 {
 	ARG_UNUSED(name); ARG_UNUSED(rssi); ARG_UNUSED(age_s);
