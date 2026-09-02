@@ -180,8 +180,26 @@ now means zero, and a genuinely absent setting still arrives as 0.2.
 
 ## Also in this release
 
-Nothing here changes how a node behaves.
-
+- **ESP32-S3 companions now connect over USB.** Heltec V4 and V43, Wireless Tracker v2, XIAO S3,
+  Station G2 and T3-S3 speak the companion protocol over their native USB port by default. Repeater,
+  room server, observer and debug builds keep that port as a console. One catch: esptool's automatic
+  reset into download mode no longer works on those boards — use `start dfu`, a 1200-baud touch, or
+  the BOOT button.
+- **The clock can follow your timezone.** `set tz.offset <-12..14>` shifts the on-device clock by whole
+  hours and the screen names the zone it is showing (`UTC+2`). Works on companions and repeaters with a
+  display. Display only, by design: the node's own clock, the `clock` and `time` commands and everything
+  on the air stay UTC, so timestamps and your app are unaffected.
+- **Telemetry read 0 mA on any discharging node.** Voltage and current are signed in CayenneLPP and we
+  encoded them unsigned, so a negative reading saturated to zero. Boards with a bidirectional power
+  monitor now report discharge properly.
+- **`region load` could strand the console.** Only a blank line ended it, and the USB reader discards
+  blank lines — so the repeater CLI was stuck until a reboot. Any unindented command now aborts the
+  load and then runs.
+- **New board: Meshnology W12.** It ships at 5 dBm with a 13 dBm ceiling: bench measurements on the
+  finished board put the saturation point of its 1 W front end well above the 4 dBm the port was
+  originally built around, so the earlier figure would have left it several dB down.
+- **`get cad.auto`, `get cad.offset` and `get cad.busycap`** can be read on their own, instead of only
+  inside `get cad.stats`.
 - **A wasted erase on the companion.** Running `erase` from the companion's USB console formatted the
   storage, then formatted it again on the reboot that followed, because the marker saying "this node
   has been set up" went out with everything else. Both paths behave the same way now.
