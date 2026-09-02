@@ -537,9 +537,31 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
             if (_callbacks->formatCadStatus(reply + n, (int)cap - n) == 0) {
                 strcpy(reply, "not available");
             }
-        } else if (memcmp(config, "cad", 3) == 0) {
+        } else if (memcmp(config, "cad.auto", 8) == 0) {
+            snprintf(reply, CLI_REPLY_SIZE, "> %s",
+                     _prefs->cad_auto ? "on" : "off");
+        } else if (memcmp(config, "cad.offset", 10) == 0) {
+            snprintf(reply, CLI_REPLY_SIZE, "> %d", (int)_prefs->cad_offset);
+        } else if (memcmp(config, "cad.busycap", 11) == 0) {
+            if (_prefs->cad_busycap == 0) {
+                strcpy(reply, "> 0 (off)");
+            } else {
+                snprintf(reply, CLI_REPLY_SIZE, "> %u",
+                         (unsigned)_prefs->cad_busycap);
+            }
+        } else if (strcmp(config, "cad") == 0) {
             /* Arduino exposes this as a boolean knob; ZephCore always does CAD,
-             * so the answer is a constant "on".  Apps parse the word. */
+             * so the answer is a constant "on".  Apps parse the word.
+             *
+             * EXACT match, not the 3-byte prefix this used to be.  Every branch
+             * in this chain is a memcmp prefix test, so "cad" matched every
+             * `get cad.*` that had no branch of its own and answered "on" for
+             * all of them -- a percentage, a signed offset and an action all
+             * came back as a boolean.  cad.stats escaped only by being ordered
+             * above it, which is a fragile way to stay correct.  Anchoring this
+             * one fixes the whole family at once: anything under cad. without a
+             * getter now falls through to the honest "??:" reply instead of
+             * being answered wrongly. */
             strcpy(reply, "> on");
         } else if (memcmp(config, "extra.sf", 8) == 0) {
             /* No "> " prefix, and the empty case is a sentence -- both match
