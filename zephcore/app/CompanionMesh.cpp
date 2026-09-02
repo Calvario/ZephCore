@@ -1717,16 +1717,18 @@ int CompanionMesh::appendSelfTelemetry(uint8_t *reply, uint8_t permissions)
 				uint8_t ch = CH_SELF + 1;
 				for (int j = 0; j < pwr.num_channels; j++) {
 					if (pwr.channels[j].valid) {
-						// Voltage: [ch][LPP_VOLTAGE=116][2-byte 0.01V]
+						// Voltage: [ch][LPP_VOLTAGE=116][2-byte 0.01V signed]
 						reply[i++] = ch;
 						reply[i++] = 116;
-						uint16_t v = (uint16_t)(pwr.channels[j].voltage_v * 100);
+						int16_t v = (int16_t)(pwr.channels[j].voltage_v * 100);
 						reply[i++] = (v >> 8) & 0xFF;
 						reply[i++] = v & 0xFF;
-						// Current: [ch][LPP_CURRENT=117][2-byte 0.001A]
+						// Current: [ch][LPP_CURRENT=117][2-byte 0.001A signed]
+						// Signed: a bidirectional monitor (INA219) reports discharge
+						// as negative, and an unsigned cast saturates it to 0.
 						reply[i++] = ch;
 						reply[i++] = 117;
-						uint16_t c = (uint16_t)(pwr.channels[j].current_a * 1000);
+						int16_t c = (int16_t)(pwr.channels[j].current_a * 1000);
 						reply[i++] = (c >> 8) & 0xFF;
 						reply[i++] = c & 0xFF;
 						// Power: [ch][LPP_POWER=128][2-byte 1W]

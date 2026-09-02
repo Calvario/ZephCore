@@ -22,8 +22,8 @@
 #define LPP_TEMPERATURE         103   /* 2 bytes, 0.1°C signed */
 #define LPP_RELATIVE_HUMIDITY   104   /* 1 byte, 0.5% unsigned */
 #define LPP_BAROMETRIC_PRESSURE 115   /* 2 bytes, 0.1 hPa unsigned */
-#define LPP_VOLTAGE             116   /* 2 bytes, 0.01V unsigned */
-#define LPP_CURRENT             117   /* 2 bytes, 0.001A unsigned */
+#define LPP_VOLTAGE             116   /* 2 bytes, 0.01V signed */
+#define LPP_CURRENT             117   /* 2 bytes, 0.001A signed */
 #define LPP_ALTITUDE            121   /* 2 bytes, 1m signed */
 #define LPP_POWER               128   /* 2 bytes, 1W unsigned */
 #define LPP_DISTANCE            130   /* 4 bytes, 0.001m unsigned */
@@ -131,19 +131,26 @@ public:
      * @return Number of bytes written, or 0 on overflow
      */
     uint8_t addVoltage(uint8_t channel, float volts) {
-        uint16_t val = (uint16_t)(volts * LPP_VOLTAGE_MULT);
-        return addField2Unsigned(channel, LPP_VOLTAGE, val);
+        int16_t val = (int16_t)(volts * LPP_VOLTAGE_MULT);
+        return addField2Signed(channel, LPP_VOLTAGE, val);
     }
 
     /**
      * Add current reading
+     *
+     * Type 117 is signed in CayenneLPP (and in Arduino MeshCore, which uses
+     * the reference encoder), so a bidirectional monitor like the INA219 can
+     * report discharge as a negative value. Casting a negative float to an
+     * unsigned type is UB and saturates to 0 on the FPU, which silently
+     * reported 0 mA on every discharging node.
+     *
      * @param channel Channel number
-     * @param amps Current in amperes
+     * @param amps Current in amperes (negative = reverse flow)
      * @return Number of bytes written, or 0 on overflow
      */
     uint8_t addCurrent(uint8_t channel, float amps) {
-        uint16_t val = (uint16_t)(amps * LPP_CURRENT_MULT);
-        return addField2Unsigned(channel, LPP_CURRENT, val);
+        int16_t val = (int16_t)(amps * LPP_CURRENT_MULT);
+        return addField2Signed(channel, LPP_CURRENT, val);
     }
 
     /**
