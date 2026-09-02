@@ -147,6 +147,30 @@ int LR2021Radio::hwCadProbe(int8_t level)
 	return lr20xx_cad_probe(_dev, level);
 }
 
+/* Re-enables adaptive CAD on this family.  It was excluded in Batch B
+ * (plan B-D2) because the chip's CAD_RX exit uses cad_timeout, 24 bits of
+ * 32 MHz periods = 524 ms, against 1704 ms of max-length airtime -- a
+ * CAD_RX there would truncate receptions.  The driver no longer uses that
+ * exit: a probe runs CAD_ONLY and the DIO1 handler arms the follow-on Rx
+ * with a normal SetRx, whose timeout is 24 bits of RTC steps = 512 s.  The
+ * ceiling that justified the exclusion does not exist on that path, and the
+ * same construction is what fixed the SX126x and LR11xx after both of their
+ * chip CAD_RX exits were measured misbehaving on hardware.
+ *
+ * NOT hardware-verified: no LR2021 was available when this was written.
+ * Verify on a MeshTracker X1 with the same test the LR11xx fix used --
+ * reception count while probing (must stay ~100%) and tp becoming
+ * non-zero -- before trusting it in the field. */
+int LR2021Radio::hwCadRxOutcome()
+{
+	return lr20xx_cad_rx_outcome(_dev);
+}
+
+uint32_t LR2021Radio::hwCadRxTimeoutMs()
+{
+	return lr20xx_cad_rx_timeout_ms(_dev);
+}
+
 void LR2021Radio::hwCadSetPeakOffset(int8_t offset)
 {
 	lr20xx_cad_set_peak_offset(_dev, offset);

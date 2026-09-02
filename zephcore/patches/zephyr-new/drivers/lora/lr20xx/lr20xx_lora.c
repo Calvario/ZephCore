@@ -139,6 +139,16 @@ struct lr20xx_data {
 	 * every LBT CAD; cad_probe_peak overrides for one calibration probe. */
 	int8_t cad_peak_offset;
 	uint8_t cad_probe_peak;
+	/* Adaptive-CAD probe ground truth.  The chip's own CAD_RX exit is NOT
+	 * used (its cad_timeout is 24 bits of 32 MHz periods = 524 ms, well
+	 * under a 1704 ms max-length packet).  Instead a probe runs CAD_ONLY
+	 * and this driver arms the follow-on Rx itself with a normal SetRx,
+	 * whose timeout is 24 bits of RTC steps = 512 s -- so the ceiling that
+	 * once excluded this family from probing does not apply.  Same remedy
+	 * as the SX126x and LR11xx, both of which had their chip CAD_RX exits
+	 * fail differently on hardware. */
+	bool cad_probe_rx;
+	atomic_t cad_rx_state;
 
 	/* CAD_DONE -> carrier-up latency (k_cycle_get_32 units); 0 = no CAD
 	 * preceded this transmit.  Only reached on the >524 ms fallback path. */
@@ -1635,6 +1645,25 @@ static void lr20xx_track_freq_offset(struct lr20xx_data *data, int32_t off_hz)
 
 static void lr20xx_dio1_callback(void *user_data);
 
+/* RTC tick backing SetRx timeouts; the field is 24 bits, so the ceiling is
+ * 16777215/32768 = 512 s -- three orders above any packet we send. */
+#define LR20XX_RTC_FREQ_HZ                  32768U
+
+/* cad_rx_state values -- mirrors the SX126x/LR11xx probe outcome tracker. */
+#define LR20XX_CAD_RX_IDLE   0
+#define LR20XX_CAD_RX_ARMED  1
+#define LR20XX_CAD_RX_PACKET 2
+#define LR20XX_CAD_RX_TMOUT  3
+
+static uint32_t lr20xx_max_payload_ms(struct lr20xx_data *data);
+
+/* Resolve an in-flight probe Rx with the terminal event that just arrived.
+ * No-op unless one is armed, so the packet path pays one atomic compare. */
+static inline bool lr20xx_cad_rx_resolve(struct lr20xx_data *data, int outcome)
+{
+	return atomic_cas(&data->cad_rx_state, LR20XX_CAD_RX_ARMED, outcome);
+}
+
 static void lr20xx_dio1_work_handler(struct k_work *work)
 {
 	struct lr20xx_data *data = CONTAINER_OF(work, struct lr20xx_data,
@@ -1692,6 +1721,13 @@ static void lr20xx_dio1_work_handler(struct k_work *work)
 	 * in the same handler window is dropped too — the aborted packet
 	 * may have left bytes in the RX FIFO, misaligning the read.  The
 	 * error branch below owns the window instead. */
+	/* Ground truth for a probe Rx: anything proving a transmitter was
+	 * there.  A CRC or header error counts as much as a clean packet. */
+	if (irq & (LR20XX_SYSTEM_IRQ_RX_DONE | LR20XX_SYSTEM_IRQ_CRC_ERROR |
+		   LR20XX_SYSTEM_IRQ_LORA_HEADER_ERROR)) {
+		lr20xx_cad_rx_resolve(data, LR20XX_CAD_RX_PACKET);
+	}
+
 	if ((irq & LR20XX_SYSTEM_IRQ_RX_DONE) &&
 	    !(irq & (LR20XX_SYSTEM_IRQ_CRC_ERROR |
 		     LR20XX_SYSTEM_IRQ_LORA_HEADER_ERROR))) {
@@ -1771,6 +1807,25 @@ static void lr20xx_dio1_work_handler(struct k_work *work)
 
 		LOG_DBG("CAD done: %s", detected ? "activity" : "free");
 
+		if (data->cad_probe_rx && detected) {
+			/* CAD_ONLY has returned the chip to STDBY_RC.  Arm the
+			 * follow-on Rx with the same call the normal receive path
+			 * uses, bounded by max-length-packet airtime, so whichever
+			 * terminal IRQ follows (RX_DONE / CRC_ERROR / HEADER_ERROR /
+			 * TIMEOUT) is the probe's ground truth.  RTC steps, not the
+			 * 524 ms cad_timeout field. */
+			uint32_t steps = (uint32_t)(((uint64_t)lr20xx_max_payload_ms(data)
+						     * LR20XX_RTC_FREQ_HZ) / 1000U);
+
+			if (steps > 0x00FFFFFFU) {
+				steps = 0x00FFFFFFU;
+			}
+			atomic_set(&data->cad_rx_state, LR20XX_CAD_RX_ARMED);
+			lr20xx_radio_common_set_rx_with_timeout_in_rtc_step(ctx, steps);
+			data->in_rx_mode = true;
+			rx_restarted = true;
+		}
+
 		if (data->cad_cb) {
 			lora_cad_cb cb = data->cad_cb;
 			void *ud = data->cad_user_data;
@@ -1802,6 +1857,9 @@ static void lr20xx_dio1_work_handler(struct k_work *work)
 
 	/* ── Timeout ── */
 	if (irq & LR20XX_SYSTEM_IRQ_TIMEOUT) {
+		/* The probe's own Rx window expiring with nothing decoded: the
+		 * detection had no packet behind it. */
+		lr20xx_cad_rx_resolve(data, LR20XX_CAD_RX_TMOUT);
 		if (data->tx_active) {
 			/* The chip's Tx safeguard fired.  DS §6.3.6: "the
 			 * transmission is stopped prematurely" — the packet is
@@ -2092,7 +2150,6 @@ static uint32_t lr20xx_cad_timeout_ms(struct lr20xx_data *data)
  * 32.768kHz RTC"), not the 32 MHz periods cad_timeout uses above — the two sit
  * three lines apart here precisely so nobody reaches for the wrong one.  Both
  * fields are 24 bits, so the RTC one tops out at 16777215/32768 = 512 s. */
-#define LR20XX_RTC_FREQ_HZ                  32768U
 #define LR20XX_RTC_STEP_MAX                 0x00FFFFFFU
 /* Never shorten the Tx safeguard below what shipped before it was scaled. */
 #define LR20XX_TX_TIMEOUT_FLOOR_MS          5000U
@@ -3293,10 +3350,42 @@ int lr20xx_cad_probe(const struct device *dev, int8_t peak_offset)
 	/* One-shot absolute override consumed by lr20xx_do_cad().  Probes and
 	 * LBT both run on the mesh loop thread, so no concurrent CAD exists. */
 	data->cad_probe_peak = (uint8_t)peak;
+	data->cad_probe_rx = true;
+	atomic_set(&data->cad_rx_state, LR20XX_CAD_RX_IDLE);
 	ret = lr20xx_lora_cad(dev, K_MSEC(lr20xx_cad_timeout_ms(data)));
+	data->cad_probe_rx = false;
 	data->cad_probe_peak = 0;
 
+	/* 2 tells the caller the chip is in Rx on the signal CAD found, so it
+	 * must NOT re-enter Rx itself, and that an outcome will be readable
+	 * from lr20xx_cad_rx_outcome() once a terminal IRQ lands. */
+	if (ret > 0) {
+		return 2;
+	}
+
 	return ret;
+}
+
+uint32_t lr20xx_cad_rx_timeout_ms(const struct device *dev)
+{
+	struct lr20xx_data *data = dev->data;
+
+	/* Same bound do_cad's follow-on SetRx programs, so the caller's wait
+	 * and the chip's deadline cannot drift apart. */
+	return lr20xx_max_payload_ms(data);
+}
+
+int lr20xx_cad_rx_outcome(const struct device *dev)
+{
+	struct lr20xx_data *data = dev->data;
+	atomic_val_t st = atomic_get(&data->cad_rx_state);
+
+	if (st != LR20XX_CAD_RX_PACKET && st != LR20XX_CAD_RX_TMOUT) {
+		return 0;  /* nothing armed, or still awaiting the terminal IRQ */
+	}
+
+	atomic_set(&data->cad_rx_state, LR20XX_CAD_RX_IDLE);
+	return (st == LR20XX_CAD_RX_PACKET) ? 1 : 2;
 }
 
 /* ── Driver API: recv_duty_cycle ────────────────────────────────────── */

@@ -4,7 +4,8 @@ Storage housekeeping, plus a listen-before-talk fix. The repeater's `erase` neve
 a node flashed from another firmware could start out with somebody else's leftovers underneath it,
 and switching a node between companion and repeater firmware quietly let the two share the same
 128 KB. Separately, the channel-activity detector was using the wrong reference table on LR1110
-boards, and the companion's built-in `v` contact carried an unusable key on about half of all nodes.
+boards, the companion's built-in `v` contact carried an unusable key on about half of all nodes, and
+a node that decided the channel was busy could stop transmitting and never start again.
 
 > [!IMPORTANT]
 > **Read the role-switching section before you flash a different role onto an existing node.** A
@@ -103,6 +104,11 @@ limits are, so a node can no longer sit against a wall it cannot see.
 Affected boards: **T1000-E**, **ThinkNode M3** and **ThinkNode M9**. On SX1262 boards nothing changes
 unless you run a 250 or 500 kHz bandwidth, where the old value was up to ten counts too sensitive.
 
+How the tuner judges each measurement has changed too. It used to poll the radio a few times after a
+detection and infer whether anything had really been there; now the radio stays listening and reports
+whether a packet actually followed, so each reading is an observation rather than a guess. Nothing to
+configure — it just means the figures behind `get cad.stats` describe what they claim to.
+
 > [!NOTE]
 > **Run `set cad.reset` after upgrading.** The tuning statistics your node collected are measured
 > against the old starting point and are not comparable to the new one. Clearing them lets the tuner
@@ -117,6 +123,28 @@ unless you run a 250 or 500 kHz bandwidth, where the old value was up to ten cou
 > This is a first release of the corrected tables. They are verified against Semtech's reference and
 > against on-air measurements from three nodes, but not yet across a season or a busy site. If a node
 > starts deferring noticeably more or less than it used to, `get cad.stats` shows what it is measuring.
+
+---
+
+## A node that believed the channel was busy could stop transmitting for good
+
+Before each transmission a node listens, and defers if it hears anything. If that kept happening it
+was supposed to give up after four seconds and send anyway — a safeguard for a radio stuck reporting
+activity that is not there. A refactor turned that into "wait, then try again", and the give-up was
+lost.
+
+A node in that state refuses every transmission indefinitely, queues what it cannot send, and
+eventually starts discarding packets — all while looking perfectly idle, because the refusals were
+logged at a level nobody runs. Reproduced on the bench: a node in that state sent **nothing at all in
+twenty seconds**, then flushed thirty queued messages the moment the cause was removed.
+
+The four-second safeguard is back, and a refused transmission is now reported in the log instead of
+being invisible.
+
+> [!NOTE]
+> **Only the "the radio may be stuck" case forces a transmission.** If the listen genuinely reports a
+> busy channel the node still waits — transmitting over traffic it can hear would cause exactly the
+> collision the check exists to avoid.
 
 ---
 

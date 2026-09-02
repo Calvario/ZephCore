@@ -421,18 +421,25 @@ void Dispatcher::checkSend()
 				_radio->getNoiseFloor(),
 				(unsigned)_radio->getPacketsRecv(),
 				(unsigned)_radio->getPacketsRecvErrors());
-			/* With the non-destructive sx126x_is_receiving() we lost
-			 * the accidental side-effect IRQ clear that used to break
-			 * us out of stuck preamble bits.  Walk the chip back
-			 * through REST → fresh RX, which bulk-clears IRQ status
-			 * and resets the rx_packet_active latch.  Then re-wake the
-			 * loop promptly so the next checkSend() retries TX. */
+			/* Channel activity has gone on too long -- the radio may be
+			 * in a bad state.  FORCE the pending transmit by falling
+			 * through, exactly as Arduino MeshCore does
+			 * (Dispatcher.cpp: "force the pending transmit below...").
+			 *
+			 * This bounded give-up was ZephCore's behaviour too until
+			 * 3441caf "new rx busy latch" added a `return` here, turning a
+			 * 4 s hard limit into an unbounded defer: on a channel that
+			 * reads busy forever the node never transmits again, silently
+			 * filling the 32-entry outbound queue until queueOutbound()
+			 * starts evicting and dropping.
+			 *
+			 * recoverRxState() is kept and runs first: the non-destructive
+			 * sx126x_is_receiving() has no side-effect IRQ clear, so a stuck
+			 * preamble bit needs the chip walked REST -> fresh RX.  Doing it
+			 * before the forced TX leaves the receiver healthy afterwards;
+			 * send_async accepts the RX -> TX entry CAS. */
 			_radio->recoverRxState();
-			cad_busy_start = 0;
-			if (_tx_queued_cb) {
-				_tx_queued_cb(1, _tx_queued_user_data);
-			}
-			return;
+			/* fall through -- force the pending transmit */
 		} else {
 			uint32_t retry = getCADFailRetryDelay();
 			next_tx_time = futureMillis((int)retry);
@@ -516,12 +523,23 @@ void Dispatcher::checkSend()
 			bool success = _radio->startSendRaw(raw, len);
 			if (!success) {
 				uint32_t retry = getCADFailRetryDelay();
-				/* Almost always LBT refusing a busy channel, which
-				 * is the designed outcome — the packet is
-				 * re-queued below and retried. At ERR this fires
-				 * continuously on a busy site and buries real
-				 * faults. */
-				LOG_DBG("checkSend: startSendRaw refused, re-queuing delay=%u", retry);
+				/* Almost always LBT refusing a busy channel, which is the
+				 * designed outcome — the packet is re-queued below and
+				 * retried, and we deliberately do NOT force a transmit
+				 * here: unlike the isReceiving() gate above, where a long
+				 * refusal suggests a stuck radio, a busy LBT verdict is a
+				 * TRUE reading of the channel.  Forcing through it would
+				 * transmit into traffic the radio can hear — exactly the
+				 * collision CAD exists to prevent, at the moment the
+				 * channel is most contended.
+				 *
+				 * INF, not DBG: this used to be ERR, which buried real
+				 * faults on a busy site, and was then dropped to DBG —
+				 * which made a node refusing every transmit completely
+				 * invisible at default log level.  A node that is not
+				 * transmitting should say so; INF reports the refusals
+				 * themselves rather than inferring a stall from them. */
+				LOG_INF("checkSend: startSendRaw refused (LBT busy), re-queuing delay=%u", retry);
 
 				/* Escalate a refusal that will not end.  This branch
 				 * used to leave cad_busy_start alone, so a packet the

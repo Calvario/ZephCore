@@ -245,6 +245,8 @@ uint8_t lr20xx_cad_peak_max(void);
  * @return 1 = activity detected, 0 = channel free, <0 = error
  */
 int lr20xx_cad_probe(const struct device *dev, int8_t peak_offset);
+uint32_t lr20xx_cad_rx_timeout_ms(const struct device *dev);
+int lr20xx_cad_rx_outcome(const struct device *dev);
 
 #ifdef __cplusplus
 }

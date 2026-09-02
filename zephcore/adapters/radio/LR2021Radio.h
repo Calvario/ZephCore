@@ -48,6 +48,8 @@ protected:
 	bool hwIsReceiving() override;
 	void hwSetRxBoost(bool enable) override;
 	int hwCadProbe(int8_t level) override;
+	int hwCadRxOutcome() override;
+	uint32_t hwCadRxTimeoutMs() override;
 	void hwCadSetPeakOffset(int8_t offset) override;
 	uint8_t hwCadBasePeak() override;
 	uint8_t hwCadPeakMin() override;

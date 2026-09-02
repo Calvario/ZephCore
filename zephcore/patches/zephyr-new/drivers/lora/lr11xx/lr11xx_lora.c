@@ -649,6 +649,8 @@ static int lr11xx_restart_rx(struct lr11xx_data *data, bool in_standby)
 
 static void lr11xx_dio1_callback(void *user_data);
 
+static uint32_t lr11xx_cad_rx_timeout_steps(struct lr11xx_data *data);
+
 static void lr11xx_dio1_work_handler(struct k_work *work)
 {
 	struct lr11xx_data *data = CONTAINER_OF(work, struct lr11xx_data,
@@ -811,6 +813,17 @@ static void lr11xx_dio1_work_handler(struct k_work *work)
 		 * discarded.  Same meaning as the foreign-header-error branch
 		 * below -- reception continues, nothing needs restarting. */
 		if (data->cad_exit_rx && detected) {
+			/* CAD_ONLY has returned the chip to STBY_RC, so arm the
+			 * follow-on Rx explicitly.  This is the same call the
+			 * normal receive path uses (see lr11xx_start_rx), so the
+			 * receiver is configured exactly as it is when the node is
+			 * receiving normally -- which the chip's own CAD_RX exit
+			 * evidently is not.  Bounded by the same max-payload
+			 * figure cadTimeout used, so a real packet still completes
+			 * inside the window and the terminal IRQ (RX_DONE /
+			 * CRC_ERROR / HEADER_ERROR / TIMEOUT) stays guaranteed. */
+			lr11xx_radio_set_rx_with_timeout_in_rtc_step(
+				ctx, lr11xx_cad_rx_timeout_steps(data));
 			data->in_rx_mode = true;
 			atomic_set(&data->cad_rx_state, LR11XX_CAD_RX_ARMED);
 			rx_restarted = true;
@@ -2204,12 +2217,24 @@ static int lr11xx_do_cad(struct lr11xx_data *data)
 		 * bound: anything shorter would cut off the packet the detection
 		 * was for.  See lr11xx_cad_rx_timeout_steps() for why the
 		 * vendor's millisecond wrapper is not used to convert it. */
-		.cad_exit_mode = data->cad_exit_rx
-					 ? LR11XX_RADIO_CAD_EXIT_MODE_RX
-					 : LR11XX_RADIO_CAD_EXIT_MODE_STANDBYRC,
-		.cad_timeout = data->cad_exit_rx
-			? lr11xx_cad_rx_timeout_steps(data)
-			: 0,
+		/* Always CAD_ONLY on the wire.  A CAD_RX exit leaves this chip
+		 * in CHIP_MODE_RX but DEAF: measured 2026-09-02, twelve armed
+		 * windows produced no RX_DONE, SYNC_WORD_HEADER_VALID,
+		 * CRC_ERROR or HEADER_ERROR (all four routed to DIO1) while a
+		 * packet arrived every 9 s and ~3 were expected inside them --
+		 * only the chip's own cadTimeout ever came back.  A controlled
+		 * A/B put the cost at 14%% of received packets with probing on
+		 * versus 0%% with it off, which C1 forbids outright, and it is
+		 * also why `tp` could never be recorded on this family.
+		 *
+		 * So do not use the chip's CAD_RX exit.  Take the documented
+		 * STANDBYRC exit and arm the follow-on Rx ourselves with a
+		 * plain SetRx in the DIO1 handler -- the same call the normal
+		 * receive path uses, which demonstrably works (120/120 in that
+		 * control).  Same remedy as the SX126x, where the chip's
+		 * cadTimeout was likewise not honoured. */
+		.cad_exit_mode = LR11XX_RADIO_CAD_EXIT_MODE_STANDBYRC,
+		.cad_timeout = 0,
 	};
 
 	lr11xx_radio_set_cad_params(ctx, &cad);
