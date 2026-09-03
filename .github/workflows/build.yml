@@ -4,6 +4,24 @@ on:
   push:
     branches: [ "master" ]
 
+# A release run deletes and re-creates a tag, then force-pushes the
+# firmware-dist branch. Two overlapping runs would race on both, and the loser
+# could leave firmware-dist pointing at a half-published set.
+#
+# Queue rather than cancel: `create-release` deletes the existing release before
+# creating the replacement, so cancelling a run mid-flight can leave the repo
+# with no release at all for that version.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+# Default for jobs that do not declare their own. create-release and
+# publish-catalog override this with contents: write. Same-run artifact
+# upload/download uses the Actions runtime token, not GITHUB_TOKEN, so it needs
+# no scope here.
+permissions:
+  contents: read
+
 env:
   zephyr_sdk: 1.0.1
   python_version: 3.12
@@ -30,6 +48,14 @@ env:
   prerelease: "false"
 
 jobs:
+  # Populates the west-modules cache once so the five build jobs do not each pay
+  # for a cold `west update` plus a blob download. Compiles nothing, which is why
+  # ccache is switched off here — otherwise the action would write an empty
+  # 512 MB cache entry every run for no benefit.
+  #
+  # This job is also the ONLY writer of the modules cache. The build jobs are
+  # restore-only, so a tree that a build has patched in place can never be saved
+  # back — the cached modules stay pristine-plus-blobs.
   setup-zephyr:
     runs-on: ubuntu-latest
 
@@ -40,7 +66,25 @@ jobs:
       with:
         python-version: '${{ env.python_version }}'
         cache: 'pip'
-    - run: pip install -r requirements.txt
+
+    # Keyed on the manifest, NOT on github.sha. zephcore/west.yml pins the Zephyr
+    # revision and Zephyr's own manifest is imported from it, so the manifest
+    # hash captures the full transitive module set. The old per-SHA key meant a
+    # fresh multi-GB entry on every push that was never read again, and that
+    # churn is a large part of what evicted everything else out of the repo's
+    # 10 GB cache budget.
+    #
+    # Deliberately no restore-keys: a near-miss would restore modules pinned to
+    # DIFFERENT revisions, and `west update` then has to move HEAD in a tree our
+    # patches may have dirtied. An exact hit or a clean fetch, nothing between.
+    #
+    # Restored BEFORE the Zephyr setup so a hit makes `west update` a no-op. The
+    # matching save runs as this job's post-step, i.e. after the blob fetches
+    # below, so the cached tree carries the blobs with it.
+    - uses: actions/cache@v5
+      with:
+        path: modules
+        key: zephyr-modules-${{ runner.os }}-${{ hashFiles('zephcore/west.yml') }}
 
     - name: Setup Zephyr project
       uses: zephyrproject-rtos/action-zephyr-setup@v1
@@ -48,22 +92,17 @@ jobs:
         app-path: zephcore
         toolchains: ${{ env.toolchains }}
         sdk-version: ${{ env.zephyr_sdk }}
+        enable-ccache: 'false'
 
-    - name: Cache Espressif BLE controller blobs
-      id: cache-espressif-blobs
-      uses: actions/cache@v5
-      with:
-        path: modules/hal/espressif
-        key: ${{ runner.os }}-espressif-blobs-${{ hashFiles('modules/hal/espressif/.git/HEAD') }}
-
-    - name: Download Espressif BLE controller blobs
-      if: steps.cache-espressif-blobs.outputs.cache-hit != 'true'
-      run: west blobs fetch hal_espressif
-
-    - uses: actions/cache@v5
-      with:
-        path: modules
-        key: cache-zephyr-modules-${{ github.sha }}
+    # Both vendor BLE controller blobs, fetched here so they ride along in the
+    # modules cache above. `west blobs fetch` compares each blob's sha256 and
+    # skips the ones already present (zephyr/scripts/west_commands/blobs.py), so
+    # this is a cheap no-op on a cache hit — no need for a second cache layer or
+    # a cache-hit conditional.
+    - name: Download vendor BLE controller blobs
+      run: |
+        west blobs fetch hal_espressif
+        west blobs fetch hal_silabs
 
   build-nrf:
     needs: setup-zephyr
@@ -78,36 +117,63 @@ jobs:
         cache: 'pip'
     - run: pip install -r requirements.txt
 
+    # Soft dependency: a miss here is self-healing, because `west update` in the
+    # next step just does the work itself. Contrast with the firmware handoff at
+    # the end of this job, which is NOT self-healing and therefore uses an
+    # artifact.
     - uses: actions/cache/restore@v5
       with:
         path: modules
-        key: cache-zephyr-modules-${{ github.sha }}
+        key: zephyr-modules-${{ runner.os }}-${{ hashFiles('zephcore/west.yml') }}
 
+    # ccache-cache-key is per-job. The action's default is the literal string
+    # "default" and its restore-keys is a bare `ccache-<key>-` prefix, so leaving
+    # it unset put all six jobs in one namespace: build-nrf would restore
+    # whatever build-esp32-companions saved last (arm objects vs xtensa objects —
+    # a near-zero hit rate), and each job's 512 MB save overwrote the previous
+    # one's useful content. The key also embeds a timestamp, so every job writes
+    # a NEW entry every run; six of those per push is up to ~3 GB against a 10 GB
+    # repo budget, which is what evicted the SDK, pip and module caches.
+    # Namespacing fixes both halves.
+    #
+    # Size knob if hit rates look poor: ccache-max-size (default 512MB).
+    # build-nrf compiles ~40 board/role combos and will churn inside that cap.
     - name: Setup Zephyr project
       uses: zephyrproject-rtos/action-zephyr-setup@v1
       with:
         app-path: zephcore
         toolchains: ${{ env.toolchains }}
         sdk-version: ${{ env.zephyr_sdk }}
-
-    - name: Cache Espressif BLE controller blobs
-      id: cache-espressif-blobs
-      uses: actions/cache@v5
-      with:
-        path: modules/hal/espressif
-        key: ${{ runner.os }}-espressif-blobs-${{ hashFiles('modules/hal/espressif/.git/HEAD') }}
-
-    - name: Download Espressif BLE controller blobs
-      if: steps.cache-espressif-blobs.outputs.cache-hit != 'true'
-      run: west blobs fetch hal_espressif
+        ccache-cache-key: ${{ github.job }}
 
     - name: build firmwares
       run: bash build.sh nrf
 
-    - uses: actions/cache@v5
+    # Hit rate is the entire point of the per-job ccache namespace above, but the
+    # action only prints stats at SETUP time — it runs `ccache -z -s -vv`, which
+    # reports the restored cache and then zeroes the counters. Without a stats
+    # call here the run ends with no record of whether ccache did anything at
+    # all. Read Hits/Misses to decide whether ccache-max-size needs raising.
+    - name: ccache stats
+      if: always()
+      run: ccache -s -vv
+
+    # Job-to-job handoff is an artifact, not a cache. actions/cache/restore
+    # defaults to fail-on-cache-miss: false, so an entry evicted between this job
+    # and create-release made the release publish a SILENTLY incomplete firmware
+    # set — and publish-catalog force-push a matching incomplete catalog.json to
+    # the live Mesh America configurator feed. Artifacts are scoped to the run,
+    # cannot be evicted mid-run, and if-no-files-found: error fails loudly.
+    - uses: actions/upload-artifact@v7
       with:
+        name: firmware-part-${{ github.job }}
         path: firmware
-        key: cache-firmware-nrf-${{ github.sha }}
+        if-no-files-found: error
+        # Consumed within this run; the merged set is re-uploaded by
+        # create-release and attached to the release itself.
+        retention-days: 1
+        # Lets a failed run be re-run without tripping "artifact already exists".
+        overwrite: true
 
   build-esp32-repeaters:
     needs: setup-zephyr
@@ -125,7 +191,7 @@ jobs:
     - uses: actions/cache/restore@v5
       with:
         path: modules
-        key: cache-zephyr-modules-${{ github.sha }}
+        key: zephyr-modules-${{ runner.os }}-${{ hashFiles('zephcore/west.yml') }}
 
     - name: Setup Zephyr project
       uses: zephyrproject-rtos/action-zephyr-setup@v1
@@ -133,25 +199,27 @@ jobs:
         app-path: zephcore
         toolchains: ${{ env.toolchains }}
         sdk-version: ${{ env.zephyr_sdk }}
+        ccache-cache-key: ${{ github.job }}
 
-    - name: Cache Espressif BLE controller blobs
-      id: cache-espressif-blobs
-      uses: actions/cache@v5
-      with:
-        path: modules/hal/espressif
-        key: ${{ runner.os }}-espressif-blobs-${{ hashFiles('modules/hal/espressif/.git/HEAD') }}
-
+    # No-op when the modules cache hit (the blobs came with it); the safety net
+    # for when it missed.
     - name: Download Espressif BLE controller blobs
-      if: steps.cache-espressif-blobs.outputs.cache-hit != 'true'
       run: west blobs fetch hal_espressif
 
     - name: build firmwares
       run: bash build.sh esp32 repeaters
 
-    - uses: actions/cache@v5
+    - name: ccache stats
+      if: always()
+      run: ccache -s -vv
+
+    - uses: actions/upload-artifact@v7
       with:
+        name: firmware-part-${{ github.job }}
         path: firmware
-        key: cache-firmware-esp32-repeaters-${{ github.sha }}
+        if-no-files-found: error
+        retention-days: 1
+        overwrite: true
 
   build-linux:
     needs: setup-zephyr
@@ -169,7 +237,7 @@ jobs:
     - uses: actions/cache/restore@v5
       with:
         path: modules
-        key: cache-zephyr-modules-${{ github.sha }}
+        key: zephyr-modules-${{ runner.os }}-${{ hashFiles('zephcore/west.yml') }}
 
     - name: Setup Zephyr project
       uses: zephyrproject-rtos/action-zephyr-setup@v1
@@ -177,6 +245,7 @@ jobs:
         app-path: zephcore
         toolchains: ${{ env.toolchains }}
         sdk-version: ${{ env.zephyr_sdk }}
+        ccache-cache-key: ${{ github.job }}
 
     # native_sim presets are cross-compiled for the target SBC architecture:
     # femtofox = ARMv7-A (32-bit), rak6421 / rak6421_pi5 = aarch64 (64-bit).
@@ -190,10 +259,17 @@ jobs:
     - name: build firmwares
       run: bash build.sh linux
 
-    - uses: actions/cache@v5
+    - name: ccache stats
+      if: always()
+      run: ccache -s -vv
+
+    - uses: actions/upload-artifact@v7
       with:
+        name: firmware-part-${{ github.job }}
         path: firmware
-        key: cache-firmware-linux-${{ github.sha }}
+        if-no-files-found: error
+        retention-days: 1
+        overwrite: true
 
   # SWD-only ARM platforms: nRF54L15, EFR32MG24 and STM32WL. None of these SoCs
   # has a USB device peripheral, so all three publish a bare zephyr.hex and are
@@ -216,7 +292,7 @@ jobs:
     - uses: actions/cache/restore@v5
       with:
         path: modules
-        key: cache-zephyr-modules-${{ github.sha }}
+        key: zephyr-modules-${{ runner.os }}-${{ hashFiles('zephcore/west.yml') }}
 
     - name: Setup Zephyr project
       uses: zephyrproject-rtos/action-zephyr-setup@v1
@@ -224,18 +300,11 @@ jobs:
         app-path: zephcore
         toolchains: ${{ env.toolchains }}
         sdk-version: ${{ env.zephyr_sdk }}
+        ccache-cache-key: ${{ github.job }}
 
     # MG24 only: the Silabs BLE controller is a binary blob, without which the
-    # xiao_mg24 companion cannot link. Cached the same way as the Espressif one.
-    - name: Cache Silicon Labs BLE controller blobs
-      id: cache-silabs-blobs
-      uses: actions/cache@v5
-      with:
-        path: modules/hal/silabs
-        key: ${{ runner.os }}-silabs-blobs-${{ hashFiles('modules/hal/silabs/.git/HEAD') }}
-
+    # xiao_mg24 companion cannot link. No-op when the modules cache hit.
     - name: Download Silicon Labs BLE controller blobs
-      if: steps.cache-silabs-blobs.outputs.cache-hit != 'true'
       run: west blobs fetch hal_silabs
 
     - name: build firmwares
@@ -244,10 +313,17 @@ jobs:
         bash build.sh mg24
         bash build.sh stm32wl
 
-    - uses: actions/cache@v5
+    - name: ccache stats
+      if: always()
+      run: ccache -s -vv
+
+    - uses: actions/upload-artifact@v7
       with:
+        name: firmware-part-${{ github.job }}
         path: firmware
-        key: cache-firmware-swd-${{ github.sha }}
+        if-no-files-found: error
+        retention-days: 1
+        overwrite: true
 
   build-esp32-companions:
     needs: setup-zephyr
@@ -265,7 +341,7 @@ jobs:
     - uses: actions/cache/restore@v5
       with:
         path: modules
-        key: cache-zephyr-modules-${{ github.sha }}
+        key: zephyr-modules-${{ runner.os }}-${{ hashFiles('zephcore/west.yml') }}
 
     - name: Setup Zephyr project
       uses: zephyrproject-rtos/action-zephyr-setup@v1
@@ -273,25 +349,25 @@ jobs:
         app-path: zephcore
         toolchains: ${{ env.toolchains }}
         sdk-version: ${{ env.zephyr_sdk }}
-
-    - name: Cache Espressif BLE controller blobs
-      id: cache-espressif-blobs
-      uses: actions/cache@v5
-      with:
-        path: modules/hal/espressif
-        key: ${{ runner.os }}-espressif-blobs-${{ hashFiles('modules/hal/espressif/.git/HEAD') }}
+        ccache-cache-key: ${{ github.job }}
 
     - name: Download Espressif BLE controller blobs
-      if: steps.cache-espressif-blobs.outputs.cache-hit != 'true'
       run: west blobs fetch hal_espressif
 
     - name: build firmwares
       run: bash build.sh esp32 companions
 
-    - uses: actions/cache@v5
+    - name: ccache stats
+      if: always()
+      run: ccache -s -vv
+
+    - uses: actions/upload-artifact@v7
       with:
+        name: firmware-part-${{ github.job }}
         path: firmware
-        key: cache-firmware-esp32-companions-${{ github.sha }}
+        if-no-files-found: error
+        retention-days: 1
+        overwrite: true
 
   create-release:
     needs: [build-nrf, build-esp32-companions, build-esp32-repeaters, build-linux,
@@ -331,36 +407,32 @@ jobs:
         echo "Release tag / catalog version: $version"
         echo "release_tag=$version" >> $GITHUB_OUTPUT
 
-    - uses: actions/cache/restore@v5
+    # Pull every build job's output back into a single firmware/ directory.
+    # merge-multiple flattens all five parts into that one path, which is what
+    # the release upload and gen_provider_catalog.py both expect.
+    - uses: actions/download-artifact@v7
       with:
+        pattern: firmware-part-*
+        merge-multiple: true
         path: firmware
-        key: cache-firmware-nrf-${{ github.sha }}
 
-    - uses: actions/cache/restore@v5
-      with:
-        path: firmware
-        key: cache-firmware-esp32-companions-${{ github.sha }}
-
-    - uses: actions/cache/restore@v5
-      with:
-        path: firmware
-        key: cache-firmware-esp32-repeaters-${{ github.sha }}
-
-    - uses: actions/cache/restore@v5
-      with:
-        path: firmware
-        key: cache-firmware-linux-${{ github.sha }}
-
-    - uses: actions/cache/restore@v5
-      with:
-        path: firmware
-        key: cache-firmware-swd-${{ github.sha }}
+    - name: verify firmware set arrived
+      run: |
+        count=$(find firmware -type f 2>/dev/null | wc -l)
+        echo "Collected $count firmware files"
+        if [ "$count" -eq 0 ]; then
+          echo "::error::No firmware files downloaded — the build artifacts did not arrive"
+          exit 1
+        fi
+        ls -la firmware
 
     - name: upload firmware artifacts
       uses: actions/upload-artifact@v7
       with:
         name: firmware-${{ steps.tag.outputs.release_tag }}
         path: firmware
+        if-no-files-found: error
+        overwrite: true
 
     # Publish releasenotes/RELEASE_NOTES_<version>.md as the release body. The
     # filename matches the firmware version string exactly (= the release tag), so
@@ -439,27 +511,24 @@ jobs:
       with:
         python-version: '${{ env.python_version }}'
 
-    # Pull every board's firmware back into a single firmware/ directory.
-    - uses: actions/cache/restore@v5
+    # Pull every board's firmware back into a single firmware/ directory. This
+    # branch is force-pushed, so an incomplete set here silently DELETES boards
+    # from the live configurator feed — which is exactly why this handoff must
+    # not be a cache that can be evicted between jobs.
+    - uses: actions/download-artifact@v7
       with:
+        pattern: firmware-part-*
+        merge-multiple: true
         path: firmware
-        key: cache-firmware-nrf-${{ github.sha }}
-    - uses: actions/cache/restore@v5
-      with:
-        path: firmware
-        key: cache-firmware-esp32-companions-${{ github.sha }}
-    - uses: actions/cache/restore@v5
-      with:
-        path: firmware
-        key: cache-firmware-esp32-repeaters-${{ github.sha }}
-    - uses: actions/cache/restore@v5
-      with:
-        path: firmware
-        key: cache-firmware-linux-${{ github.sha }}
-    - uses: actions/cache/restore@v5
-      with:
-        path: firmware
-        key: cache-firmware-swd-${{ github.sha }}
+
+    - name: verify firmware set arrived
+      run: |
+        count=$(find firmware -type f 2>/dev/null | wc -l)
+        echo "Collected $count firmware files"
+        if [ "$count" -eq 0 ]; then
+          echo "::error::No firmware files downloaded — refusing to force-push an empty firmware-dist"
+          exit 1
+        fi
 
     - name: generate provider catalog
       run: |
