@@ -383,6 +383,8 @@ int main(void)
 	{
 		bool leds_off = prefs->leds_disabled != 0;
 		zephcore_leds_set_disabled(leds_off);
+		zephcore_leds_set_radio_mode(prefs->leds_radio_mode);
+		zephcore_leds_set_hb_mode(prefs->leds_hb_mode);
 		LOG_INF("LEDs: %s (from prefs)", leds_off ? "disabled" : "enabled");
 	}
 

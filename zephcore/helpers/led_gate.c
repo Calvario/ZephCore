@@ -34,3 +34,43 @@ void zephcore_leds_set_disabled(bool disabled)
 	atomic_set(&s_leds_disabled, disabled ? 1 : 0);
 	zephcore_leds_ui_sync(disabled);
 }
+
+/*
+ * Both modes default to 0, which every LEDS_* enum defines as the behaviour the
+ * firmware had before these settings existed.  That matters beyond tidiness: a
+ * role whose boot path forgets to apply the pref, or a build with no CLI at
+ * all, still lands on the historical behaviour rather than something new.
+ */
+static atomic_t s_radio_mode;   /* LEDS_RADIO_TX */
+static atomic_t s_hb_mode;      /* LEDS_HB_ALL */
+static atomic_t s_radio_holds_pin;
+
+uint8_t zephcore_leds_radio_mode(void)
+{
+	return (uint8_t)atomic_get(&s_radio_mode);
+}
+
+void zephcore_leds_set_radio_mode(uint8_t mode)
+{
+	atomic_set(&s_radio_mode, mode);
+}
+
+uint8_t zephcore_leds_hb_mode(void)
+{
+	return (uint8_t)atomic_get(&s_hb_mode);
+}
+
+void zephcore_leds_set_hb_mode(uint8_t mode)
+{
+	atomic_set(&s_hb_mode, mode);
+}
+
+bool zephcore_led_radio_holds_pin(void)
+{
+	return atomic_get(&s_radio_holds_pin) != 0;
+}
+
+void zephcore_led_radio_hold_pin(bool held)
+{
+	atomic_set(&s_radio_holds_pin, held ? 1 : 0);
+}

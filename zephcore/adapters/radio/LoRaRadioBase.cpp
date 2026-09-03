@@ -296,6 +296,12 @@ void LoRaRadioBase::rxCallbackStatic(const struct device *dev, uint8_t *data,
 	self->_last_snr = (float)snr;
 	atomic_inc(&self->_packets_recv);
 
+	/* Activity LED ("set leds.radio rx|all").  Deliberately below the CRC and
+	 * header-error early return above, so the blink means a valid packet
+	 * landed rather than that something was heard on the channel.  Cheap and
+	 * non-blocking: the board raises a GPIO and arms a one-shot. */
+	self->_board->onPacketReceived();
+
 	if (self->_rx_cb) {
 		self->_rx_cb(self->_rx_cb_user_data);
 	}

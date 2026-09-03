@@ -599,15 +599,6 @@ int main(void)
 	oled_sleep();
 #endif
 
-	/* Apply the persisted LED master switch ("set leds on|off"). After ui_init()
-	 * so the heartbeat cycle exists to be stopped; before the radio starts so the
-	 * first transmit already honours it. */
-	{
-		bool leds_off = room_mesh.getNodePrefs()->leds_disabled != 0;
-		zephcore_leds_set_disabled(leds_off);
-		LOG_INF("LEDs: %s (from prefs)", leds_off ? "disabled" : "enabled");
-	}
-
 	/* Log environment sensor availability */
 	if (env_sensors_available()) {
 		LOG_INF("Environment sensors available");
@@ -651,6 +642,26 @@ int main(void)
 	 * Mirrors the temp_prefs pattern in main_companion.cpp. */
 	data_store.loadPrefs(*room_mesh.getNodePrefs());
 	lora_radio.setPrefs(room_mesh.getNodePrefs());
+
+	/* Apply the persisted LED master switch ("set leds on|off").  MUST come
+	 * after loadPrefs(): this used to sit just after ui_init(), ~45 lines
+	 * earlier, where getNodePrefs() still held the initNodePrefs() default of
+	 * leds_disabled=0.  A node with "off" persisted therefore opened the gate on
+	 * every boot and never closed it again -- `get leds` read the (correct) RAM
+	 * prefs and said "off" while the LEDs kept blinking, until the user issued
+	 * `set leds off` a second time to drive the gate directly.  The other two
+	 * ordering constraints still hold here: ui_init() has already run, so the
+	 * heartbeat cycle exists to be stopped, and room_mesh.begin() ->
+	 * Dispatcher::begin() -> Radio::begin() is still below, so the first
+	 * transmit honours it. */
+	{
+		const NodePrefs *lp = room_mesh.getNodePrefs();
+		bool leds_off = lp->leds_disabled != 0;
+		zephcore_leds_set_disabled(leds_off);
+		zephcore_leds_set_radio_mode(lp->leds_radio_mode);
+		zephcore_leds_set_hb_mode(lp->leds_hb_mode);
+		LOG_INF("LEDs: %s (from prefs)", leds_off ? "disabled" : "enabled");
+	}
 
 	/* Start mesh with data store - loads ACL, regions */
 	room_mesh.begin(&data_store);

@@ -24,6 +24,11 @@ public:
 	virtual const char *getManufacturerName() const = 0;
 	virtual void onBeforeTransmit() {}
 	virtual void onAfterTransmit() {}
+	/* A valid packet has just been received.  Unlike the transmit pair this is
+	 * a single edge, not a window: the packet is already over by the time the
+	 * radio tells us, so an implementation that drives an LED has to fire a
+	 * one-shot rather than hold a level. */
+	virtual void onPacketReceived() {}
 	virtual void reboot() = 0;
 	virtual void powerOff() {}
 	virtual void sleep(uint32_t secs) { (void)secs; }

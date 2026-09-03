@@ -206,6 +206,78 @@ now means zero, and a genuinely absent setting still arrives as 0.2.
 
 ---
 
+## The LEDs are yours now
+
+Until now the node's LEDs were all-or-nothing: `set leds off` killed every one of them, and that was the
+only choice on offer. Two new settings sit underneath that master switch and say *what* each LED reacts to.
+
+**`set leds.radio <tx|rx|all|off>`** — the LoRa activity LED.
+
+- `tx` — lit for the duration of each transmit. This is what it has always done, and stays the default.
+- `rx` — a short blink for each packet received.
+- `all` — both.
+- `off` — dark.
+
+`rx` is the interesting one. It turns the node into a passive activity monitor: you can see at a glance
+whether a repeater is hearing anything at all, which is otherwise a question you can only answer by
+plugging into the console. The blink fires on valid packets only, so it means "a real packet landed" and
+not "there was noise on the channel".
+
+**`set leds.hb <hb|unread|all|off>`** — the heartbeat LED.
+
+- `all` — the 4-second liveness tick, widening from a 20 ms flicker to a 200 ms pulse while you have unread
+  messages. Unchanged, and still the default.
+- `hb` — liveness only. Never widens, never signals unread.
+- `unread` — the reverse: dark until something is waiting for you, then the long pulse. A quiet node that
+  only speaks up when it has something to say.
+- `off` — dark.
+
+Both are applied the moment you set them and survive a reboot. `set leds off` still overrides both, so if
+you have a node you want dark, one command is still all it takes.
+
+> [!NOTE]
+> **Upgrading changes nothing.** Both settings default to exactly what your node does today, so an upgrade
+> looks identical until you change something.
+
+### What your board can actually do
+
+This depends on how many LEDs the board has, and it varies more than you might expect.
+
+Six boards — RAK4631, SenseCAP Solar, ThinkNode M1 and M6, LilyGo T-Echo and XIAO nRF52840 — wire the
+heartbeat and the radio to different LEDs, so the two settings are completely independent. The XIAO has a
+third for unread messages.
+
+Eight boards — Heltec T114, T096 and Wireless Tracker v2, TTGO T-Beam, GAT562, RAK3401, RAK WisMesh Tag and
+LilyGo T-Impulse Plus — drive both from a **single** LED. They still work, and radio activity now takes
+priority so a transmit is no longer cut short by the heartbeat's timer firing underneath it. But one LED
+showing two things is hard to read, so `set leds.hb off` is worth considering there.
+
+Twenty boards have no radio LED at all, including the Wio Tracker L1, T1000-E, MeshTracker X1 and the
+Heltec V3/V4/V43 family. `set leds.radio` is still accepted and remembered — so the setting follows your
+node if you move it to hardware that does have one — but it does nothing, and the reply tells you so.
+
+> [!NOTE]
+> **`unread` needs a companion with buttons.** The unread count only exists in the button UI. On repeaters,
+> observers and joystick-UI boards it is permanently zero, which means `leds.hb unread` leaves the LED dark
+> for good and `leds.hb all` behaves the same as `hb`. Use `hb` or `off` on those.
+
+---
+
+## A repeater told to turn its LEDs off turned them back on
+
+On a repeater or room server, `set leds off` worked — until the next reboot, when the LEDs started blinking
+again. `get leds` still answered `off`, so the node insisted it was doing what you asked while visibly not
+doing it, and the only fix was to issue `set leds off` a second time.
+
+The setting was being applied about forty lines before the saved settings were read from flash, so it was
+always acting on the factory default rather than on yours. The stored value was never wrong and never lost;
+it just arrived too late to be used.
+
+This is why it looked intermittent rather than broken: it took a reboot to show up, and a solar-powered node
+picks its own moments to reboot. Companions and observers were never affected.
+
+---
+
 ## Also in this release
 
 - **ESP32-S3 companions now connect over USB.** Heltec V4 and V43, Wireless Tracker v2, XIAO S3,

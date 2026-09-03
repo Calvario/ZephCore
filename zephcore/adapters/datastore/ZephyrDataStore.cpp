@@ -852,6 +852,18 @@ void ZephyrDataStore::loadPrefs(NodePrefs &prefs)
 		prefs.tz_offset = (int8_t)buf[off++];
 	}
 
+	/* Offset 172-173: leds_radio_mode / leds_hb_mode (ZephCore extension).
+	 * Absent in pre-existing files → both stay at the initNodePrefs() defaults
+	 * of 0, and 0 is deliberately the behaviour every already-deployed node has
+	 * (activity LED on transmit, heartbeat with unread indication).  Range is
+	 * re-checked by sanitizeNodePrefs() below. */
+	if (off < len) {
+		prefs.leds_radio_mode = buf[off++];
+	}
+	if (off < len) {
+		prefs.leds_hb_mode = buf[off++];
+	}
+
 	sanitizeNodePrefs(&prefs);
 }
 
@@ -963,7 +975,10 @@ void ZephyrDataStore::savePrefs(const NodePrefs &prefs)
 	/* Offset 171: tz_offset (ZephCore extension, signed whole hours from UTC,
 	 * display only — the stored clock is always UTC) */
 	buf[off++] = (uint8_t)prefs.tz_offset;
-	/* Total: 172 bytes */
+	/* Offset 172-173: leds_radio_mode / leds_hb_mode (ZephCore extension). */
+	buf[off++] = prefs.leds_radio_mode;
+	buf[off++] = prefs.leds_hb_mode;
+	/* Total: 174 bytes */
 
 	bool ok = atomicReplaceFile(PREFS_FILE, buf, off);
 	LOG_DBG("savePrefs: wrote %s, ok=%d (%d bytes), name='%.16s'",

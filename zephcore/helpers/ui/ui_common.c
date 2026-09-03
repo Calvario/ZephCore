@@ -133,14 +133,48 @@ static struct k_work_delayable s_led_off_work;
  */
 __attribute__((weak)) uint16_t ui_led_get_msg_count(void) { return 0; }
 
+/*
+ * Does the heartbeat LED light on this pass?  "unread" is not a separate blink
+ * — it is this same cycle widening its pulse — so the modes are expressed as
+ * two questions over one cycle: may it light at all right now, and how wide.
+ *
+ * The cycle keeps running in every mode including LEDS_HB_OFF.  That is on
+ * purpose: on companions with two LEDs the unread indicator is lit from inside
+ * this work chain, so stopping the chain would take unread indication down with
+ * the heartbeat.  An idle pass costs one work item every 4 s.
+ */
+static bool hb_should_light(uint16_t msg_count)
+{
+	switch (zephcore_leds_hb_mode()) {
+	case LEDS_HB_OFF:    return false;
+	case LEDS_HB_UNREAD: return msg_count > 0;  /* dark unless there is news */
+	default:             return true;           /* LEDS_HB_ALL, LEDS_HB_HB */
+	}
+}
+
+/* Pulse width for this pass.  LEDS_HB_HB is the "liveness tick only" mode, so
+ * it never widens even when messages are waiting. */
+static uint16_t hb_pulse_ms(uint16_t msg_count)
+{
+	if (zephcore_leds_hb_mode() == LEDS_HB_HB) {
+		return LED_ON_MS;
+	}
+	return (msg_count > 0) ? LED_ON_MSG_MS : LED_ON_MS;
+}
+
 static void led_off_work_handler(struct k_work *work)
 {
 	ARG_UNUSED(work);
-	gpio_pin_set_dt(&s_heartbeat_led, 0);
+	/* Yield the pin if radio activity is holding it (shared-pin boards only;
+	 * everywhere else this always reads false). Clearing here would blank the
+	 * LED in the middle of a transmit. */
+	if (!zephcore_led_radio_holds_pin()) {
+		gpio_pin_set_dt(&s_heartbeat_led, 0);
+	}
 #if HAS_MSG_LED
 	gpio_pin_set_dt(&s_msg_led, 0);
 #endif
-	uint16_t on_ms = (ui_led_get_msg_count() > 0) ? LED_ON_MSG_MS : LED_ON_MS;
+	uint16_t on_ms = hb_pulse_ms(ui_led_get_msg_count());
 
 	k_work_reschedule(&s_led_on_work, K_MSEC(LED_CYCLE_MS - on_ms));
 }
@@ -149,12 +183,18 @@ static void led_on_work_handler(struct k_work *work)
 {
 	ARG_UNUSED(work);
 	uint16_t mc = ui_led_get_msg_count();
-	uint16_t on_ms = (mc > 0) ? LED_ON_MSG_MS : LED_ON_MS;
+	uint16_t on_ms = hb_pulse_ms(mc);
 
 	if (!zephcore_leds_disabled()) {
-		gpio_pin_set_dt(&s_heartbeat_led, 1);
+		if (hb_should_light(mc) && !zephcore_led_radio_holds_pin()) {
+			gpio_pin_set_dt(&s_heartbeat_led, 1);
+		}
 #if HAS_MSG_LED
-		if (mc > 0) {
+		/* The unread LED is a separate pin, so it is governed by the mode
+		 * but not by the radio's hold on the heartbeat pin. LEDS_HB_HB is
+		 * the liveness-only mode and deliberately suppresses it. */
+		if (mc > 0 && zephcore_leds_hb_mode() != LEDS_HB_OFF &&
+		    zephcore_leds_hb_mode() != LEDS_HB_HB) {
 			gpio_pin_set_dt(&s_msg_led, 1);
 		}
 #endif

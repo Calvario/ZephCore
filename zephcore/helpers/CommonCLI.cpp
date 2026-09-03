@@ -66,6 +66,48 @@ static const NodePrefs* cliDefaults() {
     return &s_cli_defaults;
 }
 
+/* ---- leds.radio / leds.hb mode names ----------------------------------- */
+/*
+ * Which LEDs this board actually has, so the CLI can tell the user when a
+ * setting it just accepted will not do anything here.  The pref is still
+ * stored either way: the same prefs file follows a node onto a board that does
+ * have the LED, and silently dropping the value would be worse than storing a
+ * setting that is dormant.
+ *
+ * These mirror the aliases the drivers use — lora-tx-led in ZephyrBoard.cpp,
+ * led0 with an led1 fallback in helpers/ui/ui_common.c.
+ */
+#define CLI_HAS_RADIO_LED  DT_NODE_EXISTS(DT_ALIAS(lora_tx_led))
+#define CLI_HAS_HB_LED     (DT_NODE_HAS_PROP(DT_ALIAS(led0), gpios) || \
+                            DT_NODE_HAS_PROP(DT_ALIAS(led1), gpios))
+
+struct CliModeName { const char* name; uint8_t val; };
+
+static const CliModeName LEDS_RADIO_NAMES[] = {
+    { "tx",  LEDS_RADIO_TX  },
+    { "rx",  LEDS_RADIO_RX  },
+    { "all", LEDS_RADIO_ALL },
+    { "off", LEDS_RADIO_OFF },
+};
+
+static const CliModeName LEDS_HB_NAMES[] = {
+    { "all",    LEDS_HB_ALL    },
+    { "hb",     LEDS_HB_HB     },
+    { "unread", LEDS_HB_UNREAD },
+    { "off",    LEDS_HB_OFF    },
+};
+
+static const char* cliModeName(const CliModeName* tbl, size_t n, uint8_t v) {
+    for (size_t i = 0; i < n; i++) {
+        if (tbl[i].val == v) return tbl[i].name;
+    }
+    return "?";
+}
+
+/* Returns the mode value, or -1 if the argument matches nothing. "default"
+ * resolves through cliDefaults() like every other setting. */
+static int cliModeValue(const CliModeName* tbl, size_t n, const char* arg, uint8_t def_val);
+
 static const char* cliSkipSpace(const char* s) {
     while (*s == ' ') s++;
     return s;
@@ -75,6 +117,15 @@ static bool cliIsDefault(const char* arg) {
     const char* s = cliSkipSpace(arg);
     if (strncmp(s, "default", 7) != 0) return false;
     return *cliSkipSpace(s + 7) == '\0';
+}
+
+static int cliModeValue(const CliModeName* tbl, size_t n, const char* arg, uint8_t def_val) {
+    const char* s = cliSkipSpace(arg);
+    if (cliIsDefault(s)) return (int)def_val;
+    for (size_t i = 0; i < n; i++) {
+        if (strcmp(s, tbl[i].name) == 0) return (int)tbl[i].val;
+    }
+    return -1;
 }
 
 /* Integer argument, or "default".  false = unparseable; the caller reports
@@ -357,6 +408,17 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
             snprintf(reply, CLI_REPLY_SIZE, "> %.2f", (double)_prefs->airtime_factor);
         } else if (memcmp(config, "int.thresh", 10) == 0) {
             snprintf(reply, CLI_REPLY_SIZE, "> %u", (uint32_t)_prefs->interference_threshold);
+        /* MUST stay above the "leds" branch: that one compares only the first
+         * four characters, so "leds.radio" and "leds.hb" both match it and
+         * would otherwise return the master switch instead. */
+        } else if (memcmp(config, "leds.radio", 10) == 0) {
+            snprintf(reply, CLI_REPLY_SIZE, "> %s%s",
+                     cliModeName(LEDS_RADIO_NAMES, 4, _prefs->leds_radio_mode),
+                     CLI_HAS_RADIO_LED ? "" : " (no radio LED on this board)");
+        } else if (memcmp(config, "leds.hb", 7) == 0) {
+            snprintf(reply, CLI_REPLY_SIZE, "> %s%s",
+                     cliModeName(LEDS_HB_NAMES, 4, _prefs->leds_hb_mode),
+                     CLI_HAS_HB_LED ? "" : " (no heartbeat LED on this board)");
         } else if (memcmp(config, "leds", 4) == 0) {
             snprintf(reply, CLI_REPLY_SIZE, "> %s", _prefs->leds_disabled ? "off" : "on");
 #ifndef ZEPHCORE_REPEATER
@@ -637,6 +699,34 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                     savePrefs();
                     strcpy(reply, "OK");
                 }
+            }
+        } else if (memcmp(config, "leds.radio ", 11) == 0) {
+            /* What the LoRa activity LED reacts to. Below the master switch:
+             * "set leds off" keeps it dark whatever this says. */
+            int m = cliModeValue(LEDS_RADIO_NAMES, 4, &config[11],
+                                 cliDefaults()->leds_radio_mode);
+            if (m < 0) {
+                strcpy(reply, "Error: must be tx, rx, all, off or default");
+            } else {
+                _prefs->leds_radio_mode = (uint8_t)m;
+                zephcore_leds_set_radio_mode((uint8_t)m);
+                savePrefs();
+                snprintf(reply, CLI_REPLY_SIZE, "OK%s",
+                         CLI_HAS_RADIO_LED ? "" : " (no radio LED on this board)");
+            }
+        } else if (memcmp(config, "leds.hb ", 8) == 0) {
+            /* What the heartbeat LED reacts to. "unread" is the same cycle
+             * widening its pulse, not a separate blink — see led_gate.h. */
+            int m = cliModeValue(LEDS_HB_NAMES, 4, &config[8],
+                                 cliDefaults()->leds_hb_mode);
+            if (m < 0) {
+                strcpy(reply, "Error: must be hb, unread, all, off or default");
+            } else {
+                _prefs->leds_hb_mode = (uint8_t)m;
+                zephcore_leds_set_hb_mode((uint8_t)m);
+                savePrefs();
+                snprintf(reply, CLI_REPLY_SIZE, "OK%s",
+                         CLI_HAS_HB_LED ? "" : " (no heartbeat LED on this board)");
             }
         } else if (memcmp(config, "leds ", 5) == 0) {
             /* Master switch for every LED on the node: heartbeat, unread-message

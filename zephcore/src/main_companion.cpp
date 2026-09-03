@@ -1601,6 +1601,8 @@ int main(void)
 	 * LED and is linked into every build, UI or not. */
 	bool leds_off = companion_mesh.prefs.leds_disabled != 0;
 	zephcore_leds_set_disabled(leds_off);
+	zephcore_leds_set_radio_mode(companion_mesh.prefs.leds_radio_mode);
+	zephcore_leds_set_hb_mode(companion_mesh.prefs.leds_hb_mode);
 	ui_set_heartbeat_led(!leds_off);
 	LOG_INF("LEDs: %s (from prefs)", leds_off ? "disabled" : "enabled");
 

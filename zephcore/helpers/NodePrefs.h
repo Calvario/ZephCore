@@ -11,6 +11,11 @@
 #include <stdint.h>
 #include <string.h>
 
+/* LEDS_RADIO_* / LEDS_HB_* mode values for the leds_radio_mode and leds_hb_mode
+ * fields below.  They live in led_gate.h because the heartbeat consumers are C
+ * and this header is C++; see the note there. */
+#include "led_gate.h"
+
 #define TELEM_MODE_DENY            0
 #define TELEM_MODE_ALLOW_FLAGS     1
 #define TELEM_MODE_ALLOW_ALL       2
@@ -88,6 +93,8 @@ struct NodePrefs {
 	uint8_t flood_max_advert;       // hop limit for ADVERT floods (curbs advert churn)
 	uint8_t interference_threshold;
 	uint8_t leds_disabled;          // 1 = all LEDs off (heartbeat, unread, LoRa TX)
+	uint8_t leds_radio_mode;        // LEDS_RADIO_* — activity LED source (0 = TX, as before)
+	uint8_t leds_hb_mode;           // LEDS_HB_* — heartbeat LED behaviour (0 = all, as before)
 	// Power saving
 	uint8_t powersaving_enabled;
 	// GPS settings
@@ -232,6 +239,11 @@ static inline T sanePrefFloat(T v, T lo, T hi, T fallback) {
 template <typename T>
 static inline T saneBool(T v, T fallback) { return (v == 0 || v == 1) ? v : fallback; }
 
+/* Same idea as saneBool for a small enum: anything outside 0..max carries no
+ * user intent, so fall back to 0 — which every LEDS_* enum defines as the
+ * behaviour the firmware had before the setting existed. */
+static inline uint8_t saneEnum(uint8_t v, uint8_t max) { return (v <= max) ? v : 0; }
+
 static inline void sanitizeNodePrefs(NodePrefs* p) {
 	p->node_name[sizeof(p->node_name) - 1] = '\0';
 	p->password[sizeof(p->password) - 1] = '\0';
@@ -270,6 +282,8 @@ static inline void sanitizeNodePrefs(NodePrefs* p) {
 	p->gps_enabled         = saneBool<uint8_t>(p->gps_enabled, 0);
 	p->rx_duty_cycle       = saneBool<uint8_t>(p->rx_duty_cycle, 0);
 	p->leds_disabled       = saneBool<uint8_t>(p->leds_disabled, 0);
+	p->leds_radio_mode     = saneEnum(p->leds_radio_mode, LEDS_RADIO_MAX);
+	p->leds_hb_mode        = saneEnum(p->leds_hb_mode, LEDS_HB_MAX);
 	p->meshtimesync        = saneBool<uint8_t>(p->meshtimesync, 0);
 	/* Fallback must be the initNodePrefs() default (ON).  It was 0, so a byte
 	 * that was neither 0 nor 1 silently switched adaptive CAD off instead of
@@ -370,6 +384,8 @@ static inline void initNodePrefs(NodePrefs* prefs) {
 	prefs->flood_max_advert = 8;     // ADVERT flood hop limit (upstream default)
 	prefs->interference_threshold = 0;
 	prefs->leds_disabled = 0;         // LEDs on
+	prefs->leds_radio_mode = LEDS_RADIO_TX;  // activity LED on transmit, as before
+	prefs->leds_hb_mode = LEDS_HB_ALL;       // heartbeat + unread, as before
 	prefs->powersaving_enabled = 0;
 	prefs->gps_enabled = 0;
 	prefs->gps_interval = 300;        // 5 minutes

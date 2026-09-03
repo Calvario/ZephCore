@@ -287,6 +287,12 @@ bool RepeaterDataStore::loadPrefs(NodePrefs& prefs) {
      * no-op EOF read leaves 0 = UTC, which is what every already-deployed
      * node shows today.  Range is re-checked by sanitizeNodePrefs(). */
     fs_read(&file, &prefs.tz_offset, sizeof(prefs.tz_offset));
+    /* LED activity/heartbeat modes, offsets 309-310.  Absent in <311-byte
+     * files; the no-op EOF read leaves the initNodePrefs() defaults of 0/0,
+     * which are deliberately the behaviour every already-deployed node has
+     * (activity LED on transmit, heartbeat with unread indication). */
+    fs_read(&file, &prefs.leds_radio_mode, sizeof(prefs.leds_radio_mode));
+    fs_read(&file, &prefs.leds_hb_mode, sizeof(prefs.leds_hb_mode));
 
     fs_close(&file);
 
@@ -442,6 +448,9 @@ bool RepeaterDataStore::savePrefs(const NodePrefs& prefs) {
     /* Display timezone offset (offset 308) — signed whole hours from UTC,
      * applied only when formatting the on-device clock */
     fs_write(&file, &prefs.tz_offset, sizeof(prefs.tz_offset));
+    /* LED activity/heartbeat modes (offsets 309-310) */
+    fs_write(&file, &prefs.leds_radio_mode, sizeof(prefs.leds_radio_mode));
+    fs_write(&file, &prefs.leds_hb_mode, sizeof(prefs.leds_hb_mode));
 
     ret = fs_sync(&file);
     fs_close(&file);
