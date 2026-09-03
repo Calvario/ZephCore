@@ -164,7 +164,7 @@ it is still local to the app, still never touches the radio, and still has no pr
 anywhere.
 
 > [!IMPORTANT]
-> **The v-contact's key changes with this release, so your app will keep showing the old one.** Delete
+> **The v-contact's key changes with this release, so your app may keep showing the old one too.** Delete
 > the leftover `v<name>` entry by hand. The new one arrives on its own the next time the app connects.
 
 ---
@@ -278,7 +278,7 @@ picks its own moments to reboot. Companions and observers were never affected.
 
 ---
 
-## Also in this release
+## Also in this release (via west update, upstream sync or manually added)
 
 - **ESP32-S3 companions now connect over USB.** Heltec V4 and V43, Wireless Tracker v2, XIAO S3,
   Station G2 and T3-S3 speak the companion protocol over their native USB port by default. Repeater,
