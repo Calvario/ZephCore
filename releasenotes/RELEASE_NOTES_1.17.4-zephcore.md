@@ -1,5 +1,7 @@
 # ZephCore 1.17.4-zephcore
 
+*Re-release: rebuilt to pick up the transmit-airtime fix listed at the end.*
+
 Storage housekeeping, plus a listen-before-talk fix. The repeater's `erase` never actually erased,
 a node flashed from another firmware could start out with somebody else's leftovers underneath it,
 and switching a node between companion and repeater firmware quietly let the two share the same
@@ -303,3 +305,8 @@ picks its own moments to reboot. Companions and observers were never affected.
 - **A wasted erase on the companion.** Running `erase` from the companion's USB console formatted the
   storage, then formatted it again on the reboot that followed, because the marker saying "this node
   has been set up" went out with everything else. Both paths behave the same way now.
+- **Transmit airtime read far too high, and drained the duty-cycle budget with it.** It was timed as
+  wall clock around each send, so channel checks and radio housekeeping counted as airtime — eight
+  times over on one repeater. It is now the packet's own airtime, the same figure received airtime has
+  always used, and the "packets sent" total can no longer disagree with the flood and direct counts
+  beneath it.

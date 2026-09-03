@@ -18,7 +18,16 @@ public:
 	virtual uint32_t getEstAirtimeFor(int len_bytes) = 0;
 	virtual float packetScore(float snr, int packet_len) = 0;
 	virtual bool startSendRaw(const uint8_t *bytes, int len) = 0;
+	/* One-shot: returns true exactly once per completed transmit, and
+	 * consumes that completion.  Matches Arduino MeshCore's
+	 * RadioLibWrapper::isSendComplete(), which self-clears and owns the
+	 * packets-sent counter, so the radio's tally and the dispatcher's
+	 * flood/direct tallies can never drift apart.  Never call this as a
+	 * state query -- use isTxActive() for that. */
 	virtual bool isSendComplete() = 0;
+	/* Non-consuming "a transmit is in flight" query, for callers that want
+	 * the radio's state rather than the completion event. */
+	virtual bool isTxActive() const { return false; }
 	virtual void onSendFinished() = 0;
 
 	virtual int getNoiseFloor() const { return 0; }

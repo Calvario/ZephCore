@@ -124,7 +124,29 @@ void Dispatcher::loop()
 {
 	if (outbound) {
 		if (_radio->isSendComplete()) {
-			uint32_t t = (uint32_t)_ms->getMillis() - outbound_start;
+			/* Airtime is the modulation time of the packet that just
+			 * went out, not the wall-clock width of the send.
+			 *
+			 * Upstream measures the wall clock here and gets away with
+			 * it: on Arduino the CAD runs before outbound_start is
+			 * stamped, loop() polls continuously, and isSendComplete()
+			 * has no timeout, so almost nothing sits between the stamp
+			 * and the TX_DONE interrupt.  Our send has all three —
+			 * blocking LBT inside startSendRaw(), a wait-thread
+			 * watchdog, and event-driven completion — so the same
+			 * expression measured up to 8x the real airtime in the
+			 * field, and charged every millisecond of it to the
+			 * duty-cycle budget below.
+			 *
+			 * LoRa airtime is exact given SF/BW/CR/preamble/length, so
+			 * compute it rather than time it: same value the RX side
+			 * already accumulates, which makes the two figures on the
+			 * stats screen comparable for the first time, and the right
+			 * unit for tx_budget_ms, which is a transmitter-on-time
+			 * allowance (CAD is receiving, not transmitting). */
+			uint32_t t = _radio->getEstAirtimeFor(outbound->getRawLength());
+			LOG_DBG("TX complete: air=%ums wall=%ums", t,
+				(uint32_t)_ms->getMillis() - outbound_start);
 			total_air_time += t;
 			updateTxBudget();
 			if (t >= tx_budget_ms) {
@@ -165,7 +187,14 @@ void Dispatcher::maintenanceLoop()
 	 * on every role: the repeater/room-server "stats" CLI reply and binary
 	 * telemetry read _err_flags directly, the MQTT uplink publishes it, and
 	 * the companion returns it in its BLE device-status response. */
-	bool is_active = _radio->isInRecvMode() || !_radio->isSendComplete();
+	/* isTxActive(), not !isSendComplete(): the latter is now a one-shot that
+	 * consumes the completion, so asking it here would swallow the event the
+	 * dispatcher's own loop() is waiting to collect.  The value is identical
+	 * in every state — it is the same _tx_active read this line always
+	 * performed — so the spurious-STARTRX_TIMEOUT fix this term was added
+	 * for (rapid consecutive relays leaving radio_nonrx_start stale) is
+	 * unchanged. */
+	bool is_active = _radio->isInRecvMode() || _radio->isTxActive();
 	if (is_active != prev_isrecv_mode) {
 		prev_isrecv_mode = is_active;
 		if (!is_active) {
@@ -507,11 +536,20 @@ void Dispatcher::checkSend()
 			 * actual TX start (serialisation + logging can take 1-5 ms). */
 			bool final_is_receiving = _radio->isReceiving();
 			bool final_is_radio_ready = _radio->isRadioReady();
-			if (final_is_receiving || !final_is_radio_ready) {
+			/* isTxActive() covers the window the radio opened by
+			 * publishing its completion before it finishes re-arming
+			 * RX: we may have collected that completion and come
+			 * straight back here.  startSendRaw()'s CAS would refuse
+			 * anyway, but that refusal is reported as an LBT-busy
+			 * verdict and feeds the cad_busy_start escalation, which
+			 * this is not — "radio not ready yet" belongs here. */
+			if (final_is_receiving || !final_is_radio_ready ||
+			    _radio->isTxActive()) {
 				uint32_t retry = getCADFailRetryDelay();
-				LOG_DBG("checkSend: final gate blocked TX (isReceiving=%d, isRadioReady=%d, inRecvMode=%d)",
+				LOG_DBG("checkSend: final gate blocked TX (isReceiving=%d, isRadioReady=%d, inRecvMode=%d, txActive=%d)",
 					(int)final_is_receiving, (int)final_is_radio_ready,
-					(int)_radio->isInRecvMode());
+					(int)_radio->isInRecvMode(),
+					(int)_radio->isTxActive());
 				_mgr->queueOutbound(outbound, outbound_priority, futureMillis((int)retry));
 				outbound = nullptr;
 				if (_tx_queued_cb) {

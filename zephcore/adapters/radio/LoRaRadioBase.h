@@ -116,7 +116,7 @@ public:
 	uint16_t getActivePreambleLength() const;
 	uint8_t getActiveSyncWord() const;
 	int8_t getConfiguredTxPower() const;
-	bool isTxActive() const { return atomic_get(&_tx_active) != 0; }
+	bool isTxActive() const override { return atomic_get(&_tx_active) != 0; }
 
 	/* Duty-cycle preamble false-positive counter.
 	 * Incremented by the driver whenever RX_TX_TIMEOUT fires in
@@ -314,6 +314,14 @@ protected:
 	MainBoard *_board;
 	atomic_t _in_recv_mode;
 	atomic_t _tx_active;
+	/* Completion latch: raised by the TX wait thread only on an affirmative
+	 * success verdict, consumed once by isSendComplete(), and cleared by
+	 * startSendRaw() so a completion the dispatcher never collected (it gave
+	 * up on outbound_expiry first) cannot leak into the next packet.  This
+	 * is the Zephyr equivalent of upstream's STATE_INT_READY -> STATE_IDLE
+	 * transition; _tx_active alone cannot serve, because it is also cleared
+	 * on every failure path and is read as a plain state query elsewhere. */
+	atomic_t _tx_complete;
 	volatile float _last_rssi;   /* word-aligned: atomic on ARM */
 	volatile float _last_snr;    /* word-aligned: atomic on ARM */
 

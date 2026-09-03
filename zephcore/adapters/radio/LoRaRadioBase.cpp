@@ -44,7 +44,7 @@ LoRaRadioBase::LoRaRadioBase(const struct device *lora_dev, MainBoard &board,
 			     NodePrefs *prefs)
 	: _loramac_node(false),
 	  _dev(lora_dev), _prefs(prefs), _board(&board),
-	  _in_recv_mode(0), _tx_active(0),
+	  _in_recv_mode(0), _tx_active(0), _tx_complete(0),
 	  _last_rssi(0), _last_snr(0),
 	  _rx_head(0), _rx_tail(0),
 	  _noise_floor(DEFAULT_NOISE_FLOOR), _calibration_threshold(0), _ema_unguarded(0),
@@ -174,12 +174,19 @@ void LoRaRadioBase::txWaitThreadFn(void *p1, void *p2, void *p3)
 				LOG_DBG("TX wait: signal already raised (result=%d)", result);
 			}
 			k_poll_signal_reset(&self->_tx_signal);
+			/* Latch the verdict BEFORE the RX re-arm below, not after:
+			 * onAfterTransmit() + startReceive() is a full modem
+			 * reconfigure over SPI, and any loop() pass that lands
+			 * inside it used to see "not complete yet" and abandon a
+			 * transmit that had in fact finished.  startSendRaw()'s
+			 * _tx_active CAS is what makes publishing the completion
+			 * this early safe. */
+			if (result >= 0) {
+				atomic_set(&self->_tx_complete, 1);
+			}
 			self->_board->onAfterTransmit();
 			self->startReceive();
 			atomic_set(&self->_tx_active, 0);
-			if (result >= 0) {
-				atomic_inc(&self->_packets_sent);
-			}
 			if (self->_tx_done_cb) {
 				self->_tx_done_cb(self->_tx_done_cb_user_data);
 			}
@@ -211,6 +218,11 @@ void LoRaRadioBase::txWaitThreadFn(void *p1, void *p2, void *p3)
 			k_poll_signal_check(&self->_tx_signal, &sig_state,
 					    &sig_result);
 			k_poll_signal_reset(&self->_tx_signal);
+			/* Latched ahead of the RX re-arm — see the equivalent
+			 * comment on the already-raised path above. */
+			if (sig_result >= 0) {
+				atomic_set(&self->_tx_complete, 1);
+			}
 			self->_board->onAfterTransmit();
 			self->startReceive();
 			atomic_set(&self->_tx_active, 0);
@@ -218,7 +230,6 @@ void LoRaRadioBase::txWaitThreadFn(void *p1, void *p2, void *p3)
 				LOG_ERR("TX failed: driver reported %d — packet lost",
 					sig_result);
 			} else {
-				atomic_inc(&self->_packets_sent);
 				LOG_INF("TX complete, RX restarted");
 			}
 
@@ -763,8 +774,24 @@ bool LoRaRadioBase::startSendRaw(const uint8_t *bytes, int len)
 		return false;
 	}
 
+	/* CAS, not a bare set: the wait thread publishes _tx_complete before it
+	 * re-arms RX, so the dispatcher can legitimately collect a completion
+	 * and come straight back here while that thread is still inside
+	 * startReceive().  A plain set would let this transmit be started and
+	 * then have its _tx_active cleared out from under it moments later --
+	 * and would leave the driver re-entering RX on top of a live TX.
+	 * Refusing instead is correct and cheap: the dispatcher re-queues and
+	 * the wind-down finishes in microseconds.  Placed before
+	 * onBeforeTransmit() so a refusal does not light the TX LED. */
+	if (!atomic_cas(&_tx_active, 0, 1)) {
+		LOG_DBG("startSendRaw: previous transmit still winding down");
+		return false;
+	}
+	/* A completion nobody collected belongs to the packet that just went
+	 * out, never to this one -- upstream's STATE_IDLE reset in the same
+	 * place. */
+	atomic_set(&_tx_complete, 0);
 	_board->onBeforeTransmit();
-	atomic_set(&_tx_active, 1);
 	_last_tx_start_ms = k_uptime_get_32();
 
 	/* Phase 2: when LBT is enabled, skip the pre-emptive hwCancelReceive()
@@ -827,7 +854,23 @@ bool LoRaRadioBase::startSendRaw(const uint8_t *bytes, int len)
 
 bool LoRaRadioBase::isSendComplete()
 {
-	return !atomic_get(&_tx_active);
+	/* One-shot, and it owns _packets_sent — the same contract as upstream's
+	 * RadioLibWrapper::isSendComplete(), which self-clears STATE_INT_READY
+	 * and does n_sent++ in the same breath.  Incrementing here rather than
+	 * in the wait thread is what keeps the radio's "packets sent" tally and
+	 * the dispatcher's flood/direct tallies in lockstep: both advance on
+	 * this one call, so a completion the dispatcher never collects (it hit
+	 * outbound_expiry first) is missed by both, exactly as upstream misses
+	 * it.  They used to be independent counters on independent threads,
+	 * which let "Total" and "Flood + Direct" disagree by thousands.
+	 *
+	 * This is a consuming call.  Anything that wants to know whether a
+	 * transmit is in flight must use isTxActive() instead. */
+	if (atomic_cas(&_tx_complete, 1, 0)) {
+		atomic_inc(&_packets_sent);
+		return true;
+	}
+	return false;
 }
 
 void LoRaRadioBase::onSendFinished()
@@ -875,9 +918,20 @@ bool LoRaRadioBase::isRadioReady()
 
 uint32_t LoRaRadioBase::getEstAirtimeFor(int len_bytes)
 {
-	uint8_t sf = _prefs ? _prefs->sf : LoRaConfig::SPREADING_FACTOR;
-	float bw = _prefs ? _prefs->bw : (float)LoRaConfig::BANDWIDTH;
-	uint8_t cr_val = _prefs ? _prefs->cr : LoRaConfig::CODING_RATE;
+	/* Read the params the radio is ACTUALLY running, not the saved prefs:
+	 * buildModemConfig() honours _has_radio_override, so a node under
+	 * `tempradio` transmits on the override preset while this used to
+	 * estimate for the stored one.  Everything downstream of the estimate
+	 * drifts with it — reported RX airtime, the TX airtime and duty-cycle
+	 * budget that now derive from it, and outbound_expiry.  Upstream cannot
+	 * drift this way because it asks the radio (getTimeOnAir()); these
+	 * accessors are our equivalent.  bw is read directly rather than via
+	 * getActiveBandwidthKHzX10(), whose fixed-point rounding would cost
+	 * precision at 31.25 kHz. */
+	uint8_t sf = getActiveSpreadingFactor();
+	float bw = _has_radio_override ? _override_bw
+		   : (_prefs ? _prefs->bw : (float)LoRaConfig::BANDWIDTH);
+	uint8_t cr_val = getActiveCodingRate();
 
 	if (sf < 6) sf = 6;
 	if (sf > 12) sf = 12;
