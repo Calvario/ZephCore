@@ -154,6 +154,24 @@ static inline uint32_t rssi_settle_delay_us(uint16_t bw_khz)
  * 40% reproduces the old behaviour exactly at cap 25 and holds that same share
  * at every other setting. */
 #define CAD_BUSY_DEFER_HYST_PCT      40   /* descend only if frontier busy <= 60% of cap */
+/* Safety rung thresholds — see LoRaRadioBase::cadSafetyStep().
+ *
+ * The airtime cap above is a SAFETY, not an optimisation, so it runs whether or
+ * not `cad.auto` is on.  A detPeak so sensitive that CAD never clears leaves the
+ * node unable to transmit at all, and the three settings that used to gate the
+ * whole staircase (`cad.auto off`, `cad.busycap 0`, and a level not yet warm to
+ * CAD_STEP_MIN_PROBES) are exactly what a hand-tuning operator turns off — the
+ * CLI help for `set cad.auto` recommends that workflow by name.
+ *
+ * PATHOLOGICAL is the fast path for the unambiguous case.  Proving a MARGINAL
+ * busy rate against the cap needs the full 120 samples, but a level that trips
+ * on essentially every probe needs far fewer to be certain, and it is precisely
+ * the case where waiting half an hour is unacceptable.  It also ignores
+ * `cad.busycap` entirely: a cap of 0 means "do not trade airtime for
+ * sensitivity", which is a policy about a working detector, not permission to
+ * sit mute. */
+#define CAD_SAFETY_MIN_PROBES          20   /* samples before the fast path may act */
+#define CAD_SAFETY_PATHOLOGICAL_PERMILLE 900 /* >=90% busy = detector, not channel */
 #define CAD_PROBE_RSSI_GUARD     7     /* dB above floor = channel visibly busy, skip probe */
 #define CAD_STATS_DECAY_MS       (6UL * 3600UL * 1000UL)  /* halve counters every 6 h */
 /* NOTE: the probe has no retry deadline and no wake of its own.  It runs off

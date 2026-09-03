@@ -61,6 +61,20 @@ class Dispatcher {
 	uint32_t outbound_expiry, outbound_start, total_air_time, rx_air_time;
 	uint32_t next_tx_time;
 	uint32_t cad_busy_start;
+	/* Separate streak timer for the driver's own LBT verdict.  It cannot
+	 * share cad_busy_start: checkSend() zeroes that unconditionally once the
+	 * pre-TX software gate lets it through, which is every pass on which the
+	 * driver is the one refusing — so the shared variable was reset to 0
+	 * before each refusal could ever accumulate 4 s against it, and the
+	 * escalation below it was unreachable.  Measured on an XIAO ESP32-S3 with
+	 * detPeak forced to its floor: 389 consecutive LBT refusals over 100 s,
+	 * zero warnings, zero error flags, err_events still reading 0. */
+	uint32_t lbt_busy_start;
+	/* Rate limit for the LBT warning.  Separate from lbt_busy_start so that
+	 * warning does not re-arm the streak clock — the starvation override
+	 * below needs the true continuous duration, not the time since the last
+	 * log line. */
+	uint32_t lbt_next_warn;
 	uint32_t tx_budget_ms;
 	uint32_t last_budget_update;
 	uint32_t duty_cycle_window_ms;
@@ -97,6 +111,13 @@ protected:
 	static bool isAdminPacket(const Packet *pkt);
 	virtual uint32_t getCADFailRetryDelay() const;
 	virtual uint32_t getCADFailMaxDuration() const;
+	/* How long the driver's LBT may refuse every transmit before we conclude
+	 * the detector is too sensitive rather than the channel genuinely busy,
+	 * and relax it one step.  Deliberately far longer than
+	 * getCADFailMaxDuration(): a real busy channel nearly always yields SOME
+	 * successful transmit inside a minute, and any success resets the
+	 * streak, so this only fires on a node that is not talking at all. */
+	virtual uint32_t getTxStarvationDuration() const;
 	virtual int getInterferenceThreshold() const { return 0; }
 	virtual uint32_t getDutyCycleWindowMs() const { return 3600000UL; } /* 1h default */
 	/* Adaptive CAD: called when the auto staircase moved the operating

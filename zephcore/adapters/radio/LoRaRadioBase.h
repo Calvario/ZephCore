@@ -154,6 +154,10 @@ public:
 	int8_t cadLevelMinEff();
 	int8_t cadLevelMaxEff();
 	void resetCadStats() override;
+	bool cadRelaxOnTxStarvation() override;
+	/* Airtime-protection / stuck-detector rung, run on every maintenance pass
+	 * regardless of _cad_auto.  Returns true when it moved the offset. */
+	bool cadSafetyStep();
 	int formatCadStatus(char *buf, int cap) override;
 
 protected:

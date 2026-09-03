@@ -31,6 +31,8 @@ Dispatcher::Dispatcher(Radio &radio, MillisecondClock &ms, PacketManager &mgr)
 	total_air_time = rx_air_time = 0;
 	next_tx_time = 0;
 	cad_busy_start = 0;
+	lbt_busy_start = 0;
+	lbt_next_warn = 0;
 	tx_budget_ms = 0;
 	last_budget_update = 0;
 	duty_cycle_window_ms = 0;
@@ -118,6 +120,11 @@ uint32_t Dispatcher::getCADFailRetryDelay() const
 uint32_t Dispatcher::getCADFailMaxDuration() const
 {
 	return 4000; /* ms; ~20 retry attempts before giving up */
+}
+
+uint32_t Dispatcher::getTxStarvationDuration() const
+{
+	return 60000; /* ms; 15 warning periods of not transmitting at all */
 }
 
 void Dispatcher::loop()
@@ -384,6 +391,16 @@ void Dispatcher::checkSend()
 	int count = _mgr->getOutboundCount(now);
 	if (count == 0) {
 		cad_busy_start = 0;
+		/* Only a genuinely EMPTY queue ends an LBT starvation streak, not
+		 * one that merely has nothing due this instant.  getOutboundCount()
+		 * excludes packets scheduled in the future, and an LBT refusal
+		 * re-queues its packet 100-200 ms ahead — so every checkSend() that
+		 * lands in that retry gap (any RX wake will do) used to reset the
+		 * streak here, and a node refusing every transmit could keep
+		 * restarting the clock instead of ever reaching the escalation. */
+		if (_mgr->getOutboundTotal() == 0) {
+			lbt_busy_start = 0;
+		}
 		return;
 	}
 
@@ -594,15 +611,68 @@ void Dispatcher::checkSend()
 				 * channel is a true reading and walking the radio
 				 * through REST would only add deaf time. Report and
 				 * keep retrying. */
-				if (cad_busy_start == 0) {
-					cad_busy_start = now;
-				} else if (now - cad_busy_start > getCADFailMaxDuration()) {
-					_err_flags |= ERR_EVENT_CAD_TIMEOUT;
-					LOG_WRN("checkSend: LBT has refused TX for %ums "
-						"(len=%d, noise=%d) — channel busy or CAD too sensitive",
-						(unsigned)(now - cad_busy_start), len,
-						_radio->getNoiseFloor());
-					cad_busy_start = now;
+				if (lbt_busy_start == 0) {
+					lbt_busy_start = now;
+					lbt_next_warn = now + getCADFailMaxDuration();
+				} else {
+					uint32_t streak = now - lbt_busy_start;
+
+					if ((int32_t)(now - lbt_next_warn) >= 0) {
+						_err_flags |= ERR_EVENT_CAD_TIMEOUT;
+						LOG_WRN("checkSend: LBT has refused TX for %ums "
+							"(len=%d, noise=%d) — channel busy or CAD too sensitive",
+							(unsigned)streak, len,
+							_radio->getNoiseFloor());
+						lbt_next_warn = now + getCADFailMaxDuration();
+					}
+
+					/* Self-unmute.  A node whose LBT has refused EVERY
+					 * transmit for this long is not looking at a busy
+					 * channel — a busy channel still yields gaps, and any
+					 * success resets this streak.  It is looking at a
+					 * detector tuned too sensitive to ever clear, which
+					 * `set cad.offset -8` on a quiet site produces
+					 * outright.
+					 *
+					 * The adaptive staircase cannot be relied on to undo
+					 * that: it runs only when `cad.auto` is on, only when
+					 * `cad.busycap` is non-zero, and only once the
+					 * operating level has 120 probes behind it — half an
+					 * hour at best.  All three are settings a hand-tuning
+					 * operator turns off, and the CLI help for
+					 * `set cad.auto` recommends exactly that workflow.  A
+					 * repeater on a mast that stops transmitting cannot
+					 * be talked back down either: it still receives and
+					 * still applies an admin `set`, but the reply never
+					 * gets out, so no ordinary app completes the login it
+					 * is waiting on.
+					 *
+					 * So this deliberately overrides `cad.auto` and runs
+					 * regardless of the operator's settings.  The radio
+					 * clamps to its own least-sensitive step and reports
+					 * when it can go no further.
+					 *
+					 * The new offset PERSISTS, like a staircase step:
+					 * maintenanceLoop() notices getCadOffset() moved and
+					 * calls onCadOffsetChanged(), which writes prefs.
+					 * That is the behaviour we want on a mast — a node
+					 * that healed itself must not go mute again on the
+					 * next reboot — and it is what `cad.auto` already
+					 * does to a hand-set offset.  Writes are bounded: each
+					 * step needs another full starvation period, and they
+					 * stop the moment a transmit succeeds. */
+					if (streak > getTxStarvationDuration()) {
+						if (_radio->cadRelaxOnTxStarvation()) {
+							LOG_ERR("checkSend: TX starved %ums — relaxed CAD one step",
+								(unsigned)streak);
+						} else {
+							LOG_ERR("checkSend: TX starved %ums — CAD already at its "
+								"least sensitive step, channel may be genuinely busy",
+								(unsigned)streak);
+						}
+						lbt_busy_start = now;
+						lbt_next_warn = now + getCADFailMaxDuration();
+					}
 				}
 				logTxFail(outbound, outbound->getRawLength());
 				_mgr->queueOutbound(outbound, outbound_priority, futureMillis((int)retry));
@@ -618,6 +688,7 @@ void Dispatcher::checkSend()
 				 * inherits a stale start, reporting a stall that
 				 * already ended. */
 				cad_busy_start = 0;
+				lbt_busy_start = 0;
 			}
 		}
 	}

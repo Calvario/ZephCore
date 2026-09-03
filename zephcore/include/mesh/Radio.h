@@ -81,6 +81,13 @@ public:
 	virtual uint32_t msUntilNextMaintenance() { return MAINTENANCE_IDLE; }
 	virtual int8_t getCadOffset() const { return 0; }
 	virtual void resetCadStats() {}
+	/* Last-resort unmute: step the CAD detect threshold one notch LESS
+	 * sensitive, ignoring whether adaptive CAD is enabled.  Called by the
+	 * dispatcher only after the driver's LBT has refused every transmit for
+	 * getTxStarvationDuration().  Returns false when already at the radio's
+	 * least sensitive step, which tells the caller the channel is genuinely
+	 * busy (or the radio is broken) rather than the detector mis-tuned. */
+	virtual bool cadRelaxOnTxStarvation() { return false; }
 	/* Writes a human-readable status block; returns chars written (0 = not
 	 * supported by this radio). */
 	virtual int formatCadStatus(char *buf, int cap) {

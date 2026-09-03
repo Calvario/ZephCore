@@ -1683,6 +1683,22 @@ int8_t LoRaRadioBase::pickCadProbeLevel()
 	_cad_probe_rr++;
 
 	if (!_cad_auto) {
+		/* The sweep window is ABSOLUTE, so an operating offset parked
+		 * outside it is never probed at all — measured: 49 minutes at
+		 * offset -8 produced 0 probes at -8, which left cadSafetyStep()
+		 * with no evidence and made it a no-op in precisely the
+		 * configuration it exists for (auto off + an offset that cannot
+		 * clear).
+		 *
+		 * When the operator has parked outside the window, probe where
+		 * they actually are instead: the swept curve does not contain
+		 * their operating point, so it cannot inform the hand-tuning it
+		 * was built for either.  Inside the window the sweep already
+		 * covers the operating level and is left exactly as it was. */
+		if (_cad_offset < CAD_SWEEP_MIN || _cad_offset > CAD_SWEEP_MAX) {
+			return _cad_offset;
+		}
+
 		/* Dry-run: even sweep across the observation window so the
 		 * user sees the whole FP-vs-detPeak curve in `get cad`. */
 		int span = CAD_SWEEP_MAX - CAD_SWEEP_MIN + 1;
@@ -1739,24 +1755,16 @@ void LoRaRadioBase::cadStaircaseStep()
 	if (r_op < 0) {
 		return;  /* operating level not warm yet — no basis to step */
 	}
-	int b_op = busy_rate(oi);
 	int r_up = fp_rate(oi + 1);  /* one step less sensitive */
 	int r_dn = fp_rate(oi - 1);  /* frontier, one step more sensitive */
 
-	/* Airtime protection (highest priority): if the operating level defers
-	 * too large a fraction of TX attempts — real traffic included — back off
-	 * to a less sensitive detPeak.  On a congested hilltop most of that busy
-	 * is distant traffic we'd win on capture anyway; deferring for all of it
-	 * just starves our own airtime.  Cap is `set cad.busycap` percent (0 =
-	 * off); only binds on genuinely busy channels. */
+	/* Airtime protection used to live here as the highest-priority rung.  It
+	 * has moved to cadSafetyStep(), which the callers run BEFORE this and
+	 * without the _cad_auto gate — it is a safety, not an optimisation, and
+	 * gating it meant a node whose detPeak could never clear had no way back
+	 * once the operator turned auto off.  What remains here is purely the
+	 * knee-seeking optimiser. */
 	int cap_permille = (int)_cad_busycap_pct * 10;
-	if (cap_permille && _cad_offset < cadLevelMaxEff() && b_op > cap_permille) {
-		_cad_offset++;
-		hwCadSetPeakOffset(_cad_offset);
-		LOG_INF("cad: step up -> offset %d (airtime, busy %d cap %d)",
-			(int)_cad_offset, b_op, cap_permille);
-		return;
-	}
 
 	/* Step UP (less sensitive) when the level above is markedly cleaner —
 	 * we're on the steep part of the curve, below the knee. */
@@ -1791,6 +1799,86 @@ void LoRaRadioBase::cadStaircaseStep()
 
 	/* Otherwise: at the knee (steep below, flat above) or a noisy flat
 	 * plateau — hold. */
+}
+
+bool LoRaRadioBase::cadSafetyStep()
+{
+	/* The airtime-protection rung, run unconditionally — see the constant
+	 * block in radio_common.h for why it is not gated on _cad_auto.
+	 *
+	 * This is the proactive half of the pair.  cadRelaxOnTxStarvation() only
+	 * fires once the node actually has traffic it cannot send, which on a
+	 * silent mesh may be up to flood_advert_interval away (47 h by default);
+	 * this one works off probe statistics, which accumulate whether or not
+	 * there is anything to transmit. */
+	if (_cad_offset >= cadLevelMaxEff()) {
+		return false;
+	}
+
+	int oi = _cad_offset - CAD_LEVEL_MIN;
+	if (oi < 0 || oi >= CAD_NUM_LEVELS) {
+		return false;
+	}
+
+	uint16_t probes = _cad_stats[oi].probes;
+	if (probes == 0) {
+		return false;
+	}
+
+	int b_op = (int)(((uint32_t)_cad_stats[oi].busy * 1000U) / probes);
+	int cap_permille = (int)_cad_busycap_pct * 10;
+
+	/* Unambiguous: this level trips on nearly every probe, so it cannot
+	 * clear for a transmit either.  Acts on few samples and ignores the
+	 * cap. */
+	bool pathological = probes >= CAD_SAFETY_MIN_PROBES &&
+			    b_op >= CAD_SAFETY_PATHOLOGICAL_PERMILLE;
+	/* Marginal: a real airtime-vs-capture tradeoff.  Keeps the original
+	 * evidence bar and honours `cad.busycap 0` as the operator's choice. */
+	bool over_cap = cap_permille && probes >= CAD_STEP_MIN_PROBES &&
+			b_op > cap_permille;
+
+	if (!pathological && !over_cap) {
+		return false;
+	}
+
+	_cad_offset++;
+	hwCadSetPeakOffset(_cad_offset);
+	if (pathological) {
+		LOG_WRN("cad: safety step up -> offset %d (busy %d permille over "
+			"%u probes — detector too sensitive to clear, auto=%d)",
+			(int)_cad_offset, b_op, (unsigned)probes, (int)_cad_auto);
+	} else {
+		LOG_INF("cad: step up -> offset %d (airtime, busy %d cap %d)",
+			(int)_cad_offset, b_op, cap_permille);
+	}
+	return true;
+}
+
+bool LoRaRadioBase::cadRelaxOnTxStarvation()
+{
+	/* Deliberately does NOT consult _cad_auto.  Every other mover of
+	 * _cad_offset is an optimiser and correctly stays out of the way when
+	 * the operator has taken manual control; this one exists precisely for
+	 * the case where manual control produced a node that cannot transmit,
+	 * so honouring `cad.auto off` here would disable the safety exactly
+	 * where it is needed.  It also ignores cad.busycap and the per-level
+	 * probe statistics: 120 warm probes are half an hour away, and the
+	 * caller has already established the harm directly.
+	 *
+	 * One step at a time, never a jump to base: on a genuinely congested
+	 * site the operator's sensitive setting may be almost right, and the
+	 * smallest change that restores transmission is the one to make. */
+	if (_cad_offset >= cadLevelMaxEff()) {
+		return false;
+	}
+
+	_cad_offset++;
+	hwCadSetPeakOffset(_cad_offset);
+	LOG_WRN("cad: TX starvation override -> offset %d (auto=%d) — LBT was "
+		"refusing every transmit",
+		(int)_cad_offset, (int)_cad_auto);
+	return true;
 }
 
 void LoRaRadioBase::cadMaintenance()
@@ -1845,7 +1933,10 @@ void LoRaRadioBase::cadMaintenance()
 		}
 		_cad_pending_level = INT8_MIN;
 
-		if (_cad_auto) {
+		/* Safety first, and outside the _cad_auto gate.  When it acts,
+		 * skip the optimiser this pass — it has just moved the operating
+		 * level and the three-rung window it reads is stale. */
+		if (!cadSafetyStep() && _cad_auto) {
 			cadStaircaseStep();
 		}
 	}
@@ -1983,7 +2074,7 @@ void LoRaRadioBase::cadMaintenance()
 		return;
 	}
 
-	if (_cad_auto) {
+	if (!cadSafetyStep() && _cad_auto) {
 		cadStaircaseStep();
 	}
 }
