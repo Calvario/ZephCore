@@ -148,6 +148,36 @@ being invisible.
 > busy channel the node still waits — transmitting over traffic it can hear would cause exactly the
 > collision the check exists to avoid.
 
+### A node set too sensitive can now find its own way back
+
+The safeguard above rescues a transmission that is already queued. It does not help the case where the
+listening threshold itself is set so sensitive that the node can never clear the channel at all — which
+`set cad.auto off` makes possible, and which nothing used to undo. A node in that state still receives,
+and still accepts a command telling it to fix itself, but cannot transmit the reply. In practice no
+ordinary app can complete the login it is waiting on, so a repeater on a mast is simply unreachable.
+
+Two layers now recover from it.
+
+The first watches for a node that has traffic to send and has been refused for a full minute. It relaxes
+the threshold one step regardless of whether automatic tuning is switched on, and repeats until something
+gets out. On the bench, a node parked at the most sensitive setting with every other recovery path
+deliberately disabled went from completely silent to transmitting in five minutes.
+
+The second does not wait for traffic, because a node with nothing queued would otherwise wait up to two
+days for its next scheduled advert to reveal the problem. It reads the measurements the node already
+collects and steps the threshold back when the current setting reports the channel busy on essentially
+every check — the signature of a detector that cannot clear, rather than a channel that is genuinely
+occupied. On the bench it walked a node from the most sensitive setting back to a working one in about
+half an hour, with nothing queued to send at any point.
+
+Both write the new threshold to flash, so a node that heals itself stays healed across a reboot. Both
+stop as soon as the evidence stops — neither runs to the end of the range.
+
+> [!NOTE]
+> **This means `get cad.offset` can read something you did not set.** That is the point: it records a
+> node that recovered itself. If you find a node away from where you left it, its threshold was refusing
+> every transmission at the old value.
+
 ---
 
 ## The built-in `v` contact had an unusable key on half of all nodes
@@ -310,3 +340,9 @@ picks its own moments to reboot. Companions and observers were never affected.
   times over on one repeater. It is now the packet's own airtime, the same figure received airtime has
   always used, and the "packets sent" total can no longer disagree with the flood and direct counts
   beneath it.
+- **Nodes logged filesystem errors that were not errors.** Routine checks for files that simply do not
+  exist yet — a leftover temporary file, a contacts list on a node that has never stored a contact —
+  were reported as failures by the layer underneath, one on every settings save on a repeater and four
+  on every boot on a companion. Nothing was wrong and nothing was lost, but a genuine storage fault had
+  to be spotted among them. The checks now look before they act, and a healthy node boots with a clean
+  log.

@@ -137,7 +137,15 @@ bool RepeaterDataStore::saveIdentity(const mesh::LocalIdentity& id) {
         return false;
     }
 
-    fs_unlink(tmp_path);
+    /* Guarded by fileExists() rather than unlinking blind: on the normal path
+     * the temp is absent, fs_unlink() returns -ENOENT, and Zephyr's FS layer
+     * logs that at ERR level regardless of us ignoring the return -- putting an
+     * <err> line on the happy path of every save, which is exactly the noise
+     * that makes a real filesystem error invisible.  Same guard as
+     * ZephyrDataStore::atomicWrite(). */
+    if (fileExists(tmp_path)) {
+        fs_unlink(tmp_path);
+    }
 
     struct fs_file_t file;
     fs_file_t_init(&file);
@@ -363,7 +371,15 @@ bool RepeaterDataStore::savePrefs(const NodePrefs& prefs) {
         return false;
     }
 
-    fs_unlink(tmp_path);
+    /* Guarded by fileExists() rather than unlinking blind: on the normal path
+     * the temp is absent, fs_unlink() returns -ENOENT, and Zephyr's FS layer
+     * logs that at ERR level regardless of us ignoring the return -- putting an
+     * <err> line on the happy path of every save, which is exactly the noise
+     * that makes a real filesystem error invisible.  Same guard as
+     * ZephyrDataStore::atomicWrite(). */
+    if (fileExists(tmp_path)) {
+        fs_unlink(tmp_path);
+    }
 
     struct fs_file_t file;
     fs_file_t_init(&file);

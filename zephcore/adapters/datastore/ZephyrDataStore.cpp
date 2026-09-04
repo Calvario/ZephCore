@@ -88,11 +88,32 @@ static bool atomicWriteTempFile(const char *path, AtomicWriteFn write_fn, void *
 static bool lfs_mounted;
 static bool ext_lfs_mounted;
 
-/* Check if a filesystem is mounted using fs_statvfs */
+/* Check if a filesystem is mounted (mount-list lookup, never logs) */
 static bool is_mounted(const char *mount_point)
 {
-	struct fs_statvfs stat;
-	return fs_statvfs(mount_point, &stat) == 0;
+	/* Walk the registered mount list rather than calling fs_statvfs().
+	 *
+	 * fs_statvfs() on a path that is not mounted makes Zephyr's FS layer log
+	 * "mount point not found!!" at ERR, which put an <err> line on the happy
+	 * path of every boot: on boards with no external flash (the probe can
+	 * never succeed) and, on boards that do have it, on every boot before the
+	 * deferred-init retry below mounts it.
+	 *
+	 * Deliberately NOT solved by gating the probe on
+	 * DT_NODE_EXISTS(DT_NODELABEL(qspi_lfs)): that would still log on the
+	 * deferred-init path, and it would silently stop detecting /ext on any
+	 * future board that mounts external flash under a different node label.
+	 * fs_readmount() is a pure lookup, logs nothing, and stays correct in
+	 * every one of those permutations. */
+	int index = 0;
+	const char *name = NULL;
+
+	while (fs_readmount(&index, &name) == 0) {
+		if (name != NULL && strcmp(name, mount_point) == 0) {
+			return true;
+		}
+	}
+	return false;
 }
 
 bool ZephyrDataStore::mount()
@@ -194,6 +215,19 @@ bool ZephyrDataStore::exists(const char *path) const
 
 bool ZephyrDataStore::removeFile(const char *path)
 {
+	/* Idempotent: an absent file is a successful removal.
+	 *
+	 * Guarded by fs_stat rather than unlinking blind because fs_unlink()
+	 * returns -ENOENT for a missing path and Zephyr's FS layer logs that at
+	 * ERR level regardless of us ignoring the return.  Every caller here is
+	 * best-effort cleanup of a file that usually is NOT there, so unguarded
+	 * this puts an <err> line on the happy path of every boot — exactly the
+	 * noise that makes a real filesystem error invisible. */
+	struct fs_dirent entry;
+
+	if (fs_stat(path, &entry) != 0) {
+		return true;
+	}
 	return fs_unlink(path) == 0;
 }
 
@@ -534,6 +568,16 @@ uint8_t ZephyrDataStore::takeShutdownReason()
 {
 	uint8_t code = 0;
 	size_t len = 0;
+
+	/* No marker is the NORMAL case — it exists only after a software
+	 * power-off.  Probe before opening: fs_open() on a missing path is
+	 * logged at ERR level by Zephyr's FS layer, so an unguarded read here
+	 * put a second <err> line on every clean boot. */
+	struct fs_dirent marker;
+
+	if (fs_stat(SHUTDOWN_FILE, &marker) != 0) {
+		return 0;
+	}
 
 	if (openRead(SHUTDOWN_FILE, &code, sizeof(code), len) && len >= 1) {
 		removeFile(SHUTDOWN_FILE);
@@ -1034,6 +1078,15 @@ void ZephyrDataStore::loadContacts(DataStoreHost *host)
 {
 	const char *path = contactsFile();
 
+	/* Probe first: this file does not exist until a contact is stored, and
+	 * fs_open() on a missing path is logged at ERR by Zephyr's FS layer no
+	 * matter how gracefully we handle the return.  The open below is kept as
+	 * the real error path (a file that exists but cannot be opened). */
+	if (!exists(path)) {
+		LOG_DBG("loadContacts: no contacts file found");
+		return;
+	}
+
 	struct fs_file_t file;
 	fs_file_t_init(&file);
 	int rc = fs_open(&file, path, FS_O_READ);
@@ -1182,6 +1235,14 @@ void ZephyrDataStore::saveContacts(DataStoreHost *host)
 void ZephyrDataStore::loadChannels(DataStoreHost *host)
 {
 	const char *path = channelsFile();
+
+	/* Probe first — same reason as loadContacts(): absent until a channel is
+	 * configured, and a missing-path fs_open() is logged at ERR by the FS
+	 * layer regardless of us handling it. */
+	if (!exists(path)) {
+		return;
+	}
+
 	struct fs_file_t file;
 	fs_file_t_init(&file);
 	if (fs_open(&file, path, FS_O_READ) < 0) {

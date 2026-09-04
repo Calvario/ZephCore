@@ -55,7 +55,16 @@ extern "C" bool observer_creds_save(const struct ObserverCreds *creds,
 		return false;
 	}
 
-	fs_unlink(tmp_path);
+	/* Guarded by fs_stat() rather than unlinking blind: on the normal path the
+	 * temp is absent, fs_unlink() returns -ENOENT, and Zephyr's FS layer logs
+	 * that at ERR level regardless of us ignoring the return -- putting an <err>
+	 * line on the happy path of every save.  Same guard as
+	 * ZephyrDataStore::atomicWrite(). */
+	struct fs_dirent tmp_ent;
+
+	if (fs_stat(tmp_path, &tmp_ent) == 0) {
+		fs_unlink(tmp_path);
+	}
 
 	struct fs_file_t f;
 	fs_file_t_init(&f);
