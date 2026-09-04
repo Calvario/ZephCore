@@ -55,6 +55,7 @@ MAKERS = {
     "femtofox": "Femtofox",
     "muziworks": "muzi works",
     "minewsemi": "MinewSemi",
+    "meshnology": "Meshnology",
 }
 
 # Manufacturer per device name.
@@ -98,6 +99,7 @@ MAKER_BY_DEVICE = {
     "Seeed Studio Xiao nRF54L15": "seeed",
     "Seeed Studio Xiao MG24": "seeed",
     "Seeed Studio LoRa-E5 mini": "seeed",
+    "Meshnology W12": "meshnology",
 }
 
 DESCRIPTION = (
@@ -207,6 +209,11 @@ BOARDS = [
     dict(stem="xiao_esp32c6-esp32c6-hpcore",   kind="esp32", device="Seeed Studio Xiao ESP32-C6", new=True, img="xiao_esp32c6.svg"),
     dict(stem="lilygo_tlora_c6-esp32c6-hpcore", kind="esp32", device="LilyGo T-Lora C6",           new=True, img="lilygo_tlora_c6.svg"),
     dict(stem="heltec_wifi_lora32_v43-esp32s3-procpu", kind="esp32", device="Heltec v4.3",         new=True, img="heltec_v4.svg"),
+    # MeshCore firmware has a meshnology_w12 variant but their flasher config has
+    # no W12 device and no meshnology maker, so there is nothing to fold into yet.
+    # The name follows their maker-plus-product convention, so it folds by itself
+    # if they add one. WHEN IT APPEARS: drop new=True (and own_img, if one is set).
+    dict(stem="meshnology_w12-esp32s3-procpu",       kind="esp32", device="Meshnology W12",  new=True, img="lora.svg"),
 
     # --- nRF54L15 (SWD only, download-only tile): new tile ----------------
     # The nRF54L15 has no USB peripheral, so there is no bootloader and no
