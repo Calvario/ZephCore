@@ -268,13 +268,26 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         /* Reboot into the chip's own firmware-update mode.  nRF52: the Adafruit
          * UF2 bootloader.  ESP32-S3: the ROM download mode, which is the only
          * way to get the USB port back from the CDC companion transport for
-         * esptool (see ZephyrBoard::rebootToBootloader). */
+         * esptool (see ZephyrBoard::rebootToBootloader).
+         *
+         * Everything else has no bootloader this command can reach, so it must
+         * NOT reboot.  rebootToBootloader() would just reset back into the app,
+         * dropping the node off the mesh for nothing while replying that it had
+         * gone somewhere it cannot go.  C3/C6 and classic ESP32 do not need it
+         * anyway -- they have no DWC2 controller, so USB-Serial-JTAG never
+         * loses the port and esptool resets them itself; nRF54L15/MG24/STM32WL
+         * have no USB device peripheral at all and are flashed over SWD. */
 #if defined(CONFIG_SOC_SERIES_ESP32S3)
         strcpy(reply, "OK - rebooting to ESP32 download mode");
-#else
-        strcpy(reply, "OK - rebooting to UF2 DFU");
-#endif
         scheduleReboot(REBOOT_DFU);
+#elif defined(CONFIG_SOC_SERIES_NRF52)
+        strcpy(reply, "OK - rebooting to UF2 DFU");
+        scheduleReboot(REBOOT_DFU);
+#elif defined(CONFIG_SOC_FAMILY_ESPRESSIF_ESP32)
+        strcpy(reply, "Err: no DFU mode here - esptool resets this chip itself");
+#else
+        strcpy(reply, "Err: no DFU bootloader on this chip - flash over SWD");
+#endif
     } else if (memcmp(command, "start ota", 9) == 0) {
 #if IS_ENABLED(CONFIG_ZEPHCORE_WIFI_OTA)
         /* ESP32: Start WiFi AP + HTTP OTA server (no reboot) */

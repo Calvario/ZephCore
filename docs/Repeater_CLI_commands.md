@@ -27,7 +27,7 @@ All commands are sent over USB serial (CDC-ACM). Commands sent remotely over the
 | `ver` | Firmware version and build date |
 | `board` | Board manufacturer name |
 | `reboot` | Reboot immediately |
-| `start dfu` | nRF52: reboot into the UF2 bootloader for drag-and-drop update. ESP32-S3: reboot into the ROM download mode so esptool can reach the chip |
+| `start dfu` | nRF52: reboot into the UF2 bootloader for drag-and-drop update. ESP32-S3: reboot into the ROM download mode on USB-Serial-JTAG (`303a:1001`), so ordinary `esptool write-flash` and browser flashers can reach the chip. Every other chip replies with an error and does **not** reboot — ESP32-C3/C6 and classic ESP32 never lose the port to USB OTG so esptool resets them itself, and nRF54L15/MG24/STM32WL have no USB device peripheral and are flashed over SWD |
 | `start ota` | ESP32: start WiFi AP + HTTP OTA server. nRF52: reboot into BLE OTA DFU mode |
 | `stop ota` | Stop WiFi OTA server (ESP32 only) |
 | `clkreboot` | Set clock to a fixed reference time (15 May 2024 8:50pm UTC) then reboot |

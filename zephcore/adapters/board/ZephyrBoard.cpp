@@ -45,9 +45,24 @@
  *
  * FORCE_DOWNLOAD_BOOT lives in the RTC domain, which a software system reset
  * does not clear (only a power-on reset does), so setting it and rebooting
- * brings the ROM up in download mode with USB-Serial-JTAG back on the pads.
- * That gives both `start dfu` and the Arduino-style 1200-baud touch a way to
- * hand the port back to esptool / esptool-js / the web configurator.
+ * brings the ROM up in download mode.  That gives both `start dfu` and the
+ * Arduino-style 1200-baud touch a way to hand the port back to esptool /
+ * esptool-js / the web configurator.
+ *
+ * Setting it is not enough on its own, though.  WHICH USB controller the ROM
+ * appears on is a separate mux, and it lives in the same RTC domain: Zephyr's
+ * DWC2 quirk layer claims the internal PHY for USB OTG at init
+ * (usb_wrap_ll_phy_enable_external(hw, false) -> RTC_CNTL_USB_CONF_REG
+ * SW_HW_USB_PHY_SEL=1, SW_USB_PHY_SEL=1), and those bits survive the reboot
+ * exactly like FORCE_DOWNLOAD_BOOT does.  Left alone the ROM therefore comes up
+ * on USB OTG (303a:0009), not USB-Serial-JTAG (303a:1001).  That state is still
+ * flashable -- esptool reports "USB mode: USB-OTG" and even loads the stub --
+ * but it breaks everything that expects USJ: esptool's auto-reset does nothing
+ * over ROM OTG CDC so it needs --before no-reset, and esptool-js special-cases
+ * only PID 0x1001, so browser flashers fall into a classic DTR/RTS reset path
+ * that cannot work.  Clearing SW_HW_USB_PHY_SEL hands the mux back to
+ * hardware/eFuse control, whose default routes the internal PHY to USJ -- i.e.
+ * it reproduces what a power-on reset would have left behind.
  *
  * Same register and sequence Arduino-ESP32 uses in usb_persist_restart()
  * (RESTART_BOOTLOADER).  OPTION1 carries no other bits on this SoC, but set the
@@ -426,8 +441,9 @@ void ZephyrBoard::rebootToBootloader()
 	nrf_power_gpregret_set(NRF_POWER, 0, BOOTLOADER_DFU_UF2_MAGIC);
 #endif
 #ifdef ESP32_FORCE_DOWNLOAD_BOOT
-	/* Come back up in the ROM download mode instead of the app, handing the
-	 * USB port back to USB-Serial-JTAG so esptool can reach it. */
+	/* Come back up in the ROM download mode instead of the app.  Which USB
+	 * controller it lands on is settled by the PHY mux below, after the
+	 * detach. */
 	REG_SET_BIT(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
 #endif
 	k_msleep(50);  /* Let UART/USB flush */
@@ -443,6 +459,19 @@ void ZephyrBoard::rebootToBootloader()
 	/* Clean USB disconnect before the soft reset — same reason as reboot(). */
 	usb_serial_jtag_ll_phy_enable_pad(false);
 	k_msleep(100);
+#endif
+#ifdef ESP32_FORCE_DOWNLOAD_BOOT
+	/* Hand the internal USB PHY back to USB-Serial-JTAG, so the ROM download
+	 * mode we just armed appears as 303a:1001 rather than ROM USB OTG.  See
+	 * the header comment on ESP32_FORCE_DOWNLOAD_BOOT for why this is needed
+	 * and why it has to happen HERE -- after zephcore_usbd_detach(), which
+	 * has to drop the D+ pull-up while OTG still owns the PHY, or the host
+	 * never sees a clean disconnect.
+	 *
+	 * No-op on builds that never took the PHY (repeater/observer/debug keep
+	 * USJ, so both bits are already 0). */
+	REG_CLR_BIT(RTC_CNTL_USB_CONF_REG, RTC_CNTL_SW_HW_USB_PHY_SEL);
+	REG_CLR_BIT(RTC_CNTL_USB_CONF_REG, RTC_CNTL_SW_USB_PHY_SEL);
 #endif
 	sys_reboot(SYS_REBOOT_COLD);
 }
