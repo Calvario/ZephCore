@@ -14,6 +14,8 @@
  * Vext:       GPIO36 (active-HIGH, powers OLED)
  * Button:     GPIO0
  * LED:        GPIO35
+ * GPS UART1:  TX=GPIO39, RX=GPIO38, 9600 baud (optional external module)
+ * GPS ctrl:   enable GPIO34 (active-LOW), reset GPIO42 (active-LOW)
  */
 
 #include <zephyr/dt-bindings/input/input-event-codes.h>
@@ -47,6 +49,45 @@
 		enable-gpios = <&gpio1 5 GPIO_ACTIVE_HIGH>;  /* GPIO37 = gpio1 pin 5, HIGH enables (V4/V4.3) */
 	};
 
+	/* GPS enable — GPIO34, active-LOW (Arduino MeshCore heltec_v4:
+	 * PIN_GPS_EN=34, PIN_GPS_EN_ACTIVE=LOW).  ZephCore's GPS manager drives
+	 * this via the gps-enable alias.
+	 *
+	 * GPIO33-37 are the octal-PSRAM pads on ESP32-S3 modules that carry one;
+	 * the V4 has 2 MB *quad* PSRAM, so 33/34 are free here — 35/36/37 are
+	 * already spent on LED/Vext/ADC-ctrl above, which is the same evidence. */
+	gps_en: gps-enable {
+		compatible = "gpio-leds";
+		gps_enable_pin: gps_enable {
+			gpios = <&gpio1 2 GPIO_ACTIVE_LOW>;   /* GPIO34 = gpio1 pin 2 */
+			label = "GPS Enable";
+		};
+	};
+
+	/* GPS reset — GPIO42, active-LOW (Arduino PIN_GPS_RESET=42,
+	 * PIN_GPS_RESET_ACTIVE=LOW).  Declared so the line is always driven to a
+	 * defined level rather than left floating into the module's reset input.
+	 *
+	 * Declaring gps-reset moves this board onto the manager's
+	 * HAS_T1000_GPS_CONTROL power sequence (EN -> reset -> release).  That is
+	 * safe without a VRTC pin — every VRTC/SLEEP step in that path is behind
+	 * its own #if.  Note the power-ON pulse uses the raw GPIO_OUTPUT_HIGH flag,
+	 * so on an active-LOW line it de-asserts rather than pulsing; the useful
+	 * half is power-OFF, which asserts reset (logical 1) and holds the module
+	 * down while its supply is gated. */
+	gps_rst: gps-reset {
+		compatible = "gpio-leds";
+		gps_reset_pin: gps_reset {
+			gpios = <&gpio1 10 GPIO_ACTIVE_LOW>;  /* GPIO42 = gpio1 pin 10 */
+			label = "GPS Reset";
+		};
+	};
+
+	aliases {
+		gps-enable = &gps_enable_pin;
+		gps-reset = &gps_reset_pin;
+	};
+
 	/* Button chain — same mapping as RAK4631 / WisMesh Pocket (rak4631/board.overlay). */
 	user_btn_longpress {
 		compatible = "zephyr,input-longpress";
@@ -75,6 +116,41 @@
 &lora0 {
 	dio1-gpios = <&gpio0 14 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
 	rx-boosted;
+};
+
+/* GPS on UART1 — optional external NMEA module on the pin header, wired to the
+ * same pins Arduino MeshCore uses for this board (PIN_GPS_RX=38, PIN_GPS_TX=39;
+ * Arduino names them from the MCU's point of view, so RX=38 is the MCU input).
+ * Upstream leaves uart1 disabled and gives it no pinctrl, so both are set here.
+ * GPIO38/39 are otherwise unclaimed on the V4; the console stays on usb_serial
+ * (or uart0/GPIO43-44 for companion USB builds).  9600 baud matches Arduino's
+ * default for this variant.
+ *
+ * The node is unconditional, like the V3's gnss node for its optional module:
+ * with nothing fitted the driver simply never sees a fix. */
+&pinctrl {
+	uart1_default: uart1_default {
+		group1 {
+			pinmux = <UART1_TX_GPIO39>;
+			output-high;
+		};
+
+		group2 {
+			pinmux = <UART1_RX_GPIO38>;
+			bias-pull-up;
+		};
+	};
+};
+
+&uart1 {
+	status = "okay";
+	current-speed = <9600>;
+	pinctrl-0 = <&uart1_default>;
+	pinctrl-names = "default";
+
+	gnss: gnss-nmea-generic {
+		compatible = "gnss-nmea-generic";
+	};
 };
 
 /* I2C sensors — auto-detected at runtime */
