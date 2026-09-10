@@ -1,15 +1,18 @@
 /*
- * ProMicro SX1262 — nRF52840 SuperMini + Ebyte E22-900M30S
+ * ProMicro SX1262 — nRF52840 SuperMini + SX1262 (generic; see board.conf)
  * Copyright (c) 2025 ZephCore
  *
  * SPDX-License-Identifier: MIT
  *
  * Hardware:
  * - nRF52840 (SuperMini/ProMicro form factor) with BLE 5
- * - Ebyte E22-900M30S (SX1262 + 30dB PA), TCXO, DIO2=TXEN, RXEN on P0.17
+ * - SX1262 module: E22-900M30S (30dB PA) or a bare HT-RA62 / E22-900M22S;
+ *   TCXO, DIO2=TXEN, RXEN on P0.17. TX power differs — see board.conf
  * - GPS module on UART0 (9600 baud, P0.22 RX, P0.20 TX)
  * - Battery ADC on AIN7 (P0.31), 150K+150K divider (2:1)
  * - User button on P1.00, LED on P0.15
+ * - Optional SSD1306 128x64 OLED on I2C0 @ 0x3c (SDA P1.04, SCL P0.11)
+ * - No 32.768 kHz crystal fitted — see the K32SRC_RC note in board.conf
  * - 3V3 enable on P0.13 (must be HIGH for SX1262 to function)
  */
 
@@ -30,6 +33,7 @@
 		zephyr,code-partition = &code_partition;
 		zephyr,console = &cdc_acm_uart;
 		zephyr,shell-uart = &cdc_acm_uart;
+		zephyr,display = &ssd1306;
 	};
 
 	aliases {
@@ -169,6 +173,21 @@
 	pinctrl-0 = <&i2c0_default>;
 	pinctrl-1 = <&i2c0_sleep>;
 	pinctrl-names = "default", "sleep";
+
+	/* SSD1306 OLED — optional; absent panels fail device_is_ready() and are skipped */
+	ssd1306: ssd1306@3c {
+		compatible = "solomon,ssd1306";
+		reg = <0x3c>;
+		width = <128>;
+		height = <64>;
+		segment-offset = <0>;
+		page-offset = <0>;
+		display-offset = <0>;
+		multiplex-ratio = <63>;
+		segment-remap;
+		com-invdir;
+		prechargep = <0x22>;
+	};
 
 	/* All supported environment & power sensors — auto-detected at runtime */
 	#include "../../common/sensors-i2c.dtsi"

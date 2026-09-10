@@ -1,65 +1,41 @@
 # ZephCore 1.17.5-zephcore
 
 > [!NOTE]
-> **Draft — release in progress.** Covers what is on `dev` so far. More entries will land before this ships.
-
-A Bluetooth range fix that affects every ESP32 board, GPS support on the two Heltec V4 boards, and the
-single-button confirmation prompt now works on the eight boards where it never could.
+> **Draft — release in progress.** Covers what is on `dev` so far.
 
 ---
 
 ## Bluetooth range on ESP32 boards was 9 dB down
 
-Every ESP32 board — S3, C-series and classic alike — has been advertising and connecting at 0 dBm.
-Stock Arduino MeshCore runs the same radios at +9 dBm. That is the reported "ZephCore has worse
-Bluetooth range than the official firmware" on Heltec V4, and the gap is real: 9 dB is roughly 2.8
-times the distance in free space.
-
-Nothing was misconfigured. The setting was deliberately left alone, on the understanding that the
-Espressif controller blob picked its own transmit power. It does not. Zephyr's driver hands the
-controller a default built from a chain of `CONFIG_BT_CTLR_TX_PWR_*` options, and with none of them
-set the chain fell through to its `use 0dB TX power as default` arm. Silently, with no warning at
-build time and nothing visible on the node.
-
-ESP32 boards now transmit at +9 dBm, matching stock MeshCore. That is comfortably inside the EU
-2.4 GHz 100 mW limit, and it is the one level every Espressif chip family in the tree supports, so it
-applies everywhere without per-board overrides.
+Every ESP32 board has been advertising and connecting at 0 dBm; stock MeshCore runs the same radios
+at +9 dBm. Zephyr's driver builds its default from the `CONFIG_BT_CTLR_TX_PWR_*` chain, and with none
+of them set it fell through to the 0 dB arm — silently, with nothing visible at build time or on the
+node. ESP32 boards now transmit at +9 dBm.
 
 > [!NOTE]
-> **Nothing to change on your side.** No setting, no re-pairing. Flash and the range is there.
-> nRF52, nRF54L and MG24 boards were never affected — they set their own transmit power already.
+> **Nothing to change on your side.** No setting, no re-pairing. nRF52, nRF54L and MG24 were never
+> affected — they set their own transmit power.
 
 ---
 
 ## GPS on Heltec WiFi LoRa 32 V4 and V4.3
 
-Both boards bring a GPS UART and its power-control pins out to the header, and ZephCore had no
-wiring for either. Attaching a module did nothing.
-
-They are now described the same way every other GPS board is: NMEA on UART1 at 9600 baud, with the
-enable and reset lines driven properly rather than left floating into the module. `set gps on` and
-the GPS pages behave as they do elsewhere.
+Both boards bring a GPS UART and its power pins out to the header, and ZephCore described neither, so
+attaching a module did nothing. They now match every other GPS board: NMEA on UART1 at 9600 baud, with
+enable and reset driven rather than left floating.
 
 > [!NOTE]
-> **This is for an external module.** Neither board ships with a GPS receiver — the pins are there for
-> one you add yourself. Boards with nothing attached are unaffected.
+> **For an external module.** Neither board ships with a receiver; boards with nothing attached are
+> unaffected.
 
 ---
 
 ## The confirmation prompt now works on single-button boards
 
-Shutdown, DFU and off-grid all ask you to confirm by pressing ENTER twice. On boards with one button,
-ENTER is not a tap — it is a one-second hold, produced by a long-press filter.
-
-Two one-second holds cannot fit inside a half-second window, and half a second is what the window
-was. The second hold always arrived after it had closed, so instead of confirming, it re-armed the
-prompt. Pressing again did the same thing. On these boards the three actions simply could not be
-confirmed from the screen, however many times you tried.
-
-The window is now three seconds on every board that emits ENTER through a long-press filter, which is
-what the setting's own documentation had been recommending all along. Six boards had it; eight did not.
-
-Newly fixed:
+Shutdown, DFU and off-grid confirm with two ENTER presses. On single-button boards ENTER is a
+one-second hold, and the window was half a second — so the second hold always landed too late and
+re-armed the prompt instead of confirming. The window is now three seconds on every board that emits
+ENTER through a long-press filter. Six had it; eight did not:
 
 | | |
 |---|---|
@@ -68,9 +44,7 @@ Newly fixed:
 | Heltec WiFi LoRa 32 V4.3 | LilyGo T3-S3 |
 | Meshnology W12 | TTGO T-Beam |
 
-> [!NOTE]
-> **Boards with a joystick were never affected.** The Wio Tracker L1 and GAT562 use a different menu,
-> which has always allowed three seconds. Nothing changes for them.
+Joystick boards (Wio Tracker L1, GAT562) use a different menu and were never affected.
 
 Thanks to **bisbille** for finding this and fixing the first two boards.
 
@@ -78,25 +52,39 @@ Thanks to **bisbille** for finding this and fixing the first two boards.
 
 ## Changing frequency or spreading factor now resets adaptive CAD
 
-Adaptive CAD learns a listen-before-talk threshold as an offset from a base value the chip family
-publishes per spreading factor and per bandwidth. Change SF or bandwidth and that base moves under
-the offset — but the node kept the old offset and, at the next boot, shifted it further to preserve
-the absolute threshold it used to name. Correct after a firmware table change, wrong after a preset
-change, where the base table's own step is the physics. On an LR1110 the SF7-to-SF12 step alone is
-16 counts, enough to slam the offset to its rail: too sensitive and the node defers transmitting on
-noise, or too deaf and it transmits over live receptions.
-
-`set radio`, `set freq` and the app's radio settings now perform a full `set cad.reset` whenever they
-move frequency, bandwidth or spreading factor — the learned offset and the probe statistics behind it
-both belong to the preset you just left. Coding rate is excluded; it changes airtime, not the
-threshold. `tempradio` visits its preset at that preset's own base and hands the learned offset back
-on revert, without ever writing it to flash; `get cad` shows `a:tmp` while a window is open.
+The learned CAD threshold is an offset from a per-SF, per-bandwidth base. Change the preset and the
+base moves, but the node kept the old offset — leaving it too sensitive to transmit or too deaf to
+defer. `set radio`, `set freq` and the app's radio settings now perform a full `set cad.reset` when
+frequency, bandwidth or spreading factor changes. Coding rate is excluded: it changes airtime, not the
+threshold. `tempradio` uses its preset's own base and hands the offset back on revert without writing
+flash; `get cad` shows `a:tmp` while a window is open.
 
 > [!NOTE]
-> **Nothing to change on your side.** The reset is automatic, and the node re-converges in an hour or
-> two. Reaching for `set cad.reset` by hand after a preset change is no longer necessary.
+> **Nothing to change on your side.** The reset is automatic and the node re-converges in an hour or
+> two. `set cad.reset` by hand is no longer needed after a preset change.
 
 Thanks to **Codes** for reporting it.
+
+---
+
+## ProMicro SX1262: Bluetooth dropped every few seconds, and the screen never worked
+
+The nRF52840 SuperMini has no 32.768 kHz crystal, but the board was configured as though it did — so
+the Bluetooth controller and the kernel tick ran off a floating oscillator while claiming 50 ppm
+accuracy, and the link dropped every few seconds. It now uses the calibrated internal RC at 250 ppm,
+matching stock MeshCore's settings for the same silicon. Timing that hangs off the same clock steadies
+with it, including the return to receive after a transmission — so repeats of your own message, and
+zero-hop ping replies, are no longer missed.
+
+The OLED was never described for this board at all. It is now an SSD1306 on the same I2C pins stock
+MeshCore uses, optional at runtime.
+
+> [!NOTE]
+> **Check transmit power if your module has no amplifier.** The 10 dBm default is the safe drive level
+> for an E22-900M30S. On a bare module (HT-RA62, E22-900M22S) that is your antenna power — 12 dB under
+> stock — which reads as no repeats and failed zero-hop pings. `set tx 22` once and it sticks.
+
+Thanks to **Mike's Allotment** for the report.
 
 ---
 
