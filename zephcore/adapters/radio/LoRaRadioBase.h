@@ -41,7 +41,17 @@ public:
 	 * _prefs.  Used by tempradio so the saved prefs survive intact and
 	 * concurrent savePrefs() calls don't poison flash.  clearRadioOverride()
 	 * reverts to whatever _prefs holds at that moment. */
-	void setRadioOverride(float freq, float bw, uint8_t sf, uint8_t cr);
+	/* visiting_new_preset = the override moves the radio onto a preset it
+	 * was not already running (`tempradio`), so the learned detPeak offset
+	 * does not apply there and the visit starts at that preset's own base.
+	 * Pass false when the override exists only to HOLD the radio on the
+	 * preset it is already running while _prefs move ahead of it
+	 * (freezeRadioParams, i.e. `set radio` / `set freq` + reboot): nothing
+	 * changed on air, so the offset that was learned for it keeps running
+	 * until the reboot re-reads prefs.  Either way CAD adaptation is
+	 * suspended while the override is up — see cadMaintenance(). */
+	void setRadioOverride(float freq, float bw, uint8_t sf, uint8_t cr,
+			      bool visiting_new_preset = true);
 	void clearRadioOverride();
 	bool hasRadioOverride() const { return _has_radio_override; }
 	int recvRaw(uint8_t *bytes, int sz) override;
@@ -388,6 +398,22 @@ protected:
 	CadLevelStats _cad_stats[CAD_NUM_LEVELS];
 	bool _cad_auto;                 /* staircase acts on the stats */
 	int8_t _cad_offset;             /* operating detPeak offset (levels) */
+	/* The offset in force while a temporary radio override is active, i.e.
+	 * on a preset the node is only visiting (`tempradio`, and the frozen
+	 * old preset a `set radio` leaves running until reboot).  detPeak's base
+	 * table is per-SF and per-bandwidth, so the offset learned for the
+	 * configured preset addresses a different ladder there — on the LR11xx
+	 * the SF7->SF12 base step alone is 16 counts.  Kept separate rather than
+	 * saved-and-restored so _cad_offset never moves during the visit, which
+	 * is what keeps it out of prefs: Dispatcher::maintenanceLoop() persists
+	 * any change it sees in getCadOffset(). */
+	int8_t _cad_temp_offset;
+	/* The offset the chip is actually programmed with.  Every hwCadSetPeakOffset()
+	 * goes through this; getCadOffset() deliberately does not, because that is
+	 * the value the app persists. */
+	int8_t cadEffectiveOffset() const {
+		return _has_radio_override ? _cad_temp_offset : _cad_offset;
+	}
 	uint16_t _probe_interval_s; /* 0 = CAD probing disabled; drives _measure_interval_ms */
 	uint8_t _cad_busycap_pct;       /* airtime cap: max % TX deferred (0 = off) */
 	/* A CAD_RX probe awaiting its terminal event.  _cad_pending_level is the

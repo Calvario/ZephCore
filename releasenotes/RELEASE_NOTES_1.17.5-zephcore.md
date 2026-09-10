@@ -76,6 +76,30 @@ Thanks to **bisbille** for finding this and fixing the first two boards.
 
 ---
 
+## Changing frequency or spreading factor now resets adaptive CAD
+
+Adaptive CAD learns a listen-before-talk threshold as an offset from a base value the chip family
+publishes per spreading factor and per bandwidth. Change SF or bandwidth and that base moves under
+the offset — but the node kept the old offset and, at the next boot, shifted it further to preserve
+the absolute threshold it used to name. Correct after a firmware table change, wrong after a preset
+change, where the base table's own step is the physics. On an LR1110 the SF7-to-SF12 step alone is
+16 counts, enough to slam the offset to its rail: too sensitive and the node defers transmitting on
+noise, or too deaf and it transmits over live receptions.
+
+`set radio`, `set freq` and the app's radio settings now perform a full `set cad.reset` whenever they
+move frequency, bandwidth or spreading factor — the learned offset and the probe statistics behind it
+both belong to the preset you just left. Coding rate is excluded; it changes airtime, not the
+threshold. `tempradio` visits its preset at that preset's own base and hands the learned offset back
+on revert, without ever writing it to flash; `get cad` shows `a:tmp` while a window is open.
+
+> [!NOTE]
+> **Nothing to change on your side.** The reset is automatic, and the node re-converges in an hour or
+> two. Reaching for `set cad.reset` by hand after a preset change is no longer necessary.
+
+Thanks to **Codes** for reporting it.
+
+---
+
 ## Also in this release
 
 *To be filled in as further changes land.*

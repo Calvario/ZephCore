@@ -182,6 +182,41 @@ void CommonCLI::savePrefs() {
     _callbacks->savePrefs();
 }
 
+/* Drop everything the adaptive-CAD controller has learned.
+ *
+ * Called both by `set cad.reset` and by every command that moves the radio to a
+ * different preset, because such a change invalidates all three pieces at once:
+ * detPeak's base table is per-SF and per-bandwidth, so the ladder the offset
+ * addresses is re-based under it (SF7->SF12 is 5 counts on SX126x and 16 on the
+ * LR11xx), and the per-level statistics that justified the offset describe a
+ * preset that is no longer on air.  Re-converging from the new preset's own
+ * base costs an hour or two; carrying a stale offset across can leave the node
+ * either transmitting over live receptions or unable to transmit at all.
+ *
+ * The operating offset lives in two places — _prefs->cad_offset, and _cad_offset
+ * inside the radio, which applyCadPrefs() reloads through setCadParams().
+ *
+ * preset_pending = the caller has already written the NEW freq/bw/sf/cr to
+ * _prefs but the radio is still running the OLD preset (frozen by
+ * freezeRadioParams until the reboot the caller is about to ask for).
+ * applyCadPrefs() stamps cad_base from the RUNNING radio, i.e. the preset being
+ * left, so that stamp has to be cleared again afterwards: a stale anchor in
+ * flash is precisely what makes setCadParams() re-anchor a freshly reset offset
+ * by (old_base - new_base) on the next boot, which is the bug this reset
+ * exists to avoid.  0 means "no anchor recorded", which that re-anchor
+ * deliberately treats as a no-op, and the next boot re-stamps it.
+ */
+void CommonCLI::resetCadState(bool preset_pending) {
+    _prefs->cad_offset = cliDefaults()->cad_offset;
+    _prefs->cad_base = 0;
+    _callbacks->resetCadStats();
+    _callbacks->applyCadPrefs();
+    if (preset_pending) {
+        _prefs->cad_base = 0;
+    }
+    savePrefs();
+}
+
 uint8_t CommonCLI::buildAdvertData(uint8_t node_type, uint8_t* app_data) {
     if (_prefs->advert_loc_policy == ADVERT_LOC_NONE) {
         AdvertDataBuilder builder(node_type, _prefs->node_name);
@@ -851,19 +886,12 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
              * FROM wherever the staircase had already walked detPeak, with no
              * evidence left to justify sitting there — the opposite of a reset,
              * and useless for the one job this command has (recovering after a
-             * base-table change).  The operating offset lives in two places:
-             * _prefs->cad_offset, and _cad_offset inside the radio, which
-             * applyCadPrefs() reloads through setCadParams(). */
-            _prefs->cad_offset = cliDefaults()->cad_offset;
-            /* Clear the recorded base too.  applyCadPrefs() below re-stamps it
-             * from the radio, so a reset always leaves offset and base
-             * describing the same configuration -- leaving a stale base here
-             * would make the NEXT base-table change re-anchor a freshly reset
-             * offset away from zero. */
-            _prefs->cad_base = 0;
-            _callbacks->resetCadStats();
-            _callbacks->applyCadPrefs();
-            savePrefs();
+             * base-table change).
+             *
+             * preset_pending = false: the radio is running the preset this
+             * reset is for, so the base applyCadPrefs() stamps is the right
+             * one to keep. */
+            resetCadState(false);
             snprintf(reply, CLI_REPLY_SIZE,
                      "OK - CAD probe stats cleared, detPeak offset reset to %d",
                      (int)_prefs->cad_offset);
@@ -1006,7 +1034,17 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                 _prefs->cr   = cr;
                 _callbacks->savePrefs();
                 _callbacks->freezeRadioParams(old_freq, old_bw, old_sf, old_cr);
-                strcpy(reply, "OK - reboot to apply");
+                /* Anything that moves the channel or the detPeak base table
+                 * invalidates the learned CAD offset and every statistic
+                 * behind it — see resetCadState().  Coding rate does neither
+                 * (it changes airtime, not the threshold or the band), so a
+                 * cr-only edit keeps a converged offset. */
+                if (freq != old_freq || bw != old_bw || sf != old_sf) {
+                    resetCadState(true);
+                    strcpy(reply, "OK - reboot to apply (CAD reset)");
+                } else {
+                    strcpy(reply, "OK - reboot to apply");
+                }
             } else {
                 strcpy(reply, "Error: freq 150-2500, bw 7-500, sf 5-12, cr 5-8, or default");
             }
@@ -1163,7 +1201,14 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                  * back; freeze the running radio on the old freq until reboot,
                  * mirroring the "set radio" handler above. */
                 _callbacks->freezeRadioParams(old_freq, _prefs->bw, _prefs->sf, _prefs->cr);
-                strcpy(reply, "OK - reboot to apply");
+                /* New channel, new interference: the offset and the statistics
+                 * behind it were learned somewhere else.  See resetCadState(). */
+                if (f != old_freq) {
+                    resetCadState(true);
+                    strcpy(reply, "OK - reboot to apply (CAD reset)");
+                } else {
+                    strcpy(reply, "OK - reboot to apply");
+                }
             } else {
                 strcpy(reply, "Error: range 150-2500 MHz, or default");
             }

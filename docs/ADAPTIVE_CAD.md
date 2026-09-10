@@ -237,6 +237,11 @@ Compact output (kept short so it survives a truncated LoRa reply):
 Header: `a` auto on/off · `o` operating offset · `pk` operating detPeak ·
 `b` family base · `4s` 4 symbols · `sp` RSSI burst quality · `bc` busy cap.
 
+`a:tmp` means a `tempradio` window is open: the node is on a preset it is
+only visiting, so adaptation is suspended and `o`/`pk` describe the visit
+rather than the configured preset. The learned offset is untouched and
+comes back when the window reverts.
+
 **`sp` — are the noise-floor sampler's reads independent?** The floor
 sampler takes a median of 8 RSSI reads. The chip refreshes RSSI only once
 per averaging window (~16 µs at BW 62.5, ~134 µs at BW 7.8); reads issued
@@ -324,7 +329,18 @@ a knee to resolve clearly, longer to capture day/night variation.
 | `set cad.offset <n>` | 0 | Operating offset, −8…12. Negative = more sensitive. Applied live. |
 | `set probe.interval <sec>` | 15 | Shared cadence for the noise-floor sample and the CAD probe that consumes it; 0 disables probing (and freezes auto), 10–255 otherwise. |
 | `set cad.busycap <pct>` | 15 | Faint-tolerance / airtime cap: raise detPeak once more than this % of (quiet-moment) probes trip on faint signals. Lower = reject faint/echo harder (busy backbones); 0 = off. 10–90 otherwise. |
-| `set cad.reset` | | Clear accumulated statistics (RAM only). |
+| `set cad.reset` | | Full reset: clear the statistics **and** return the offset to the family base. |
+
+A full reset also happens by itself whenever the radio moves to a different
+preset — `set radio`/`set freq` (at the moment the command is accepted, so
+the new preset boots clean), or the app's set-radio-params on a companion
+(live). Coding rate is excluded: it changes airtime, not the channel or the
+per-SF/per-bandwidth base, so a cr-only edit keeps a converged offset.
+Without this the persisted offset was re-anchored onto the new preset's base
+to preserve the absolute detPeak it named — correct after a firmware
+base-table change, badly wrong after an SF or bandwidth change, where the
+base table's own step is the physics (SF7→SF12 is 5 counts on SX126x and 16
+on LR11xx, enough to rail the offset).
 
 All settings persist in prefs and apply to every role — repeater, room
 server, and companion (companions reach the CLI via the v-contact admin

@@ -673,11 +673,6 @@ static uint16_t get_battery_mv(void)
 	return zephyr_board.getBattMilliVolts();
 }
 
-static void radio_reconfigure(void)
-{
-	lora_radio.reconfigure();
-}
-
 static mesh::ZephyrMillisecondClock ms_clock;
 static mesh::ZephyrRNG zephyr_rng;
 static mesh::SimpleMeshTables mesh_tables;
@@ -885,6 +880,24 @@ static CompanionCLICallbacks companion_cli_cbs;
 static ClientACL companion_acl;  /* unused by CommonCLI but required by constructor */
 static CommonCLI companion_cli(zephyr_board, rtc_clock, companion_acl,
 			       &companion_mesh.prefs, &companion_cli_cbs);
+
+/* Radio reconfigure, reached from the app protocol (CMD_SET_RADIO_PARAMS /
+ * CMD_SET_RADIO_TX_POWER).  Defined here rather than up with the other radio
+ * callbacks because it needs companion_cli, which needs the mesh and the
+ * datastore — same reason save_prefs_to_flash() sits below them.
+ *
+ * Unlike the CLI's `set radio`, this path applies LIVE: there is no reboot and
+ * no frozen old preset, so by the time the CAD reset runs the radio is already
+ * on the new one and the base it stamps is the right one to keep — hence
+ * preset_pending = false. */
+static void radio_reconfigure(bool preset_changed)
+{
+	lora_radio.reconfigure();
+
+	if (preset_changed) {
+		companion_cli.resetCadState(false);
+	}
+}
 
 #if defined(CONFIG_ZEPHCORE_AUTO_SHUTDOWN_MILLIVOLTS) && \
 	CONFIG_ZEPHCORE_AUTO_SHUTDOWN_MILLIVOLTS > 0

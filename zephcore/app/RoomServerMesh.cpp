@@ -903,7 +903,10 @@ void RoomServerMesh::applyTempRadioParams(float freq, float bw, uint8_t sf, uint
 void RoomServerMesh::freezeRadioParams(float freq, float bw, uint8_t sf, uint8_t cr) {
     auto& radio = getRadioDriver(_radio);
     if (!radio.hasRadioOverride()) {
-        radio.setRadioOverride(freq, bw, sf, cr);
+        /* Holds the radio on the preset it is ALREADY running while _prefs
+         * move ahead of it, so the learned CAD offset still applies — see
+         * setRadioOverride(). */
+        radio.setRadioOverride(freq, bw, sf, cr, /*visiting_new_preset=*/false);
     }
 }
 

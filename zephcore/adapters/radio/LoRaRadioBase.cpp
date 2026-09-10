@@ -53,7 +53,7 @@ LoRaRadioBase::LoRaRadioBase(const struct device *lora_dev, MainBoard &board,
 	  _sample_rssi(0), _sample_channel_quiet(false), _sample_fresh(false),
 	  _rx_entry_cyc(0),
 	  _rssi_bursts(0), _rssi_spread_sum(0), _rssi_degenerate(0),
-	  _cad_auto(false), _cad_offset(0), _probe_interval_s(0),
+	  _cad_auto(false), _cad_offset(0), _cad_temp_offset(0), _probe_interval_s(0),
 	  _cad_busycap_pct(0), _cad_pending_level(INT8_MIN),
 	  _cad_pending_deadline_ms(0),
 	  _cad_last_probe_ms(0), _cad_last_decay_ms(0),
@@ -583,7 +583,8 @@ void LoRaRadioBase::reconfigureWithParams(float freq, float bw, uint8_t sf, uint
 	reconfigure();
 }
 
-void LoRaRadioBase::setRadioOverride(float freq, float bw, uint8_t sf, uint8_t cr)
+void LoRaRadioBase::setRadioOverride(float freq, float bw, uint8_t sf, uint8_t cr,
+				     bool visiting_new_preset)
 {
 	_override_freq = freq;
 	_override_bw = bw;
@@ -591,6 +592,19 @@ void LoRaRadioBase::setRadioOverride(float freq, float bw, uint8_t sf, uint8_t c
 	_override_cr = cr;
 	_has_radio_override = true;
 	reconfigure();
+
+	/* Visit a new preset at its own base detPeak.  The learned offset belongs
+	 * to the preset it was measured on and the base table it addresses is
+	 * per-SF/per-bandwidth, so carrying it across programs a threshold nobody
+	 * measured (SF7->SF12 is 5 counts on SX126x, 16 on LR11xx).  A freeze
+	 * changes nothing on air, so it keeps the offset that is already right.
+	 *
+	 * _cad_offset is left untouched — not snapshotted — so the configured
+	 * preset gets its offset back verbatim in clearRadioOverride(), and no
+	 * visitor value can reach prefs in between.  Adaptation is suspended for
+	 * the duration; see cadMaintenance(). */
+	_cad_temp_offset = visiting_new_preset ? 0 : _cad_offset;
+	hwCadSetPeakOffset(cadEffectiveOffset());
 }
 
 void LoRaRadioBase::clearRadioOverride()
@@ -600,6 +614,7 @@ void LoRaRadioBase::clearRadioOverride()
 	}
 	_has_radio_override = false;
 	reconfigure();
+	hwCadSetPeakOffset(cadEffectiveOffset());
 }
 
 void LoRaRadioBase::startReceive()
@@ -1650,7 +1665,11 @@ void LoRaRadioBase::setCadParams(bool auto_enabled, int8_t offset,
 			       ? (uint32_t)probe_interval_s * 1000U
 			       : (uint32_t)CONFIG_ZEPHCORE_NOISE_FLOOR_INTERVAL_MS;
 
-	hwCadSetPeakOffset(_cad_offset);
+	/* Effective, not _cad_offset: applyCadPrefs() reaches here from ordinary
+	 * `set cad.*` commands, which an operator can issue while a `tempradio`
+	 * window is open.  Programming the configured offset then would put the
+	 * visited preset back on a threshold that does not belong to it. */
+	hwCadSetPeakOffset(cadEffectiveOffset());
 
 	LOG_INF("cad: auto=%d offset=%d base=%u measure_interval=%ums busycap=%u%%",
 		(int)auto_enabled, (int)offset, (unsigned)base,
@@ -1666,6 +1685,15 @@ void LoRaRadioBase::resetCadStats()
 {
 	memset(_cad_stats, 0, sizeof(_cad_stats));
 	_cad_probe_rr = 0;
+
+	/* Drop any probe still in flight with the table it belongs to.
+	 * cadMaintenance() books a verdict into whatever stats exist when it
+	 * resolves, not the ones that were current when it was armed — so a
+	 * probe left pending across reconfigure() writes an old-preset sample
+	 * into the fresh table, and across `set cad.reset` writes a pre-reset
+	 * sample into a table the operator just cleared. */
+	_cad_pending_level = INT8_MIN;
+	_cad_pending_deadline_ms = 0;
 }
 
 void LoRaRadioBase::decayCadStats()
@@ -1868,22 +1896,47 @@ bool LoRaRadioBase::cadRelaxOnTxStarvation()
 	 *
 	 * One step at a time, never a jump to base: on a genuinely congested
 	 * site the operator's sensitive setting may be almost right, and the
-	 * smallest change that restores transmission is the one to make. */
-	if (_cad_offset >= cadLevelMaxEff()) {
+	 * smallest change that restores transmission is the one to make.
+	 *
+	 * This one safety DOES run during a temporary override — unlike the
+	 * staircase, which cadMaintenance() suspends there.  A node muted for
+	 * the length of a `tempradio` window, or until the reboot a `set radio`
+	 * is waiting for, is muted for real.  It steps the visitor's offset, so
+	 * the recovery lasts exactly as long as the visit and still cannot reach
+	 * prefs: getCadOffset() keeps reporting the configured value. */
+	int8_t &off = _has_radio_override ? _cad_temp_offset : _cad_offset;
+
+	if (off >= cadLevelMaxEff()) {
 		return false;
 	}
 
-	_cad_offset++;
-	hwCadSetPeakOffset(_cad_offset);
-	LOG_WRN("cad: TX starvation override -> offset %d (auto=%d) — LBT was "
+	off++;
+	hwCadSetPeakOffset(cadEffectiveOffset());
+	LOG_WRN("cad: TX starvation override -> offset %d (auto=%d%s) — LBT was "
 		"refusing every transmit",
-		(int)_cad_offset, (int)_cad_auto);
+		(int)off, (int)_cad_auto,
+		_has_radio_override ? ", temp preset" : "");
 	return true;
 }
 
 void LoRaRadioBase::cadMaintenance()
 {
 	if (_probe_interval_s == 0) {
+		return;
+	}
+
+	/* Nothing to learn on a preset the node is only visiting: the statistics
+	 * would describe that preset, and every mover of _cad_offset below is
+	 * persisted by Dispatcher::maintenanceLoop() -> onCadOffsetChanged() ->
+	 * prefs, so letting the staircase run inside a `tempradio` window would
+	 * write a visitor's offset to flash and leave it there after the revert.
+	 * The chip runs at the visited preset's own base (setRadioOverride).
+	 *
+	 * The pending sample is dropped rather than carried: it was taken under
+	 * the other preset, and consuming it after the revert would admit a
+	 * probe on a quiet verdict that is a whole interval stale. */
+	if (_has_radio_override) {
+		_sample_fresh = false;
 		return;
 	}
 
@@ -2150,6 +2203,9 @@ int LoRaRadioBase::formatCadStatus(char *buf, int cap)
 	 * Header:  a:on o:1 pk:22(b21/4s) sp:0.9/84%(312) bc:25%
 	 *   a  auto on/off   o  offset   pk operating peak
 	 *   b  family base   4s symbols   bc busy cap
+	 *   a:tmp  a temporary radio override is running a preset the node is
+	 *      only visiting: adaptation is suspended and o/pk describe that
+	 *      visit, not the configured preset (see setRadioOverride).
 	 *   sp RSSI burst quality: mean spread in dB across the median-of-N
 	 *      reads, the share of bursts whose spread was 0, and the burst
 	 *      count.  The count is not decoration: a share without its
@@ -2190,10 +2246,12 @@ int LoRaRadioBase::formatCadStatus(char *buf, int cap)
 	 * still gets the mean and the share, which is the actual verdict. */
 	bool room_for_count = (cap >= 200);
 
+	const int eff_off = cadEffectiveOffset();
+
 	n += snprintf(buf + n, cap > n ? cap - n : 0,
 		      "a:%s o:%d pk:%d(b%u/4s) sp:%u.%u/%u%%",
-		      _cad_auto ? "on" : "off", (int)_cad_offset,
-		      (int)base + _cad_offset, base,
+		      _has_radio_override ? "tmp" : (_cad_auto ? "on" : "off"),
+		      eff_off, (int)base + eff_off, base,
 		      spread_mean10 / 10U, spread_mean10 % 10U, degen_pct);
 	if (room_for_count) {
 		/* bursts(ok reads/busy reads/abandoned bursts/dc-blocked) — the
@@ -2232,7 +2290,7 @@ int LoRaRadioBase::formatCadStatus(char *buf, int cap)
 	 * every rung printed is a real one and `pk` below is what the chip got. */
 	const int lmin = cadLevelMinEff();
 	const int lmax = cadLevelMaxEff();
-	int cur = _cad_offset;
+	int cur = eff_off;
 	if (cur < lmin) cur = lmin;
 	if (cur > lmax) cur = lmax;
 	int lo = cur - 1, hi = cur + 1;

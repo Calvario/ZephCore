@@ -2809,13 +2809,21 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 			    bw >= 7000 && bw <= 500000 &&
 			    sf >= 5 && sf <= 12 &&
 			    cr >= 5 && cr <= 8) {
+				/* Coding rate is deliberately not in this test:
+				 * it changes airtime, not the channel or the
+				 * per-SF/per-bandwidth detPeak base, so it does
+				 * not invalidate the learned CAD offset. */
+				bool preset_changed =
+					prefs.freq != (float)freq / 1000.0f ||
+					prefs.bw != (float)bw / 1000.0f ||
+					prefs.sf != sf;
 				prefs.freq = (float)freq / 1000.0f;
 				prefs.bw = (float)bw / 1000.0f;
 				prefs.sf = sf;
 				prefs.cr = cr;
 				prefs.client_repeat = repeat;
 				_store->savePrefs(prefs);
-				if (_radio_reconfig_cb) _radio_reconfig_cb();
+				if (_radio_reconfig_cb) _radio_reconfig_cb(preset_changed);
 				LOG_INF("SET_RADIO_PARAMS: client_repeat=%d", repeat);
 				sendPacketOk();
 			} else {
@@ -2832,7 +2840,7 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 			if (power >= -9 && power <= MAX_LORA_TX_POWER) {
 				prefs.tx_power_dbm = power;
 				_store->savePrefs(prefs);
-				if (_radio_reconfig_cb) _radio_reconfig_cb();
+				if (_radio_reconfig_cb) _radio_reconfig_cb(false);
 				sendPacketOk();
 			} else {
 				sendPacketError(ERR_ILLEGAL_ARG);

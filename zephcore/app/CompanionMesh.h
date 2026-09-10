@@ -85,8 +85,10 @@ typedef size_t (*WriteFrameCallback)(const uint8_t *data, size_t len);
 /* Battery millivolt read callback */
 typedef uint16_t (*GetBatteryCallback)(void);
 
-/* Radio reconfigure callback */
-typedef void (*RadioReconfigureCallback)(void);
+/* Radio reconfigure callback.  preset_changed = the channel or the modem
+ * config moved (freq/bw/sf), not just TX power — the adaptive-CAD state is
+ * tied to those and has to be reset with them (see main_companion). */
+typedef void (*RadioReconfigureCallback)(bool preset_changed);
 
 /* BLE PIN change callback */
 typedef void (*PinChangeCallback)(uint32_t new_pin);

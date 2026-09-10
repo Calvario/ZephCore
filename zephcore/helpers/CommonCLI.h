@@ -149,4 +149,11 @@ public:
 
     void handleCommand(uint32_t sender_timestamp, const char* command, char* reply);
     uint8_t buildAdvertData(uint8_t node_type, uint8_t* app_data);
+
+    /* Full adaptive-CAD reset: the learned detPeak offset, the probe statistics
+     * that justified it, and the recorded base anchor, all dropped together.
+     * Public so the companion's app-driven radio change (CMD_SET_RADIO_PARAMS,
+     * which applies live rather than at reboot) can reach the same code path
+     * instead of open-coding it.  See the definition for `preset_pending`. */
+    void resetCadState(bool preset_pending);
 };
