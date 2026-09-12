@@ -174,6 +174,34 @@
 	pinctrl-1 = <&i2c0_sleep>;
 	pinctrl-names = "default", "sleep";
 
+	/*
+	 * Required by the SSD1306 below, not an optimisation.
+	 *
+	 * The display driver flushes with i2c_burst_write_dt(): a 1-byte control
+	 * message plus the whole 1024-byte framebuffer, no STOP between. TWIM is
+	 * EasyDMA and needs one contiguous buffer, so both are copied into the
+	 * concat buffer — which defaults to 16 bytes (nordic,nrf-twim.yaml). Every
+	 * flush then fails with "(1 + 1024 > 16)" while the panel still ACKs its
+	 * whole init sequence, so the logs say the display initialised and the
+	 * screen stays dark. The binding is explicit that this property "must be
+	 * provided when interacting with devices like the SSD1306 display".
+	 *
+	 * 1088 = 1 + 1024, rounded. Nothing else on this bus needs more: the
+	 * sensors in sensors-i2c.dtsi all do short register transfers.
+	 *
+	 * Boards on the legacy "nordic,nrf-twi" driver (rak4631, gat562_30s) never
+	 * hit this — it is not EasyDMA. But nRF52840's i2c0 defaults to
+	 * "nordic,nrf-twim", which this node keeps, so this board does.
+	 * lilygo_timpulse_plus sets 257 for the same reason, sized to its 64x32.
+	 * An SH1106 (wio_tracker_l1) writes per page instead, so 1 + width is
+	 * enough there.
+	 *
+	 * Found 2026-09-12 on seeed_lr2021_evk, whose display was dark for exactly
+	 * this reason. This board's OLED was only described in the 1.17.5 draft, and this
+	 * fix has NOT been confirmed on hardware here — no panel to hand.
+	 */
+	zephyr,concat-buf-size = <1088>;
+
 	/* SSD1306 OLED — optional; absent panels fail device_is_ready() and are skipped */
 	ssd1306: ssd1306@3c {
 		compatible = "solomon,ssd1306";

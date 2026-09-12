@@ -79,12 +79,55 @@ zero-hop ping replies, are no longer missed.
 The OLED was never described for this board at all. It is now an SSD1306 on the same I2C pins stock
 MeshCore uses, optional at runtime.
 
+That display also needed a second fix, found while bringing up the LR2021 EVK below, which had the
+identical fault. On these Nordic chips the screen is redrawn in one large transfer, and the driver
+needs somewhere to assemble it; the space reserved for that defaults to 16 bytes, far short of the
+1025 a 128x64 screen needs. The panel answered every setup command and then never drew anything —
+which looks exactly like a broken display rather than a misconfigured one. Both boards now reserve
+enough.
+
+> [!NOTE]
+> **The ProMicro half of this is unconfirmed on hardware.** The fault was identified from the LR2021
+> EVK's logs and the fix is the same single line, but nobody here has a ProMicro with a screen
+> attached to check. If yours has an OLED, we would like to hear either way.
+
 > [!NOTE]
 > **Check transmit power if your module has no amplifier.** The 10 dBm default is the safe drive level
 > for an E22-900M30S. On a bare module (HT-RA62, E22-900M22S) that is your antenna power — 12 dB under
 > stock — which reads as no repeats and failed zero-hop pings. `set tx 22` once and it sticks.
 
 Thanks to **Mike's Allotment** for the report.
+
+---
+
+## New board: Semtech LR2021 LoRa Plus Evaluation Kit
+
+The **Semtech LR2021 LoRa Plus EVK** is now supported — Seeed's kit built around Semtech's
+fourth-generation LoRa transceiver. It is three boards stacked: a XIAO nRF54L15 for the processor, the
+LoRa Plus expansion board for the display, buttons, Grove ports and antenna sockets, and a Wio-LR2021
+radio module. Companion and repeater builds are both provided, and the 128x64 OLED and the expansion
+board's user button work as they do on any other screen-equipped board.
+
+Build it with `seeed_lr2021_evk/nrf54l15/cpuapp`. It is a separate board from the plain **XIAO
+nRF54L15**, which is the same processor on a Wio-SX1262 carrier — the two are wired differently and
+the firmware is not interchangeable.
+
+> [!IMPORTANT]
+> **Two things on the hardware to check before first power-on.** The small two-pin **IDCC** header
+> feeds power to the radio module; if its jumper is missing the radio is simply unpowered and looks
+> dead. And the radio module connects to the board's SMA sockets through **U.FL pigtails you fit
+> yourself** — connect the sub-GHz (LF) one before transmitting. Transmitting at full power into an
+> unconnected antenna port can damage the amplifier.
+
+> [!NOTE]
+> **This board can only be flashed with SWD.** The nRF54L15 has no USB hardware, so there is no
+> drag-and-drop UF2 and no update over a cable. The expansion board's USB-C socket reaches a SAMD11
+> debug bridge, which is enough on its own — no separate probe needed — and the same socket carries the
+> console at 115200 baud. The firmware is published as a `.hex` file, and the Mesh America configurator
+> lists the board as a download rather than offering to flash it.
+
+The kit's 2.4 GHz antenna port is not used. MeshCore is a sub-GHz protocol, so only the LF port carries
+traffic.
 
 ---
 

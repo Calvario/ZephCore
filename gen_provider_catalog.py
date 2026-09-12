@@ -226,6 +226,11 @@ BOARDS = [
     # USB cable is enough (openocd/pyocd) -- still not a browser flash flow.
     dict(stem="xiao_nrf54l15-nrf54l15-cpuapp", kind="nrf54l",
          device="Seeed Studio Xiao nRF54L15", new=True, img="lora.svg"),
+    # Same XIAO nRF54L15 host and the same CMSIS-DAP story, but a different kit:
+    # the Semtech LoRa Plus expansion board with a Wio-LR2021 module. Separate
+    # tile because the radio and the whole D0..D10 wiring differ.
+    dict(stem="seeed_lr2021_evk-nrf54l15-cpuapp", kind="nrf54l",
+         device="Semtech LR2021 LoRa Plus EVK", new=True, img="lora.svg"),
 
     # --- SWD-only ARM boards (download-only tiles): new tiles -------------
     # Same shape as the nRF54L entries: no USB device peripheral means no

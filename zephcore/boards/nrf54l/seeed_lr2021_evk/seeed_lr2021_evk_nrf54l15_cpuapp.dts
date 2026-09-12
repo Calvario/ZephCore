@@ -1,0 +1,480 @@
+/*
+ * Semtech LR2021 LoRa Plus Evaluation Kit (Seeed SKU 100039980)
+ * Copyright (c) 2026 ZephCore
+ * SPDX-License-Identifier: MIT
+ *
+ * Three boards in a XIAO-socket sandwich, not one board:
+ *
+ *   Seeed XIAO nRF54L15          — the MCU
+ *   LoRa Plus Expansion Board V2a — OLED, buttons, Grove, SMA, SWD, USB-C
+ *   Wio-LR2021 module            — LR2021WIO1XDCS, 868/915 MHz, switchless
+ *
+ * Both modules plug into the same expansion board and share ONE set of D0..D10
+ * nets. There is no bus mux: whatever the MCU drives on D0..D10 reaches the
+ * radio module directly.
+ *
+ * Verified 2026-09-12 against primary sources, all kept in
+ * devdocs/seeed_lr2021_evk/ — the Wio-LR2021 module schematic (e769v02a), the
+ * expansion board schematic (e758v03a), the XIAO nRF54L15 schematic, and Seeed's
+ * wiki pin table. Every control-pin assignment below is independently confirmed
+ * by Semtech's own devicetree for this kit (github.com/Lora-net/usp_zephyr,
+ * boards/shields/semtech_wio_lr20xx/), saved alongside those.
+ *
+ * XIAO connector map (Seeed wiki table / Zephyr seeed_xiao_connector.dtsi):
+ *   D0  P1.04  LR2021 IRQ (chip DIO8)   D8  P2.01  SPI SCK  (spi00)
+ *   D1  P1.05  LR2021 BUSY              D9  P2.04  SPI MISO (spi00)
+ *   D2  P1.06  LR2021 NRESET            D10 P2.02  SPI MOSI (spi00)
+ *   D3  P1.07  LR2021 NSS
+ *   D4  P1.10  I2C SDA (i2c22) — OLED + 2x Grove
+ *   D5  P1.11  I2C SCL (i2c22) — OLED + 2x Grove
+ *   D6  P2.08  LR2021 DIO7  / uart21 TX / Grove UART   (see the note at uart21)
+ *   D7  P2.07  LR2021 DIO11 / uart21 RX / Grove UART
+ *   D14 P2.09  K1 user button on the expansion board
+ *
+ * Hardware prerequisites, both easy to miss and both present as "the firmware
+ * does not work":
+ *   - The IDCC 2-pin header carries SYS_3V3 to the radio module. Open jumper =
+ *     the LR2021 has no power and probes as a dead chip. A shunt (or an ammeter)
+ *     must be fitted.
+ *   - The module terminates in U.FL; the SMA connectors are on the expansion
+ *     board. Both are joined by pigtails the user fits. Do NOT transmit with the
+ *     LF pigtail missing — +22 dBm into an open is a PA-damage risk, not just
+ *     poor range.
+ *
+ * Flashing: the nRF54L15 has no USB peripheral, so there is no UF2 and no DFU.
+ * The expansion board's USB-C goes to a SAMD11 presenting CMSIS-DAP for SWD
+ * flashing plus a USB CDC for the uart20 console. Published artifact is
+ * zephyr.hex, which links at RRAM base 0x0.
+ */
+
+/dts-v1/;
+#include <nordic/nrf54l15_cpuapp.dtsi>
+#include "seeed_lr2021_evk-pinctrl.dtsi"
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+
+/ {
+	model = "Semtech LR2021 LoRa Plus EVK";
+	compatible = "seeed,lr2021-evk";
+
+	chosen {
+		zephyr,sram = &cpuapp_sram;
+		zephyr,flash = &cpuapp_rram;
+		zephyr,flash-controller = &rram_controller;
+		zephyr,console = &uart20;
+		zephyr,shell-uart = &uart20;
+		zephyr,display = &ssd1306;
+		/*
+		 * Deliberately no zephyr,code-partition: there is no bootloader
+		 * on this kit, so the image links at RRAM base 0x0 and the ROM
+		 * starts it directly. Same choice as me25ls02, the other
+		 * bootloader-less nRF54L15 board here.
+		 */
+	};
+
+	aliases {
+		lora0 = &lora;
+		led0 = &user_led;
+		sw0 = &user_button;
+	};
+
+	leds {
+		compatible = "gpio-leds";
+
+		/* On the XIAO core board itself, not the expansion board. */
+		user_led: led_0 {
+			gpios = <&gpio2 0 GPIO_ACTIVE_HIGH>;
+			label = "User LED";
+		};
+	};
+
+	buttons: buttons {
+		compatible = "gpio-keys";
+
+		/*
+		 * K1 on the expansion board: a bare TS-1111A between P2.09 and
+		 * GND, no external pull-up and no hardware debounce, so the
+		 * internal pull-up is required.
+		 *
+		 * The XIAO core board carries a second user button of its own on
+		 * P0.00 (also pull-up / active low). It is deliberately left out:
+		 * the UI is built around one button, and K1 is the one the user
+		 * can actually reach with the boards stacked.
+		 */
+		user_button: button_0 {
+			gpios = <&gpio2 9 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			zephyr,code = <INPUT_KEY_0>;
+			label = "User Button";
+		};
+	};
+
+	/* Button chain — same mapping as RAK4631 (rak4631/board.overlay). */
+	user_btn_longpress {
+		compatible = "zephyr,input-longpress";
+		input = <&buttons>;
+		input-codes = <INPUT_KEY_0>;
+		short-codes = <INPUT_KEY_A>;
+		long-codes = <INPUT_KEY_ENTER>;
+		long-delay-ms = <1000>;
+	};
+
+	page_btn_multitap {
+		compatible = "zephcore,input-multi-tap";
+		input-codes = <INPUT_KEY_A>;
+		tap-codes = <INPUT_KEY_1 INPUT_KEY_LEFT>;
+		tap-delay-ms = <400>;
+	};
+
+	/*
+	 * XIAO 2.4 GHz antenna switch. P2.05 (RF_SW_CTL) and P2.03 (RF_SW_PWR)
+	 * gate the switch between the on-board chip antenna and the U.FL, per the
+	 * XIAO schematic. Both are boot-on regulators exactly as upstream Zephyr
+	 * declares them — drop either and the SoC's own BLE radio comes up deaf.
+	 * Nothing to do with the LR2021, which has its own separate front end.
+	 */
+	rfsw_ctl: rfsw-ctl {
+		compatible = "regulator-fixed";
+		regulator-name = "rfsw-ctl";
+		enable-gpios = <&gpio2 5 GPIO_ACTIVE_LOW>;
+		regulator-boot-on;
+	};
+
+	rfsw_pwr: rfsw-pwr {
+		compatible = "regulator-fixed";
+		regulator-name = "rfsw-pwr";
+		enable-gpios = <&gpio2 3 GPIO_ACTIVE_HIGH>;
+		regulator-boot-on;
+	};
+
+	/*
+	 * Battery sense rail enable (P1.15), gating the 2:1 divider on P1.14/AIN7.
+	 * Declared so the rail is powered, but the ADC channel is NOT enabled —
+	 * see the block at the bottom of this file for why.
+	 */
+	vbat_pwr: vbat-pwr {
+		compatible = "regulator-fixed";
+		regulator-name = "vbat";
+		enable-gpios = <&gpio1 15 GPIO_ACTIVE_HIGH>;
+		regulator-boot-on;
+	};
+};
+
+&cpuapp_sram {
+	status = "okay";
+};
+
+&grtc {
+	owned-channels = <0 1 2 3 4 5 6 7 8 9 10 11>;
+	/* Channels 7-11 reserved for Zero Latency IRQs, 3-4 for FLPR */
+	child-owned-channels = <3 4 7 8 9 10 11>;
+	status = "okay";
+};
+
+&clock {
+	status = "okay";
+};
+
+/* Console: P1.09 TX / P1.08 RX -> SAMD11 CMSIS-DAP bridge -> USB CDC */
+&uart20 {
+	status = "okay";
+	current-speed = <115200>;
+	pinctrl-0 = <&uart20_default>;
+	pinctrl-1 = <&uart20_sleep>;
+	pinctrl-names = "default", "sleep";
+};
+
+/*
+ * uart21 (D6/D7) stays disabled, and this is not just tidiness.
+ *
+ * A6_D6_TX and A7_D7_RX are simultaneously the nRF54L15's uart21, the Grove
+ * UART connector J6, SWD header pins 7/8, AND — through the Wio-LR2021
+ * castellation — the radio's DIO7 and DIO11. Driving them as a UART toggles two
+ * of the LR2021's DIOs. We configure neither DIO for anything (DIO8 is the IRQ,
+ * and the front end is switchless so no DIO drives an RF switch), so it is very
+ * likely harmless, but the coupling is real and Semtech's own sample overlay
+ * disables this UART too. If a Grove UART peripheral is ever wanted here, that
+ * needs bench verification, not reasoning.
+ */
+&uart21 {
+	status = "disabled";
+};
+
+/*
+ * i2c22 = D4/D5. Free for the OLED and the two I2C Grove ports because the
+ * Wio-LR2021 module leaves its pins 5/6 (SDA/SCL) unconnected — see the
+ * castellation table in devdocs/seeed_lr2021_evk/HARDWARE.md.
+ *
+ * Note this is the opposite of boards/nrf54l/xiao_nrf54l15, where the same bus
+ * is disabled because that carrier puts the SX1262's NSS and RXEN on D4/D5.
+ */
+&i2c22 {
+	status = "okay";
+	pinctrl-0 = <&i2c22_default>;
+	pinctrl-1 = <&i2c22_sleep>;
+	pinctrl-names = "default", "sleep";
+	clock-frequency = <400000>;
+
+	/*
+	 * Mandatory for the SSD1306, not an optimisation.
+	 *
+	 * The display driver flushes the framebuffer with i2c_burst_write_dt():
+	 * a 1-byte control message and the 1024-byte framebuffer, with no STOP
+	 * between them. TWIM is EasyDMA and needs one contiguous buffer, so the
+	 * driver copies both into the concat buffer — which defaults to 16 bytes
+	 * (nordic,nrf-twim.yaml). Every flush then fails with
+	 *   "Need to use the internal driver buffer but its size is insufficient
+	 *    (1 + 1024 > 16)"
+	 * and the panel stays dark even though it ACKed its whole init sequence.
+	 * That is exactly what happened on the first hardware bring-up, 2026-09-12.
+	 * The binding says as much: this property "must be provided when
+	 * interacting with devices like the SSD1306 display".
+	 *
+	 * 1088 = 1 + 1024, rounded up. Semtech's shield overlay and Zephyr's own
+	 * ssd1306 shield both use 4096, but this is a static RAM buffer and the
+	 * companion build already sits near 88% of RAM, so it is sized to the
+	 * largest transfer this bus can actually carry: nothing else lives on
+	 * i2c22 but the panel and the (unpopulated) Grove ports.
+	 *
+	 * Boards driving an SSD1306 over "nordic,nrf-twi" — the legacy non-DMA
+	 * driver, which is what rak4631 and gat562_30s use — do not need this.
+	 * Boards on "nordic,nrf-twim" do, sized to their own panel:
+	 * lilygo_timpulse_plus sets 257 for its 64x32 (1 + 256).
+	 */
+	zephyr,concat-buf-size = <1088>;
+
+	/*
+	 * ZJY-2864KSWPG01, an SSD1306-class 128x64 panel strapped for IIC.
+	 *
+	 * Address: JP1 on the expansion board selects it via the panel's D/C pin
+	 * (R24 4.7K to GND / R26 0R / R25 4.7K to VDD). 0x3C is the default
+	 * strap and what Semtech's own overlay uses; 0x3D is the jumpered
+	 * alternative. If the display stays blank, probe the bus before
+	 * suspecting anything else.
+	 *
+	 * No reset-gpios: /RES is an RC power-on reset on the expansion board
+	 * (R21 4.7K to VDD, C7 10uF to GND, D2 1N4148 discharge), not an MCU pin.
+	 *
+	 * Panel settings mirror Semtech's shield overlay for this exact kit.
+	 */
+	ssd1306: ssd1306@3c {
+		compatible = "solomon,ssd1306";
+		reg = <0x3c>;
+		width = <128>;
+		height = <64>;
+		segment-offset = <0>;
+		page-offset = <0>;
+		display-offset = <0>;
+		multiplex-ratio = <63>;
+		segment-remap;
+		com-invdir;
+		inversion-on;
+		prechargep = <0x22>;
+	};
+};
+
+/* i2c30 (D11/D12) reaches only the Arduino headers, and the XIAO's own IMU,
+ * which ZephCore does not use. Left off to save the bus and its power. */
+&i2c30 {
+	status = "disabled";
+};
+
+&spi00 {
+	status = "okay";
+	cs-gpios = <&gpio1 7 GPIO_ACTIVE_LOW>;	/* D3 = P1.07 NSS */
+	pinctrl-0 = <&spi00_default>;
+	pinctrl-1 = <&spi00_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	/*
+	 * Nordic's 0xFF idle byte is read by the LR2021 as a bogus opcode, so the
+	 * bus must idle at the chip's NOP. Both promicro_lr2021 and Semtech's own
+	 * shield overlay do this; it is not optional.
+	 */
+	overrun-character = <0x00>;
+
+	/*
+	 * SoC default rx-delay is kept. xiao_nrf54l15 — the same MCU board, same
+	 * spi00, 8 MHz — keeps it and works; me25ls02 deletes it because
+	 * MinewSemi's sample does. Neither has been A/B'd on hardware, so each
+	 * board keeps its own known-good configuration rather than guessing.
+	 */
+
+	lora: lora@0 {
+		compatible = "semtech,lr2021";
+		reg = <0>;
+		/*
+		 * 8 MHz, matching meshtracker_x1 and promicro_lr2021. Semtech's
+		 * shield runs this module at 16 MHz — worth trying later as its
+		 * own change, once the link is known good at 8.
+		 */
+		spi-max-frequency = <8000000>;
+
+		reset-gpios = <&gpio1 6 GPIO_ACTIVE_LOW>;			/* D2 = P1.06 */
+		busy-gpios = <&gpio1 5 GPIO_ACTIVE_HIGH>;			/* D1 = P1.05 */
+		dio1-gpios = <&gpio1 4 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;	/* D0 = P1.04 */
+		irq-dio = <8>;	/* chip DIO8 -> module pin 1 -> D0 */
+
+		/*
+		 * NO TCXO. The module schematic shows crystal Q1, 32 MHz, across
+		 * XTA/XTB, and the chip's dual-function VTCXO/VNTC pin is wired
+		 * as the NTC thermistor input (R3 + ERT-JZER104F), not as a TCXO
+		 * supply. So tcxo-voltage-mv stays at its default of 0.
+		 *
+		 * Semtech's own shield overlay declares a 1.8 V TCXO here, which
+		 * contradicts their schematic. The schematic wins. This is worth
+		 * being firm about: declaring a TCXO on a module that has none
+		 * WEDGED the chip on promicro_lr2021 — HF-XOSC startup hang, BUSY
+		 * stuck, BLE never came up.
+		 */
+
+		rx-boosted;
+
+		/*
+		 * Switchless dual-band front end: RFO_LF and RFO_HF each drive
+		 * their own fixed matching network straight to their own U.FL.
+		 * There is no antenna switch and no DIO driving one, so every
+		 * rfswitch-* mask stays at its default of 0 — same as
+		 * meshtracker_x1. ANT_LF is the sub-GHz SMA; the HF/2.4 GHz path
+		 * is simply unused by MeshCore.
+		 */
+	};
+};
+
+&gpio0 {
+	status = "okay";
+};
+
+&gpio1 {
+	status = "okay";
+};
+
+&gpio2 {
+	status = "okay";
+};
+
+/* P1.x and P2.x — the LR2021 IRQ (P1.04) and the K1 button (P2.09). */
+&gpiote20 {
+	status = "okay";
+};
+
+&gpiote30 {
+	status = "okay";
+};
+
+&regulators {
+	status = "okay";
+};
+
+&vregmain {
+	status = "okay";
+	regulator-initial-mode = <NRF5X_REG_MODE_DCDC>;
+};
+
+/*
+ * The XIAO fits its own 32 MHz and 32.768 kHz crystals and uses the SoC's
+ * internal load capacitors for both. Values copied verbatim from upstream
+ * Zephyr's xiao_nrf54l15 DTS.
+ *
+ * LFXO being real is the notable difference from me25ls02, which has no
+ * 32.768 kHz crystal and runs the calibrated RC at +/-250 ppm. This board gets
+ * crystal accuracy, so it is the better of the two for anything timing-sensitive.
+ *
+ * Unrelated, and worth not confusing: the Wio-LR2021 module has no 32 kHz
+ * crystal of its own, so the LR2021's internal LF clock is RC. We never use the
+ * chip's LF timer, so that does not matter here — but it is the reason not to
+ * copy an LF-XOSC setting onto the radio node from another board.
+ */
+&lfxo {
+	load-capacitors = "internal";
+	load-capacitance-femtofarad = <16000>;
+	status = "okay";
+};
+
+&hfxo {
+	load-capacitors = "internal";
+	load-capacitance-femtofarad = <16000>;
+	status = "okay";
+};
+
+&radio {
+	status = "okay";
+};
+
+&temp {
+	status = "okay";
+};
+
+/* Default Nordic RRAM map, then re-carved below for ZephCore. */
+#include <vendor/nordic/nrf54l15_cpuapp_partition.dtsi>
+
+/*
+ * RRAM layout (1524 KB total, 0x17D000).
+ *
+ * No bootloader: the application starts at 0x0 and the linker is given the
+ * whole RRAM, so slot0/slot1 are meaningless here and are deleted to keep
+ * anyone from assuming a DFU layout that does not exist. Layout matches
+ * me25ls02, the other bootloader-less nRF54L15 board.
+ *
+ *   0x000000 - 0x14E000  (1336 KB)  application (links from 0x0)
+ *   0x14E000 - 0x165000  (92 KB)    LittleFS: identity, prefs, contacts,
+ *                                   channels, BLE bonds
+ *   0x165000 - 0x17D000  (96 KB)    unused tail
+ */
+/delete-node/ &slot0_partition;
+/delete-node/ &slot1_partition;
+/delete-node/ &storage_partition;
+
+&cpuapp_rram {
+	partitions {
+		lfs_partition: partition@14e000 {
+			compatible = "zephyr,mapped-partition";
+			label = "lfs";
+			reg = <0x14E000 0x17000>;
+		};
+	};
+};
+
+/* LittleFS auto-mount — standard /lfs mount point */
+#include "../../common/filesystem.dtsi"
+
+/*
+ * Battery voltage — NOT enabled, deliberately. Same reasoning as
+ * boards/nrf54l/xiao_nrf54l15/board.overlay, which shares this hardware.
+ *
+ * The divider is there (2:1 into P1.14/AIN7, gated by vbat_pwr above), but
+ * ZephyrBoard computes `mV = raw * vbat-mv-multiplier / 4096`, so the multiplier
+ * has to encode the ADC's full-scale voltage — and the nRF54L15 SAADC is not the
+ * nRF52 part we have that number for. Its internal reference is 0.9 V, not
+ * 0.6 V, and DS v1.0 section 8.18.7 states the single-ended range as
+ * "+/- 0.5*VREF/GAIN" while the saturation condition two lines later implies a
+ * full span of VREF/GAIN. Those two readings differ by a factor of two, and
+ * getting it wrong by 2x means a healthy pack reports as flat.
+ *
+ * To finish this: enable the block below on a board with a known cell voltage,
+ * read `raw`, and solve for the multiplier. With gain 1/4 and the 0.9 V
+ * reference the full scale is either 3.6 V (multiplier 7200 for the 2:1
+ * divider) or 1.8 V (multiplier 3600). One measurement settles it — and it
+ * settles it for the XIAO board too.
+ *
+ *	&adc {
+ *		status = "okay";
+ *
+ *		#address-cells = <1>;
+ *		#size-cells = <0>;
+ *
+ *		channel@7 {
+ *			reg = <7>;
+ *			zephyr,gain = "ADC_GAIN_1_4";
+ *			zephyr,reference = "ADC_REF_INTERNAL";
+ *			zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+ *			zephyr,input-positive = <NRF_SAADC_AIN7>;
+ *			zephyr,resolution = <12>;
+ *		};
+ *	};
+ *
+ *	/ {
+ *		zephyr,user {
+ *			io-channels = <&adc 7>;
+ *			vbat-mv-multiplier = <7200>;
+ *		};
+ *	};
+ */

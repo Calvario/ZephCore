@@ -143,11 +143,20 @@ revision.
 |----------------------|------------------------------------------------------------------------|-----------------|
 | XIAO nRF54L15        | `west build -b xiao_nrf54l15/nrf54l15/cpuapp zephcore --no-sysbuild` | `west flash`    |
 | MinewSemi ME25LS02   | `west build -b me25ls02/nrf54l15/cpuapp zephcore --no-sysbuild`      | SWD (`west flash`) |
+| Semtech LR2021 LoRa Plus EVK | `west build -b seeed_lr2021_evk/nrf54l15/cpuapp zephcore --no-sysbuild` | `west flash`    |
 
 Requires J-Link or CMSIS-DAP (built into XIAO board via SAMD11 bridge).
 The `--no-sysbuild` flag is required (no MCUboot support yet).
 
-The SoC has no USB peripheral at all, so neither board has a UF2 or DFU path — `zephyr.hex`
+The LR2021 EVK is the Seeed/Semtech kit (SKU 100039980): a XIAO nRF54L15 plus the
+LoRa Plus Expansion Board plus a Wio-LR2021 module, all in XIAO sockets sharing one
+set of D0..D10 nets. It is a distinct board from `xiao_nrf54l15` above, which is the
+same MCU on a Wio-SX1262 carrier with incompatible wiring. Two hardware gotchas
+before first boot: the **IDCC jumper** must be fitted or the radio has no power, and
+the **LF U.FL pigtail** must be connected before transmitting. The board's `.dts`
+header carries the full pin map and the reasoning behind each choice.
+
+The SoC has no USB peripheral at all, so none of these boards has a UF2 or DFU path — `zephyr.hex`
 links at RRAM base 0x0 and is the complete image, written over SWD. On the ME25LS02's MX25LE02
 carrier the USB-C port is a CH340x UART bridge (console only), so it needs an external probe.
 

@@ -43,6 +43,7 @@ Linux_boards=(
 nRF54L_boards=(
     me25ls02/nrf54l15/cpuapp
     xiao_nrf54l15/nrf54l15/cpuapp
+    seeed_lr2021_evk/nrf54l15/cpuapp
 )
 
 # SWD-only ARM platforms. Neither SoC has a USB device peripheral, so there is
