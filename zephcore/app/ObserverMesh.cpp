@@ -470,9 +470,11 @@ bool ObserverMesh::handleCLI(const char *command, char *reply, int reply_size)
 			} else {
 				bw = (float)atof(val);
 			}
-			/* Lower bound 7 kHz mirrors loadPrefs()'s validator — see the freq
-			 * case above for why the CLI must not accept what it will reject. */
-			if (bw >= 7.0f && bw <= 500.0f) {
+			/* Bounds mirror loadPrefs()'s validator — see the freq
+			 * case above for why the CLI must not accept what it will reject.
+			 * Shared definition in NodePrefs.h; the upper bound is 1000 on
+			 * LR2021 builds, which are the only ones with the wide set. */
+			if (bw >= ZC_RADIO_BW_MIN_KHZ && bw <= ZC_RADIO_BW_MAX_KHZ) {
 				_prefs.bw = bw;
 				_store->savePrefs(_prefs);
 				((LoRaRadioBase *)_radio)->reconfigureWithParams(

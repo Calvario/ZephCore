@@ -131,6 +131,57 @@ traffic.
 
 ---
 
+## LR2021 boards can now use the 2.4 GHz band
+
+The LR2021 has two radio front ends — the sub-GHz one everything has always used, and a second covering
+1.9–2.5 GHz. ZephCore only ever drove the first. Setting a 2.4 GHz frequency was accepted and then
+quietly transmitted down the sub-GHz path into a sub-GHz antenna, which radiates essentially nothing.
+
+The band is now chosen automatically from the frequency. At or above 1500 MHz the driver switches to the
+high-band amplifier, the high-band receive path and high-band calibration; below it, nothing changes from
+before. The amplifier settings come from Semtech's own published measurements for each path.
+
+Transmit power follows the band, because the two paths have different ceilings: **+22 dBm below
+1500 MHz, +12 dBm above it.** A node carrying a sub-GHz power setting into the 2.4 GHz band is turned
+down to 12 rather than being asked for something the hardware cannot do.
+
+The wider channels that 2.4 GHz LoRa normally runs on — 203, 406, 812 and 1000 kHz — are available too,
+on LR2021 boards only. Type either the round number or the exact one. Every other radio ZephCore supports
+silently falls back to 125 kHz when handed a channel width it does not implement, so those boards still
+stop at 500 and say so.
+
+> [!IMPORTANT]
+> **This is a separate network, not a bridge.** Both ends of a link must be on the same band; a 2.4 GHz
+> node cannot hear sub-GHz traffic or be heard by it. Range is also far shorter than sub-GHz at the same
+> power. Treat it as something to experiment with rather than a drop-in upgrade.
+
+> [!NOTE]
+> **Connect the right antenna.** On the LR2021 LoRa Plus EVK the two bands leave through different
+> sockets — 2.4 GHz uses the HF port. On a board with only a sub-GHz antenna, 2.4 GHz has nowhere to go.
+
+A first attempt at this shipped with the setters widened but the *loaders* left alone, so a 2.4 GHz
+frequency was accepted, saved, and then thrown away on the next boot — the node came back on factory
+defaults. The accepted ranges now live in one place shared by the USB CLI, the phone app's protocol,
+the observer CLI and both preference loaders, so a setting that is accepted is a setting that survives
+a reboot.
+
+> [!NOTE]
+> **1625 kHz is not an LR2021 bandwidth.** Some apps list it alongside the 2.4 GHz channel widths
+> because it exists on older Semtech 2.4 GHz parts. This chip stops at 1000 kHz, so picking 1625 is
+> refused rather than quietly run at something else.
+
+> [!NOTE]
+> **"Client repeat" stays sub-GHz.** That option is restricted to 433, 869.495 and 918 MHz for
+> regulatory reasons, so turning it on while tuned to 2.4 GHz is refused. Ordinary companion and
+> repeater operation is unaffected.
+
+> [!NOTE]
+> **Not yet tested on air.** The band switching follows Semtech's reference implementation and the
+> amplifier tables are their published measurements, but no 2.4 GHz link has been run here yet. Reports
+> welcome.
+
+---
+
 ## Also in this release
 
 *To be filled in as further changes land.*

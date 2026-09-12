@@ -28,6 +28,9 @@
 #include "wifi_ota.h"
 #endif
 
+/* Radio parameter ranges come from NodePrefs.h so the CLI, the BLE companion
+ * protocol and the prefs loader cannot drift apart. */
+
 LOG_MODULE_REGISTER(zephcore_cli, CONFIG_ZEPHCORE_DATASTORE_LOG_LEVEL);
 
 // Helper: robust atoi
@@ -428,12 +431,12 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         uint8_t sf = num > 2 ? atoi(parts[2]) : 0;
         uint8_t cr = num > 3 ? atoi(parts[3]) : 0;
         int temp_timeout_mins = num > 4 ? atoi(parts[4]) : 0;
-        if (freq >= 150.0f && freq <= 2500.0f && sf >= 5 && sf <= 12 &&
-            cr >= 5 && cr <= 8 && bw >= 7.0f && bw <= 500.0f && temp_timeout_mins > 0) {
+        if (freq >= ZC_RADIO_FREQ_MIN_MHZ && freq <= ZC_RADIO_FREQ_MAX_MHZ && sf >= 5 && sf <= 12 &&
+            cr >= 5 && cr <= 8 && bw >= ZC_RADIO_BW_MIN_KHZ && bw <= ZC_RADIO_BW_MAX_KHZ && temp_timeout_mins > 0) {
             _callbacks->applyTempRadioParams(freq, bw, sf, cr, temp_timeout_mins);
             snprintf(reply, CLI_REPLY_SIZE, "OK - temp params for %d mins", temp_timeout_mins);
         } else {
-            strcpy(reply, "Error: freq 150-2500, bw 7-500, sf 5-12, cr 5-8, timeout>0");
+            snprintf(reply, CLI_REPLY_SIZE, "Error: freq 150-2500, bw %s, sf 5-12, cr 5-8, timeout>0", ZC_RADIO_BW_RANGE_STR);
         }
     } else if (memcmp(command, "password ", 9) == 0) {
         StrHelper::strzcpy(_prefs->password, &command[9], sizeof(_prefs->password));
@@ -1017,8 +1020,8 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
             float bw = want_def ? cliDefaults()->bw : (num > 1 ? strtof(parts[1], nullptr) : 0.0f);
             uint8_t sf = want_def ? cliDefaults()->sf : (num > 2 ? (uint8_t)atoi(parts[2]) : 0);
             uint8_t cr = want_def ? cliDefaults()->cr : (num > 3 ? (uint8_t)atoi(parts[3]) : 0);
-            if (freq >= 150.0f && freq <= 2500.0f && sf >= 5 && sf <= 12 &&
-                cr >= 5 && cr <= 8 && bw >= 7.0f && bw <= 500.0f) {
+            if (freq >= ZC_RADIO_FREQ_MIN_MHZ && freq <= ZC_RADIO_FREQ_MAX_MHZ && sf >= 5 && sf <= 12 &&
+                cr >= 5 && cr <= 8 && bw >= ZC_RADIO_BW_MIN_KHZ && bw <= ZC_RADIO_BW_MAX_KHZ) {
                 /* Snapshot old params, then mutate _prefs and save so later
                  * savePrefs() calls (set af, set name, ...) don't clobber
                  * the new values with stale RAM. Freeze the running radio on

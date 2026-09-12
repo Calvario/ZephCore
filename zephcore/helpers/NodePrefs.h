@@ -16,6 +16,38 @@
  * and this header is C++; see the note there. */
 #include "led_gate.h"
 
+/* ── Accepted radio parameter ranges ──────────────────────────────────
+ *
+ * One definition, used by everything that accepts or validates a radio
+ * preset: the USB CLI, the BLE companion protocol, the observer CLI, and the
+ * load-time sanity checks in both datastores.
+ *
+ * It lives here because these ranges were previously copy-pasted into six
+ * places and drifted. That drift was not theoretical: when 2.4 GHz support
+ * landed, the setters were widened and the *loaders* were not, so a node
+ * accepted `set freq 2450`, saved it, and then silently reverted to factory
+ * defaults on the next boot because the load-time guard still capped at
+ * 960 MHz. A setter must never accept what the loader will throw away.
+ *
+ * FREQ spans both LR2021 RF paths — the sub-GHz one (150-960 MHz) and the
+ * high band (1.9-2.5 GHz). Boards whose radio cannot reach the high band are
+ * limited by their own driver, not by this range.
+ *
+ * BW_MAX is the one value that is per-build. Only the LR2021 implements the
+ * wide 203/406/812/1000 kHz set; every other driver here maps an unknown
+ * bandwidth to 125 kHz instead of refusing it, so accepting 812 on those
+ * boards would put a node on a channel width it never reported. */
+#define ZC_RADIO_FREQ_MIN_MHZ   150.0f
+#define ZC_RADIO_FREQ_MAX_MHZ   2500.0f
+#define ZC_RADIO_BW_MIN_KHZ     7.0f
+#ifdef CONFIG_ZEPHCORE_RADIO_LR2021
+  #define ZC_RADIO_BW_MAX_KHZ   1000.0f
+  #define ZC_RADIO_BW_RANGE_STR "7-1000"
+#else
+  #define ZC_RADIO_BW_MAX_KHZ   500.0f
+  #define ZC_RADIO_BW_RANGE_STR "7-500"
+#endif
+
 #define TELEM_MODE_DENY            0
 #define TELEM_MODE_ALLOW_FLAGS     1
 #define TELEM_MODE_ALLOW_ALL       2

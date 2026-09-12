@@ -91,19 +91,77 @@
 		compatible = "gpio-keys";
 
 		/*
+		 * POLLED, not interrupt-driven, and this is forced by the SoC.
+		 *
+		 * On the nRF54L15 only P0 and P1 have a GPIOTE instance behind
+		 * them — `nrf54l_05_10_15.dtsi` gives gpio0 `gpiote30` and gpio1
+		 * `gpiote20`, and gpio2 gets nothing. The nRF GPIO driver turns
+		 * that into a hard refusal: `gpio_nrfx_pin_interrupt_configure()`
+		 * opens with `if (!use_gpiote(cfg)) return -ENOTSUP;`. So no pin
+		 * on P2 can raise a GPIO interrupt, `gpio_keys_init()` fails on
+		 * it, and the button is simply dead.
+		 *
+		 * K1 is hardwired to D14 = P2.09 on the expansion board (the XIAO
+		 * schematic labels the pin "P2.09/D14"), so it cannot be moved.
+		 * Polling is the only way to use it, and `debounce-interval-ms`
+		 * doubles as the poll period in this mode. 30 ms costs ~33 short
+		 * wakes a second — nothing beside continuous LoRa RX — and sits
+		 * far inside the 400 ms multi-tap window and 1 s long-press hold.
+		 *
+		 * Cost us the first bring-up: display worked, buttons did not.
+		 *
+		 * Nothing else on this board is affected. The LR2021 IRQ is on
+		 * P1.04 (gpiote20, and proven working), and the other P2 pins here
+		 * are either outputs (LED P2.00, rfsw P2.03/P2.05) or owned by
+		 * pinctrl (spi00 on P2.01/02/04) — none of which need GPIOTE.
+		 *
+		 * Both buttons live in this one node, so both are polled. That
+		 * costs nothing extra — the driver walks every key from a single
+		 * work item — and it keeps one `input` phandle for the long-press
+		 * filter below, which takes exactly one.
+		 */
+		polling-mode;
+		debounce-interval-ms = <30>;
+
+		/*
 		 * K1 on the expansion board: a bare TS-1111A between P2.09 and
 		 * GND, no external pull-up and no hardware debounce, so the
 		 * internal pull-up is required.
 		 *
-		 * The XIAO core board carries a second user button of its own on
-		 * P0.00 (also pull-up / active low). It is deliberately left out:
-		 * the UI is built around one button, and K1 is the one the user
-		 * can actually reach with the boards stacked.
+		 * Both ends of this net are confirmed against the schematics —
+		 * expansion board socket pin 25 carries K1_USER_PB and is
+		 * labelled D14, and the XIAO's test-point table on sheet 5 reads
+		 * "D14 TP16 -> P2.09". But note HOW it gets there: D11..D15 are
+		 * not part of the XIAO's soldered castellation. They reach the
+		 * core board through test pads that the expansion board touches
+		 * with pogo pins ("2x 1x4 Pogo Pins" on the schematic). That is a
+		 * contact interface, and a XIAO that is not fully seated reads
+		 * exactly like a button nobody is pressing: the internal pull-up
+		 * holds the pin high forever.
 		 */
 		user_button: button_0 {
 			gpios = <&gpio2 9 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 			zephyr,code = <INPUT_KEY_0>;
-			label = "User Button";
+			label = "K1 (expansion board)";
+		};
+
+		/*
+		 * The XIAO core board's own USR button, P0.00 — a normally
+		 * soldered part with no pogo-pin interface in the way, which
+		 * makes it the one that works regardless of how the stack is
+		 * seated. Same key code as K1, so either drives the UI and the
+		 * user never has to care which they pressed.
+		 *
+		 * It sits on gpio0/gpiote30 and so could be interrupt-driven,
+		 * but polling-mode is a property of the whole gpio-keys node.
+		 * Splitting it into a second node to save 33 short wakes a second
+		 * would also need a second long-press filter, which is not worth
+		 * it next to continuous LoRa RX.
+		 */
+		xiao_button: button_1 {
+			gpios = <&gpio0 0 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			zephyr,code = <INPUT_KEY_0>;
+			label = "USR (XIAO core board)";
 		};
 	};
 

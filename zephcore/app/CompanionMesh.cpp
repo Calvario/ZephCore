@@ -2805,8 +2805,14 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 			// If repeat requested, validate frequency against allowed bands
 			if (repeat && !isValidClientRepeatFreq(freq)) {
 				sendPacketError(ERR_ILLEGAL_ARG);
-			} else if (freq >= 150000 && freq <= 2500000 &&
-			    bw >= 7000 && bw <= 500000 &&
+			/* freq arrives in kHz, bw in Hz. Same limits as the USB
+			 * CLI and the prefs loader — see NodePrefs.h. Accepting
+			 * here what loadPrefs() later rejects is how a 2.4 GHz
+			 * setting used to vanish on reboot. */
+			} else if (freq >= (uint32_t)(ZC_RADIO_FREQ_MIN_MHZ * 1000.0f) &&
+			    freq <= (uint32_t)(ZC_RADIO_FREQ_MAX_MHZ * 1000.0f) &&
+			    bw >= (uint32_t)(ZC_RADIO_BW_MIN_KHZ * 1000.0f) &&
+			    bw <= (uint32_t)(ZC_RADIO_BW_MAX_KHZ * 1000.0f) &&
 			    sf >= 5 && sf <= 12 &&
 			    cr >= 5 && cr <= 8) {
 				/* Coding rate is deliberately not in this test:

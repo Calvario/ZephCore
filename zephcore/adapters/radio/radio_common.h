@@ -213,6 +213,14 @@ static inline uint32_t bandwidth_to_hz(enum lora_signal_bandwidth bw)
 	case BW_125_KHZ: return 125000;
 	case BW_250_KHZ: return 250000;
 	case BW_500_KHZ: return 500000;
+	/* The wide set — 2.4 GHz territory, LR2021 only today. These return the
+	 * chip's TRUE bandwidths, not the enum's round names: airtime and the
+	 * noise-floor clamp both hang off this number, so 203 must not be
+	 * reported as 200. */
+	case BW_200_KHZ:  return 203000;
+	case BW_400_KHZ:  return 406000;
+	case BW_800_KHZ:  return 812000;
+	case BW_1000_KHZ: return 1000000;
 	default:         return 125000;
 	}
 }
@@ -231,6 +239,18 @@ static inline enum lora_signal_bandwidth bw_khz_to_enum(uint16_t bw_khz)
 	case 125: return BW_125_KHZ;
 	case 250: return BW_250_KHZ;
 	case 500: return BW_500_KHZ;
+	/* Wide bandwidths, accepted under both spellings: the round name people
+	 * type and the chip's true value they may read off a datasheet. Both
+	 * select the same modem setting.
+	 *
+	 * Only the LR2021 implements these; every other driver here falls back
+	 * to 125 kHz for an unmapped enum, which would be a silent mismatch.
+	 * That is why the CLI only accepts a bandwidth above 500 on an LR2021
+	 * build — see the bw range check in CommonCLI.cpp. */
+	case 200: case 203:  return BW_200_KHZ;
+	case 400: case 406:  return BW_400_KHZ;
+	case 800: case 812:  return BW_800_KHZ;
+	case 1000:           return BW_1000_KHZ;
 	default:  return BW_125_KHZ;
 	}
 }
@@ -264,6 +284,10 @@ static inline int16_t noise_floor_min_dbm(uint16_t bw_khz)
 	case 125: return -123;   /* 10*log10(125000) = 51.0 */
 	case 250: return -120;   /* 10*log10(250000) = 54.0 */
 	case 500: return -117;   /* 10*log10(500000) = 57.0 */
+	case 200: case 203:  return -121;  /* 10*log10(203000)  = 53.1 */
+	case 400: case 406:  return -118;  /* 10*log10(406000)  = 56.1 */
+	case 800: case 812:  return -115;  /* 10*log10(812000)  = 59.1 */
+	case 1000:           return -114;  /* 10*log10(1000000) = 60.0 */
 	default:  return -123;   /* matches bw_khz_to_enum's 125 kHz fallback */
 	}
 }

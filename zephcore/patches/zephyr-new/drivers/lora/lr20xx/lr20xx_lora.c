@@ -273,6 +273,13 @@ static lr20xx_radio_lora_bw_t bw_enum_to_lr20xx(enum lora_signal_bandwidth bw)
 	case BW_125_KHZ: return LR20XX_RADIO_LORA_BW_125;
 	case BW_250_KHZ: return LR20XX_RADIO_LORA_BW_250;
 	case BW_500_KHZ: return LR20XX_RADIO_LORA_BW_500;
+	/* The wide set. Nothing in the sub-GHz plans reaches these, but they are
+	 * the ordinary bandwidths for 2.4 GHz LoRa — 203/406/812 are the
+	 * SX128x-compatible steps, which is what other 2.4 GHz gear speaks. */
+	case BW_200_KHZ:  return LR20XX_RADIO_LORA_BW_203;
+	case BW_400_KHZ:  return LR20XX_RADIO_LORA_BW_406;
+	case BW_800_KHZ:  return LR20XX_RADIO_LORA_BW_812;
+	case BW_1000_KHZ: return LR20XX_RADIO_LORA_BW_1000;
 	default:         return LR20XX_RADIO_LORA_BW_125;
 	}
 }
@@ -327,6 +334,13 @@ static float bw_enum_to_khz(enum lora_signal_bandwidth bw)
 	case BW_125_KHZ: return 125.0f;
 	case BW_250_KHZ: return 250.0f;
 	case BW_500_KHZ: return 500.0f;
+	/* Real chip bandwidths, not the enum's round names — these feed the LDRO
+	 * symbol-time test and the airtime maths, so they have to be the values
+	 * the modem actually runs at (DS Table: 203, 406, 812, 1000 kHz). */
+	case BW_200_KHZ:  return 203.0f;
+	case BW_400_KHZ:  return 406.0f;
+	case BW_800_KHZ:  return 812.0f;
+	case BW_1000_KHZ: return 1000.0f;
 	default:         return 125.0f;
 	}
 }
@@ -496,14 +510,118 @@ BUILD_ASSERT(ARRAY_SIZE(pa_lf_table) ==
 	     "PA LF table must span [LR20XX_LF_MIN_PWR, LR20XX_LF_MAX_PWR] "
 	     "exactly — an off-by-one here silently mis-sets every power level");
 
+/* ── PA power lookup table (HF / 2.4 GHz + S-band) ────────────────────
+ *
+ * Semtech's LR20XX_PA_HF_CFG_TABLE from the same header, indexed -17..+12 dBm.
+ * Transcribed mechanically, and cross-checked against the independently
+ * published `tx-power-cfg-hf` in Semtech's Wio-LR2021 shield overlay
+ * (usp_zephyr, measured @2445 MHz) — the two agree entry for entry.
+ *
+ * Field reuse is Semtech's, not ours: on the HF path `pa_duty_cycle` goes to
+ * pa_hf_duty_cycle, and `pa_lf_slices` carries the LF PA's "unused" default of
+ * 7 (DS §7.4.1). pa_lf_duty_cycle takes its own unused default of 6. */
+#define LR20XX_HF_MIN_PWR (-17)
+#define LR20XX_HF_MAX_PWR 12
+
+static const struct lr20xx_pa_pwr_entry pa_hf_table[] = {
+	{  -39, 29, 7 }, /* -17 dBm */
+	{  -39, 16, 7 }, /* -16 dBm */
+	{  -35, 19, 7 }, /* -15 dBm */
+	{  -32, 19, 7 }, /* -14 dBm */
+	{  -29, 19, 7 }, /* -13 dBm */
+	{  -27, 16, 7 }, /* -12 dBm */
+	{  -24, 17, 7 }, /* -11 dBm */
+	{  -22, 16, 7 }, /* -10 dBm */
+	{  -19, 18, 7 }, /*  -9 dBm */
+	{  -17, 16, 7 }, /*  -8 dBm */
+	{  -14, 21, 7 }, /*  -7 dBm */
+	{  -12, 18, 7 }, /*  -6 dBm */
+	{   -7, 30, 7 }, /*  -5 dBm */
+	{   -8, 16, 7 }, /*  -4 dBm */
+	{   -5, 24, 7 }, /*  -3 dBm */
+	{   -2, 27, 7 }, /*  -2 dBm */
+	{    1, 29, 7 }, /*  -1 dBm */
+	{    4, 30, 7 }, /*   0 dBm */
+	{    6, 30, 7 }, /*   1 dBm */
+	{    7, 28, 7 }, /*   2 dBm */
+	{    8, 25, 7 }, /*   3 dBm */
+	{   10, 25, 7 }, /*   4 dBm */
+	{   15, 31, 7 }, /*   5 dBm */
+	{   16, 30, 7 }, /*   6 dBm */
+	{   18, 30, 7 }, /*   7 dBm */
+	{   21, 31, 7 }, /*   8 dBm */
+	{   22, 30, 7 }, /*   9 dBm */
+	{   24, 30, 7 }, /*  10 dBm */
+	{   24, 26, 7 }, /*  11 dBm */
+	{   24, 16, 7 }, /*  12 dBm */
+};
+
+BUILD_ASSERT(ARRAY_SIZE(pa_hf_table) ==
+		     (size_t)(LR20XX_HF_MAX_PWR - LR20XX_HF_MIN_PWR + 1),
+	     "PA HF table must span [LR20XX_HF_MIN_PWR, LR20XX_HF_MAX_PWR] "
+	     "exactly — an off-by-one here silently mis-sets every power level");
+
 /* DS §7.4.1: "Only values from 16-31 are authorized… If the HF PA is not used,
  * set the parameter to 16 (default)."  Semtech's BSP writes 16 here too. */
 #define LR20XX_PA_HF_DUTY_CYCLE_UNUSED 16
 
-static void lr20xx_get_pa_cfg_for_power(int8_t power_dbm,
+/* Unused-LF defaults, for when the HF PA is the one driving.  Same source. */
+#define LR20XX_PA_LF_DUTY_CYCLE_UNUSED 6
+#define LR20XX_PA_LF_SLICES_UNUSED     7
+
+/* Which of the chip's two RF paths a frequency belongs to.
+ *
+ * 1.5 GHz is Semtech's own split, taken from ral_lr20xx_bsp.c, which uses the
+ * identical test in get_tx_cfg and get_rx_cfg.  It sits in the dead zone
+ * between the LF path (150-960 MHz) and the HF path (1.9-2.5 GHz), so the exact
+ * value never has to be argued about — anything a board can legally tune to
+ * lands unambiguously on one side. */
+#define LR20XX_HF_BAND_THRESHOLD_HZ 1500000000U
+
+static inline bool lr20xx_freq_is_hf(uint32_t freq_hz)
+{
+	return freq_hz >= LR20XX_HF_BAND_THRESHOLD_HZ;
+}
+
+static inline lr20xx_radio_common_rx_path_t lr20xx_rx_path_for(uint32_t freq_hz)
+{
+	return lr20xx_freq_is_hf(freq_hz) ? LR20XX_RADIO_COMMON_RX_PATH_HF
+					  : LR20XX_RADIO_COMMON_RX_PATH_LF;
+}
+
+/* Build the PA configuration for a power level on whichever path the frequency
+ * selects.  Mirrors ral_lr20xx_bsp_get_tx_cfg(): band first, then clamp to that
+ * band's own limits, then index that band's own table.
+ *
+ * The clamp matters as much as the table.  The two paths have different
+ * ceilings — +22 dBm on LF, +12 dBm on HF — so a node carrying the sub-GHz
+ * default of 22 into the 2.4 GHz band must be pulled down to 12 rather than
+ * indexed off the end of the HF table. */
+static void lr20xx_get_pa_cfg_for_power(int8_t power_dbm, uint32_t freq_hz,
 					lr20xx_radio_common_pa_cfg_t *pa,
 					int8_t *half_power_out)
 {
+	if (lr20xx_freq_is_hf(freq_hz)) {
+		if (power_dbm < LR20XX_HF_MIN_PWR) {
+			power_dbm = LR20XX_HF_MIN_PWR;
+		}
+		if (power_dbm > LR20XX_HF_MAX_PWR) {
+			power_dbm = LR20XX_HF_MAX_PWR;
+		}
+
+		const struct lr20xx_pa_pwr_entry *e =
+			&pa_hf_table[power_dbm - LR20XX_HF_MIN_PWR];
+
+		pa->pa_sel           = LR20XX_RADIO_COMMON_PA_SEL_HF;
+		pa->pa_lf_mode       = LR20XX_RADIO_COMMON_PA_LF_MODE_FSM;
+		pa->pa_lf_duty_cycle = LR20XX_PA_LF_DUTY_CYCLE_UNUSED;
+		pa->pa_lf_slices     = e->pa_lf_slices;
+		pa->pa_hf_duty_cycle = e->pa_duty_cycle;
+
+		*half_power_out = e->half_power;
+		return;
+	}
+
 	if (power_dbm < LR20XX_LF_MIN_PWR) {
 		power_dbm = LR20XX_LF_MIN_PWR;
 	}
@@ -720,13 +838,12 @@ static lr20xx_status_t lr20xx_calibrate_front_end(void *ctx, uint32_t freq_hz)
 	 * the CMD_PERR observed across exactly this call, with a clean error
 	 * word and the chip in STBY_RC (so not a mode violation). Zeroed slots
 	 * are documented as no-ops (DS §6.4.2). */
+	const lr20xx_radio_common_rx_path_t cal_path =
+		lr20xx_rx_path_for(freq_hz);
 	lr20xx_radio_common_front_end_calibration_value_t fe_cal[3] = {
-		{ .rx_path = LR20XX_RADIO_COMMON_RX_PATH_LF,
-		  .frequency_in_hertz = first },
-		{ .rx_path = LR20XX_RADIO_COMMON_RX_PATH_LF,
-		  .frequency_in_hertz = second },
-		{ .rx_path = LR20XX_RADIO_COMMON_RX_PATH_LF,
-		  .frequency_in_hertz = 0 },
+		{ .rx_path = cal_path, .frequency_in_hertz = first },
+		{ .rx_path = cal_path, .frequency_in_hertz = second },
+		{ .rx_path = cal_path, .frequency_in_hertz = 0 },
 	};
 
 	for (int i = 0; i < LR20XX_MAX_CAL_ATTEMPTS; i++) {
@@ -913,9 +1030,13 @@ static void lr20xx_apply_modem_config(struct lr20xx_data *data,
 	CHECK_CMD(ctx, "set_rf_freq");
 
 	/* Always configure the RX path after setting frequency
-	 * (reference does this on every set_rf_freq call). */
+	 * (reference does this on every set_rf_freq call).
+	 *
+	 * The path follows the frequency: ral_lr20xx_bsp_get_rx_cfg() picks HF
+	 * at or above 1.5 GHz and LF below.  Getting this wrong is not subtle —
+	 * receiving 2.4 GHz down the sub-GHz path is simply deaf. */
 	rc = lr20xx_radio_common_set_rx_path(
-		ctx, LR20XX_RADIO_COMMON_RX_PATH_LF,
+		ctx, lr20xx_rx_path_for(mc->frequency),
 		data->rx_boost_enabled
 			? LR20XX_RADIO_COMMON_RX_PATH_BOOST_MODE_7
 			: LR20XX_RADIO_COMMON_RX_PATH_BOOST_MODE_NONE);
@@ -963,12 +1084,14 @@ static void lr20xx_apply_modem_config(struct lr20xx_data *data,
 	CHECK_CMD(ctx, "set_syncword");
 
 	if (tx_mode) {
-		/* PA config + TX params from Semtech's reference LF table.
+		/* PA config + TX params from Semtech's reference tables, picked
+		 * per band from the frequency just programmed above.
 		 * DS §7.4.3: SetPaConfig must precede SetTxParams. */
 		lr20xx_radio_common_pa_cfg_t pa;
 		int8_t half_power;
 
-		lr20xx_get_pa_cfg_for_power(mc->tx_power, &pa, &half_power);
+		lr20xx_get_pa_cfg_for_power(mc->tx_power, mc->frequency,
+					    &pa, &half_power);
 		rc = lr20xx_radio_common_set_pa_cfg(ctx, &pa);
 		LOG_DBG("modem_cfg: set_pa_cfg(sel=%d mode=%d duty=%d slices=%d hf_duty=%d)=%d",
 			pa.pa_sel, pa.pa_lf_mode, pa.pa_lf_duty_cycle,
@@ -1081,7 +1204,7 @@ static void lr20xx_recalibrate_locked(struct lr20xx_data *data)
 	 * for the same reason.  One command. */
 	if (data->rx_boost_enabled) {
 		lr20xx_radio_common_set_rx_path(
-			ctx, LR20XX_RADIO_COMMON_RX_PATH_LF,
+			ctx, lr20xx_rx_path_for(data->modem_cfg.frequency),
 			LR20XX_RADIO_COMMON_RX_PATH_BOOST_MODE_7);
 		data->rx_boost_applied = true;
 	}
@@ -3055,8 +3178,12 @@ void lr20xx_set_rx_boost(const struct device *dev, bool enable)
 
 	if (data->in_rx_mode && data->configured) {
 		k_mutex_lock(&data->spi_mutex, K_FOREVER);
+		/* Keep the band: SetRxPath carries both, so re-sending it with
+		 * a hardcoded LF would quietly drop a 2.4 GHz node onto the
+		 * sub-GHz path the moment `set rx.boost` was toggled. */
 		lr20xx_radio_common_set_rx_path(
-			&data->hal_ctx, LR20XX_RADIO_COMMON_RX_PATH_LF,
+			&data->hal_ctx,
+			lr20xx_rx_path_for(data->modem_cfg.frequency),
 			enable ? LR20XX_RADIO_COMMON_RX_PATH_BOOST_MODE_7
 			       : LR20XX_RADIO_COMMON_RX_PATH_BOOST_MODE_NONE);
 		data->rx_boost_applied = enable;

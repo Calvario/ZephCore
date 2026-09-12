@@ -320,9 +320,9 @@ bool RepeaterDataStore::loadPrefs(NodePrefs& prefs) {
             prefs.node_name, (double)prefs.freq, prefs.sf, (double)prefs.bw, prefs.tx_power_dbm);
 
     /* Validate radio params - use defaults if garbage */
-    if (prefs.freq < 300.0f || prefs.freq > 1000.0f ||
+    if (prefs.freq < ZC_RADIO_FREQ_MIN_MHZ || prefs.freq > ZC_RADIO_FREQ_MAX_MHZ ||
         prefs.sf < 5 || prefs.sf > 12 ||
-        prefs.bw < 7.0f || prefs.bw > 500.0f) {
+        prefs.bw < ZC_RADIO_BW_MIN_KHZ || prefs.bw > ZC_RADIO_BW_MAX_KHZ) {
         LOG_WRN("Invalid radio params in prefs, using defaults: freq=%.3f sf=%u bw=%.1f",
                 (double)prefs.freq, prefs.sf, (double)prefs.bw);
         prefs.freq = 869.618f;

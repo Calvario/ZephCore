@@ -497,9 +497,12 @@ bool ZephyrDataStore::prefsLookLikeArduino() const
 	memcpy(&freq, &buf[56], sizeof(float));
 	sf = buf[60];
 	memcpy(&bw, &buf[64], sizeof(float));
-	return (freq < 300.0f || freq > 960.0f ||
+	/* The Arduino misread lands at freq≈0 and sf≤1, so the sf test is what
+	 * actually catches it — the frequency range can safely span both RF
+	 * bands without weakening the detection. */
+	return (freq < ZC_RADIO_FREQ_MIN_MHZ || freq > ZC_RADIO_FREQ_MAX_MHZ ||
 	        sf < 5 || sf > 12 ||
-	        bw < 6.0f || bw > 510.0f);
+	        bw < ZC_RADIO_BW_MIN_KHZ || bw > ZC_RADIO_BW_MAX_KHZ);
 }
 
 /* Returns true if the old file-based BLE bonds file exists.
@@ -648,9 +651,9 @@ void ZephyrDataStore::loadPrefs(NodePrefs &prefs)
 	 * outside the physical RF ranges below.  Revert to the caller's defaults
 	 * so the radio starts on the correct channel and the user can pair via
 	 * BLE and reconfigure. */
-	if (prefs.freq < 300.0f || prefs.freq > 960.0f ||
+	if (prefs.freq < ZC_RADIO_FREQ_MIN_MHZ || prefs.freq > ZC_RADIO_FREQ_MAX_MHZ ||
 	    prefs.sf < 5 || prefs.sf > 12 ||
-	    prefs.bw < 6.0f || prefs.bw > 510.0f) {
+	    prefs.bw < ZC_RADIO_BW_MIN_KHZ || prefs.bw > ZC_RADIO_BW_MAX_KHZ) {
 		LOG_WRN("loadPrefs: radio params out of range "
 			"(freq=%.1f sf=%d bw=%.1f) — ignoring prefs (incompatible format?)",
 			(double)prefs.freq, (int)prefs.sf, (double)prefs.bw);
