@@ -23,6 +23,7 @@ nRF_boards=(
     promicro_sx1262
     heltec_t114
     heltec_t096
+    heltec_t1
     gat562_30s
     muziworks_r1neo
 )

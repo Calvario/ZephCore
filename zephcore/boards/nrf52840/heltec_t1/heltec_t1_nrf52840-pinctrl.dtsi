@@ -1,0 +1,96 @@
+/*
+ * Heltec Mesh Node T1 pin control definitions
+ * Copyright (c) 2026 ZephCore
+ *
+ * SPDX-License-Identifier: MIT
+ *
+ * Sources:
+ * - Heltec "Mesh_Node_T1_V1.0" schematic (resource.heltec.cn), pin table and
+ *   the U10/U11/U14/U18 symbols
+ * - Heltec "Mesh Node T1 Wireless Position Tag" datasheet Rev 1.0.0
+ *
+ * Schematic nets:
+ * - SPI2 (SX1262 LoRa):    SCK=P1.13 (LOAR_SCK), MOSI=P1.14 (LOAR_MOSI),
+ *                          MISO=P0.03 (LOAR_MISO)
+ * - SPI3 (ST7735S display): SCK=P1.00 (SCLK), MOSI=P0.24 (SDIN); the FFC has
+ *                          no data-out line, so the bus is write-only
+ * - UART0 (UC6580 GNSS):   TX=P0.07 -> UC6580 pin 18 (RX),
+ *                          RX=P0.08 <- UC6580 pin 19 (TX)
+ * - PWM0  (PAM8904 buzzer): OUT0=P0.09 (DIN)
+ *
+ * The schematic's pin table prints "nRF_RX" beside P0.07 and "nRF_TX" beside
+ * P0.08.  Those two aliases are inverted: P0.07 is wired to the UC6580's RX
+ * input, which no other part drives, so it can only be the nRF's transmit
+ * line.  The GNSS_RX/GNSS_TX halves of the same table are correct, and match
+ * Heltec's own nRF52 Arduino variant (HT-mesh-node-t1) which sets
+ * PIN_SERIAL1_TX = P0.07 and PIN_SERIAL1_RX = P0.08.
+ */
+
+&pinctrl {
+	/* SX1262 LoRa radio */
+	spi2_default: spi2_default {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK,  1, 13)>,
+				<NRF_PSEL(SPIM_MOSI, 1, 14)>,
+				<NRF_PSEL(SPIM_MISO, 0, 3)>;
+		};
+	};
+
+	spi2_sleep: spi2_sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK,  1, 13)>,
+				<NRF_PSEL(SPIM_MOSI, 1, 14)>,
+				<NRF_PSEL(SPIM_MISO, 0, 3)>;
+			low-power-enable;
+		};
+	};
+
+	/* ST7735S TFT — write-only, no MISO on the 8-pin FFC */
+	spi3_default: spi3_default {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK,  1, 0)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 24)>;
+		};
+	};
+
+	spi3_sleep: spi3_sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK,  1, 0)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 24)>;
+			low-power-enable;
+		};
+	};
+
+	/* UC6580 GNSS */
+	uart0_default: uart0_default {
+		group1 {
+			psels = <NRF_PSEL(UART_TX, 0, 7)>;
+		};
+		group2 {
+			psels = <NRF_PSEL(UART_RX, 0, 8)>;
+			bias-pull-up;
+		};
+	};
+
+	uart0_sleep: uart0_sleep {
+		group1 {
+			psels = <NRF_PSEL(UART_TX, 0, 7)>,
+				<NRF_PSEL(UART_RX, 0, 8)>;
+			low-power-enable;
+		};
+	};
+
+	/* PAM8904 piezo driver tone input */
+	pwm0_default: pwm0_default {
+		group1 {
+			psels = <NRF_PSEL(PWM_OUT0, 0, 9)>;
+		};
+	};
+
+	pwm0_sleep: pwm0_sleep {
+		group1 {
+			psels = <NRF_PSEL(PWM_OUT0, 0, 9)>;
+			low-power-enable;
+		};
+	};
+};

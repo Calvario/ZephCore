@@ -1,0 +1,504 @@
+/*
+ * Heltec Mesh Node T1 - nRF52840 + SX1262 + UC6580 GNSS
+ * Copyright (c) 2026 ZephCore
+ *
+ * SPDX-License-Identifier: MIT
+ *
+ * Every net named below is taken from the official Heltec
+ * "Mesh_Node_T1_V1.0" schematic (resource.heltec.cn), cross-checked against
+ * the "Mesh Node T1 Wireless Position Tag" datasheet Rev 1.0.0 and the
+ * component datasheets for the parts the nets land on (ST7735S panel spec
+ * N096-1608TBBIG09-C08, Diodes PAM8904, Semtech SX1262).  Where the two
+ * Heltec documents disagree the schematic wins; the two places where that
+ * happens are called out at the nodes concerned.
+ */
+
+/dts-v1/;
+#include <nordic/nrf52840_qiaa.dtsi>
+#include <zephyr/dt-bindings/lora/sx126x.h>
+#include <zephyr/dt-bindings/adc/nrf-saadc.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <zephyr/dt-bindings/pwm/pwm.h>
+#include "heltec_t1_nrf52840-pinctrl.dtsi"
+
+/ {
+	model = "Heltec Mesh Node T1";
+	compatible = "heltec,t1";
+
+	chosen {
+		zephyr,sram = &sram0;
+		zephyr,flash = &flash0;
+		zephyr,code-partition = &code_partition;
+		zephyr,console = &cdc_acm_uart;
+		zephyr,shell-uart = &cdc_acm_uart;
+		zephyr,display = &mono_tft;
+		zephcore,gps-power = &gps_power;
+	};
+
+	aliases {
+		led0 = &led_white;
+		lora-tx-led = &led_white;
+		sw0 = &user_button;
+		lora0 = &lora;
+		watchdog0 = &wdt0;
+		gps-reset = &gps_reset_pin;
+		display0 = &tft;
+		buzzer = &buzzer;
+	};
+
+	leds {
+		compatible = "gpio-leds";
+
+		/*
+		 * Schematic net LED: P0.16 -> R56 1K -> gate of Q10 (AO3401A,
+		 * P-channel, source on VDD_3V3), drain -> R30 330R -> LED2
+		 * (white) -> GND.  Pulling the gate low turns the FET on, so
+		 * the LED is active-LOW.
+		 *
+		 * The datasheet's "2.2 LED" table instead says the white LED is
+		 * on P0.09.  That is wrong - P0.09 is the PAM8904 DIN (buzzer);
+		 * the schematic, and every vendor firmware, put the LED on
+		 * P0.16.
+		 *
+		 * Caveat for anyone chasing a boot-time glow: unlike the
+		 * backlight FET, Q10's gate has no pull-up to its source, only
+		 * R57 10M to ground.  While P0.16 is still an input the gate
+		 * sits near 0 V and the LED is lit.  gpio-leds drives it
+		 * inactive at init, which closes the window but does not remove
+		 * it.
+		 */
+		led_white: led_0 {
+			gpios = <&gpio0 16 GPIO_ACTIVE_LOW>;
+			label = "White LED";
+		};
+	};
+
+	buttons: buttons {
+		compatible = "gpio-keys";
+
+		/*
+		 * Schematic S3 (silkscreen "User2"), net Button: P1.10 to GND,
+		 * R8 10K pull-up to VDD_nRF, C8 0.1uF debounce.  The datasheet
+		 * calls this one "Button1 / USER key".
+		 */
+		user_button: button_0 {
+			gpios = <&gpio1 10 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			zephyr,code = <INPUT_KEY_0>;
+			label = "User Button";
+		};
+
+		/*
+		 * Schematic S2 (silkscreen "User1"), net User: P0.14 to GND,
+		 * R20 10K pull-up to VDD_3V3, C15 0.1uF debounce.  The
+		 * datasheet calls this one "Button2 / Function key".
+		 *
+		 * Wired straight to KEY_LEFT: with two buttons the T1 can do
+		 * page-previous, which the single-button Heltec boards cannot.
+		 */
+		page_prev_button: button_1 {
+			gpios = <&gpio0 14 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			zephyr,code = <INPUT_KEY_LEFT>;
+			label = "Function Button";
+		};
+	};
+
+	/* Input filter: user button long-press detection (1000ms) */
+	user_btn_longpress: user_btn_longpress {
+		compatible = "zephyr,input-longpress";
+		input = <&buttons>;
+		input-codes = <INPUT_KEY_0>;
+		short-codes = <INPUT_KEY_A>;
+		long-codes = <INPUT_KEY_ENTER>;
+		long-delay-ms = <1000>;
+	};
+
+	/*
+	 * Input filter: user button multi-tap detection.  Stock ladder - the
+	 * T1 has a real buzzer, so the 3-tap notification-mode slot is live
+	 * here (unlike T096, where it was compiled out and had to be dropped).
+	 *
+	 *   1 tap  (400ms wait) → KEY_1 = page next
+	 *   2 taps (400ms wait) → KEY_B = LED heartbeat toggle
+	 *   3 taps (400ms wait) → KEY_D = notification mode
+	 *   4 taps (400ms wait) → KEY_C = GPS on/off
+	 *   5 taps (immediate)  → KEY_E = flood advert
+	 */
+	user_btn_multitap {
+		compatible = "zephcore,input-multi-tap";
+		/* No 'input' phandle - KEY_A comes from the longpress
+		 * pseudo-device, not from &buttons. */
+		input-codes = <INPUT_KEY_A>;
+		tap-codes = <INPUT_KEY_1 INPUT_KEY_B INPUT_KEY_D INPUT_KEY_C INPUT_KEY_E>;
+		tap-delay-ms = <400>;
+	};
+
+	/*
+	 * Schematic net DIN: P0.09 -> R24 0R -> PAM8904 (U3) pin 3.
+	 *
+	 * U3 is a charge-pump piezo driver, not a plain transistor: it drives
+	 * the element differentially from VO1/VO2 through R14/R18 100R.  From
+	 * the MCU's side it is still just a tone input - PAM8904 datasheet
+	 * p.5 has the part idle at under 1uA whenever DIN is low, and
+	 * auto-sleep 42ms after DIN stops toggling, so no enable sequencing is
+	 * needed.
+	 *
+	 * P0.09 is NFC1.  See the &uicr node at the bottom of this file.
+	 *
+	 * The charge-pump multiplier pins EN1 (P1.02) and EN2 (P1.05) are
+	 * deliberately left unconfigured: both carry 10K pull-ups to VDD_3V3,
+	 * which selects 3x mode (7.2-9V out, the loudest setting) with no
+	 * firmware involvement.  Driving them would only ever make the buzzer
+	 * quieter, so they are documented in the README as a future volume
+	 * control rather than claimed here.
+	 */
+	pwmbuzzer {
+		compatible = "pwm-leds";
+		buzzer: buzzer {
+			pwms = <&pwm0 0 PWM_MSEC(20) PWM_POLARITY_NORMAL>;
+		};
+	};
+
+	/*
+	 * Schematic net VGNSS_Ctrl: P0.04 -> R32 1K -> gate of Q5 (AO3401A,
+	 * P-channel, source on VDD_3V3, R54 10K gate pull-up), drain feeds
+	 * VDD_GNSS.  Active-LOW, and off at reset while the pin is an input.
+	 */
+	gps_power: gps-power {
+		compatible = "regulator-fixed";
+		regulator-name = "gps-power";
+		enable-gpios = <&gpio0 4 GPIO_ACTIVE_LOW>;
+		regulator-boot-on;
+		/* Documents the module's requirement, but do not rely on it:
+		 * regulator-boot-on sends regulator_common_init() down the
+		 * refcount-only branch, so regulator_delay() never runs and this
+		 * value is inert. Harmless here because gnss-nmea-generic never
+		 * probes the receiver — it attaches a UART and parses whatever
+		 * arrives, so an unpowered module means no sentences yet, not a
+		 * failed init. ZephyrGPSManager owns the rail at runtime via
+		 * chosen { zephcore,gps-power }. */
+		startup-delay-us = <10000>;
+	};
+
+	/* Schematic net GNSS_RST: P0.26 -> UC6580 pin 17 (RESETN), active-LOW,
+	 * R37 10K pull-up to VDD_GNSS and C90 0.1uF. */
+	gps_rst: gps-reset {
+		compatible = "gpio-leds";
+		gps_reset_pin: gps_reset {
+			gpios = <&gpio0 26 GPIO_ACTIVE_LOW>;
+			label = "GNSS Reset";
+		};
+	};
+
+	/*
+	 * Schematic net VSensor_Ctrl: P1.06 -> R31 1K -> gate of Q11 (AO3401A,
+	 * P-channel, source on VDD_3V3, R23 10K gate pull-up) -> VDD_Sensor.
+	 * Active-LOW.
+	 *
+	 * VDD_Sensor powers the ICM-42607-P, the MMC5983MA, the unpopulated U6
+	 * pressure-sensor footprint, and the 4.7K pull-ups on the Sensor_SDA /
+	 * Sensor_SCL bus.  ZephCore consumes none of those, so this node exists
+	 * only to hold the rail off: with no consumer and no regulator-boot-on,
+	 * regulator-fixed init drives P1.06 inactive and the rail stays down.
+	 * That is what the datasheet's 11uA sleep figure assumes.
+	 */
+	sensor_power: sensor-power {
+		compatible = "regulator-fixed";
+		regulator-name = "sensor-power";
+		enable-gpios = <&gpio1 6 GPIO_ACTIVE_LOW>;
+	};
+
+	/*
+	 * Schematic net ADC_Ctrl: P0.11 -> R7 1K -> base of Q2 (S9013 NPN,
+	 * R12 10K base pulldown); Q2's collector pulls the gate of Q1
+	 * (AO3401A, source on VBAT, R5 10K gate pull-up) low, switching VBAT
+	 * into the R11 390K / R16 100K divider.  Active-HIGH.
+	 */
+	vbat_enable: vbat-enable {
+		compatible = "regulator-fixed";
+		regulator-name = "vbat-enable";
+		enable-gpios = <&gpio0 11 GPIO_ACTIVE_HIGH>;
+	};
+
+	/*
+	 * Schematic net VScreen_Ctrl: P0.13 -> R26 1K -> gate of Q6 (AO3401A,
+	 * P-channel, source on VDD_3V3, R52 10K gate pull-up) -> VDD_Screen,
+	 * which is FFC pin 7 (VDD).  Active-LOW.
+	 *
+	 * Meshtastic's variant.h comments this net as "Active HIGH".  That
+	 * comment is wrong - Q6 is a P-channel FET with its gate pulled to its
+	 * own source - and Heltec's nRF52 Arduino variant agrees with the
+	 * schematic (TFT_VDD_ENABLE = 0).
+	 */
+	tft_pwr_enable: tft-pwr-enable {
+		compatible = "regulator-fixed";
+		regulator-name = "tft-pwr-enable";
+		enable-gpios = <&gpio0 13 GPIO_ACTIVE_LOW>;
+		regulator-boot-on;
+		/* Documents the panel's requirement, but do not rely on it:
+		 * regulator-boot-on sends regulator_common_init() down the
+		 * refcount-only branch, so regulator_delay() never runs and this
+		 * value is inert. The real settle time comes from the ST7735R
+		 * driver's own mipi_dbi_reset() + exit-sleep delay, at
+		 * DISPLAY_INIT_PRIORITY 85 against this rail's 75. */
+		startup-delay-us = <10000>;
+	};
+
+	/*
+	 * Schematic net LED_K: P0.15 -> R28 1K -> gate of Q9 (AO3401A,
+	 * P-channel, source on VDD_3V3, R27 10K gate pull-up), drain ->
+	 * R55 22R -> FFC pin 1 (LEDA).  Active-LOW, off at reset.
+	 *
+	 * The net name is a misnomer inherited from other Heltec boards: the
+	 * N096-1608TBBIG09-C08 only brings the backlight *anode* out to the
+	 * FFC (panel spec section 3), so Q9 switches the high side.
+	 *
+	 * Note the FET source is VDD_3V3, not VDD_Screen - the backlight does
+	 * not follow the panel rail and has to be switched off in its own
+	 * right.
+	 */
+	disp_pwr_enable: disp-pwr-enable {
+		compatible = "regulator-fixed";
+		regulator-name = "disp-pwr-enable";
+		enable-gpios = <&gpio0 15 GPIO_ACTIVE_LOW>;
+	};
+
+	/*
+	 * Monochrome wrapper around the ST7735S-compatible TFT.
+	 * Reports PIXEL_FORMAT_MONO01 to CFB and converts rows to RGB565.
+	 */
+	mono_tft: mono-tft {
+		compatible = "zephcore,mono-tft";
+		tft-dev = <&tft>;
+		width = <160>;
+		height = <80>;
+	};
+
+	/*
+	 * MIPI-DBI SPI bus for the 0.96" TFT.
+	 *
+	 * Panel is an Unvision N096-1608TBBIG09-C08: 80(H)RGB x 160(V),
+	 * 10.8 x 21.7 mm active area, normally black, 4-line SPI, ST7735S
+	 * driver IC, single white LED backlight (panel spec sections 1.2
+	 * and 3).
+	 *
+	 * Schematic nets, all on the 8-pin FFC U18:
+	 * - CS    -> P0.12, FFC pin 8
+	 * - RS    -> P0.22, FFC pin 4, data/command
+	 * - SDIN  -> P0.24, FFC pin 5 (SDA)
+	 * - SCLK  -> P1.00, FFC pin 6 (SCL)
+	 * - RES   -> P0.20, FFC pin 3, active-LOW reset
+	 *
+	 * The FFC carries no data-out line, hence write-only.
+	 */
+	mipi_dbi {
+		compatible = "zephyr,mipi-dbi-spi";
+		spi-dev = <&spi3>;
+		dc-gpios = <&gpio0 22 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&gpio0 20 GPIO_ACTIVE_LOW>;
+		write-only;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		tft: st7735s@0 {
+			compatible = "sitronix,st7735r";
+			mipi-max-frequency = <20000000>;
+			mipi-mode = "MIPI_DBI_MODE_SPI_4WIRE";
+			reg = <0>;
+			width = <160>;
+			height = <80>;
+			/* No inversion-on: the mono_tft wrapper writes 0xFFFF for a lit
+			 * pixel and 0x0000 for background, so INV_ON paints a light
+			 * background with dark text.  The UI is drawn light-on-dark. */
+
+			/*
+			 * Landscape, rotated 180 degrees from the T096 mounting
+			 * of the same panel class.  MADCTL 0x68 = MX | MV | BGR,
+			 * against 0xa8 = MY | MV | BGR there.  The offsets are
+			 * the pair that belongs to this glass bonding (the
+			 * "red tab 160x80" column start of 24, row start of 0,
+			 * transposed by MV).
+			 *
+			 * If the first hardware run shows the image shifted with
+			 * a black band on one edge, the alternative offsets for
+			 * the mirrored orientation are x-offset 2 / y-offset 28,
+			 * caset [00 02 00 a1], raset [00 1c 00 6b].
+			 */
+			x-offset = <0>;
+			y-offset = <24>;
+			madctl = <0x68>;
+			colmod = <0x05>;
+			invctr = <7>;
+			vmctr1 = <0x0e>;
+			pwctr1 = [a2 02 84];
+			pwctr2 = [c1];
+			pwctr3 = [0a 00];
+			pwctr4 = [8a 2a];
+			pwctr5 = [8a ee];
+			frmctr1 = [01 26 2e];
+			frmctr2 = [01 26 2e];
+			frmctr3 = [01 26 2e 01 26 2e];
+			gamctrp1 = [0f 1a 0f 18 2f 28 20 22 1f 1b 23 37 00 07 02 10];
+			gamctrn1 = [0f 1b 0f 17 33 2c 29 2e 30 2e 30 3b 00 07 03 10];
+			caset = [00 00 00 9f];
+			raset = [00 18 00 67];
+		};
+	};
+
+	zephyr,user {
+		io-channels = <&adc 3>;
+		/*
+		 * Schematic: BAT_ADC on P0.05/AIN3, divider R11=390K high side
+		 * and R16=100K low side -> 4.9:1.  With ADC_GAIN_1_6 and the
+		 * internal 0.6V reference, full-scale is 3600 mV, so the
+		 * nominal multiplier is 3600 * 4.9 = 17640; the value below
+		 * carries the same +0.5% nRF SAADC gain-error correction used
+		 * on the other ZephCore nRF52 boards.
+		 */
+		vbat-mv-multiplier = <17728>;
+	};
+};
+
+&reg0 {
+	status = "okay";
+};
+
+&reg1 {
+	regulator-initial-mode = <NRF5X_REG_MODE_DCDC>;
+};
+
+&adc {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel@3 {
+		reg = <3>;
+		zephyr,gain = "ADC_GAIN_1_6";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 10)>;
+		zephyr,input-positive = <NRF_SAADC_AIN3>;
+		zephyr,resolution = <12>;
+	};
+};
+
+/*
+ * P0.09 (PAM8904 DIN) and P0.10 (Sensor_SCL) are the nRF52840's NFC antenna
+ * pins.  UICR.NFCPINS has to select GPIO or neither pin can be driven.
+ *
+ * Stock boards already have this programmed by the factory Adafruit UF2
+ * bootloader, so a UF2 install needs nothing extra; a board that has been
+ * fully erased over SWD does, and this property is what puts it back.
+ */
+&uicr {
+	nfct-pins-as-gpios;
+};
+
+&gpiote {
+	status = "okay";
+};
+
+&gpio0 {
+	status = "okay";
+};
+
+&gpio1 {
+	status = "okay";
+};
+
+&pwm0 {
+	status = "okay";
+	pinctrl-0 = <&pwm0_default>;
+	pinctrl-1 = <&pwm0_sleep>;
+	pinctrl-names = "default", "sleep";
+};
+
+/*
+ * The Sensor_SDA (P1.03) / Sensor_SCL (P0.10) bus is left disabled on
+ * purpose - see the sensor_power node above.  To bring it up, enable
+ * &i2c0 with a pinctrl pair for those two pins and give sensor_power a
+ * regulator-boot-on; without the rail the 4.7K pull-ups are unpowered and
+ * the bus cannot work.
+ */
+
+/* UC6580 GNSS - 115200 baud, plain NMEA stream, no command handshake. */
+&uart0 {
+	compatible = "nordic,nrf-uarte";
+	status = "okay";
+	current-speed = <115200>;
+	pinctrl-0 = <&uart0_default>;
+	pinctrl-1 = <&uart0_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	gnss: gnss {
+		compatible = "gnss-nmea-generic";
+	};
+};
+
+/* SPI3 - ST7735S 0.96" 160x80 TFT display */
+&spi3 {
+	compatible = "nordic,nrf-spim";
+	status = "okay";
+	pinctrl-0 = <&spi3_default>;
+	pinctrl-1 = <&spi3_sleep>;
+	pinctrl-names = "default", "sleep";
+	cs-gpios = <&gpio0 12 GPIO_ACTIVE_LOW>; /* Schematic net CS */
+};
+
+/* SPI2 - SX1262 LoRa radio */
+&spi2 {
+	compatible = "nordic,nrf-spim";
+	status = "okay";
+	cs-gpios = <&gpio1 11 GPIO_ACTIVE_LOW>;  /* Schematic net LOAR_NSS */
+	pinctrl-0 = <&spi2_default>;
+	pinctrl-1 = <&spi2_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	lora: lora@0 {
+		compatible = "semtech,sx1262";
+		reg = <0>;
+		spi-max-frequency = <8000000>;
+
+		reset-gpios = <&gpio0 2 GPIO_ACTIVE_LOW>;   /* LOAR_NRSET */
+		busy-gpios = <&gpio0 29 GPIO_ACTIVE_HIGH>;  /* LORA_BUSY */
+		dio1-gpios = <&gpio0 31 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>; /* DIO1 */
+
+		/*
+		 * There is no FEM on this board.  The SX1262's RFO (pin 23) and
+		 * RFI_P/RFI_N (pins 21/22) run as separate matched paths into a
+		 * uPG2179 SPDT switch (U13), whose Vcont1 is driven straight
+		 * from schematic net ANT_SW_CTRL = SX1262 DIO2 (pin 12) and
+		 * whose Vcont2 is the complement produced by Q8 (2SC3356).  So
+		 * the chip switches its own antenna path and no MCU GPIO is
+		 * involved: dio2-tx-enable, and no antenna-enable-gpios or
+		 * lna-bypass-gpios.
+		 */
+		dio2-tx-enable;
+
+		/*
+		 * X3 is a 32 MHz TCXO whose supply comes from DIO3 through
+		 * FB2 (10R@100MHz).  1.8V per Heltec's own Arduino variant
+		 * (SX126X_DIO3_TCXO_VOLTAGE 1.8).
+		 */
+		dio3-tcxo-voltage = <SX126X_DIO3_TCXO_1V8>;
+		tcxo-power-startup-delay-ms = <5>;
+		rx-boosted;
+	};
+};
+
+/* No external SPI/QSPI flash on this board - storage is internal only. */
+&qspi {
+	status = "disabled";
+};
+
+zephyr_udc0: &usbd {
+	compatible = "nordic,nrf-usbd";
+	status = "okay";
+
+	cdc_acm_uart: cdc_acm_uart {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+};
+
+/* SoftDevice s140 v6.1.1 flash layout (app@0x26000, bootloader@0xF4000) */
+#include "../../common/nrf52_partitions_sdv6.dtsi"
+#include "../../common/nrf52_wakeup.dtsi"

@@ -22,6 +22,7 @@ promicro_sx1262
 promicro_lr2021
 heltec_t114
 heltec_t096
+heltec_t1
 gat562_30s
 muziworks_r1neo
 lilygo_timpulse_plus
@@ -34,6 +35,8 @@ lilygo_timpulse_plus
 > **SenseCAP MeshTracker X1** (`meshtracker_x1`): nRF52840 + LR2021, AG3335M dual-band L1+L5 GNSS, SPA06 barometer, DRV2605L vibration, YSN8900 RTC, 8 MB QSPI flash (`/ext`), RGB LED, buzzer. Untested on hardware — first ZephCore board to use a real LR2021. The RTC is treated as an RX8900 second-source; boot-time discovery validates that before trusting it.
 >
 > **Heltec Mesh Node T096** (`heltec_t096`): nRF52840 with SX1262 + KCT8103L PA/FEM, UC6580 GNSS, and ST7735S 160x80 TFT companion display. The external SPI flash footprint is documented in the board notes but left disabled until the device parameters are confirmed.
+>
+> **Heltec Mesh Node T1** (`heltec_t1`): nRF52840 + SX1262 handheld tracker card with UC6580 L1+L5 GNSS, ST7735S 160x80 TFT, PAM8904-driven piezo buzzer, two buttons and a 1850 mAh battery. No PA/FEM — the SX1262 drives a uPG2179 antenna switch from DIO2. The onboard ICM-42607-P/MMC5983MA IMU bus is left powered down (no ZephCore consumer). Untested on hardware; the GNSS UART direction and the display offsets are the two things to check first, both flagged in the board README.
 >
 > **LilyGo T-Impulse Plus** (`lilygo_timpulse_plus`): nRF52840 wristband/tracker with SX1262 (GPIO antenna switch, not DIO2), SSD1315 64x32 OLED, u-blox MIA-M10Q GPS, 4 MB QSPI flash (`/ext`), touch button, haptic motor. Builds and ships in releases, but several parameters are inferred from vendor sources and not bench-verified (TCXO voltage, battery divider ratio, OLED offsets) — see the board README. Early hardware testing also showed occasional spontaneous reboots, untriaged.
 >

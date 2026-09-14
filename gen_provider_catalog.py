@@ -84,6 +84,7 @@ MAKER_BY_DEVICE = {
     "ProMicro nrf52 (faketec)": "promicro",
     "Heltec T114": "heltec",
     "Heltec Mesh Node T096": "heltec",
+    "Heltec Mesh Node T1": "heltec",
     "Heltec v3": "heltec",
     "Heltec v4": "heltec",
     "Heltec v4.3": "heltec",
@@ -171,6 +172,7 @@ BOARDS = [
     dict(stem="heltec_t114",      kind="nrf", device="Heltec T114"),
     dict(stem="heltec_t114",      kind="nrf", device="Heltec T114",
          variant="noscreen", subtitle="No screen"),
+    dict(stem="heltec_t1",        kind="nrf", device="Heltec Mesh Node T1"),
     dict(stem="gat562_30s",       kind="nrf", device="GAT-IoT GAT562 30s"),
     dict(stem="muziworks_r1neo",  kind="nrf", device="muzi works R1 Neo"),
 
@@ -264,7 +266,7 @@ SOFTDEVICE = {
     "rak4631": 6, "rak3401_1watt": 6, "thinknode_m1": 6, "thinknode_m3": 6,
     "thinknode_m6": 6, "rak_wismesh_tag": 6, "lilygo_techo": 6,
     "lilygo_timpulse_plus": 6, "promicro_sx1262": 6, "heltec_t114": 6,
-    "heltec_t096": 6, "gat562_30s": 6, "muziworks_r1neo": 6,
+    "heltec_t096": 6, "heltec_t1": 6, "gat562_30s": 6, "muziworks_r1neo": 6,
     "wio_tracker_l1": 7, "t1000_e": 7, "ikoka_nano_30dbm": 7,
     "sensecap_solar": 7, "xiao_nrf52840": 7, "meshtracker_x1": 7,
 }
