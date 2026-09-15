@@ -229,6 +229,8 @@ notice at the bottom of `LICENSE` for details (Monocypher, Zephyr patches).
 Logo by [recrof](https://github.com/recrof), licensed under the
 [WTFPL](https://en.wikipedia.org/wiki/WTFPL).
 
-![aXa0YNLq_700w_0](https://github.com/user-attachments/assets/ddce17fd-7b83-4dc7-999f-0519593fcc3d)
+The comic below was stolen from https://www.twonks.co.uk/
+
+[![TWONKS AI Design Logic](img/twonks-ai-design.jpg)](https://www.twonks.co.uk/)
 
 (FYI the whole project is 99,9% claude and cursor backed, relying heavily on the [official meshcore repo](https://github.com/meshcore-dev/MeshCore/) and the work they do in it)
