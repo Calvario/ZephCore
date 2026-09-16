@@ -713,11 +713,18 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
     } else if (memcmp(command, "set ", 4) == 0) {
         const char* config = &command[4];
         if (memcmp(config, "dutycycle ", 10) == 0) {
+            /* Floor is 10%, not Arduino's 1%: this writes airtime_factor as
+             * (100/dc)-1, and sanitizeNodePrefs() clamps that field to 0..9.
+             * A 1% duty cycle stores af=99, survives until the next load, and
+             * is then silently rewritten to 9 (=10%) — the node would run at
+             * one duty cycle and boot into another.  10% is the lowest value
+             * that round-trips, and it matches the 0..9 bound `set af` now
+             * enforces directly. */
             float dc;
             if (!cliFloat(&config[10], 100.0f / (cliDefaults()->airtime_factor + 1.0f), &dc)) {
-                strcpy(reply, "ERROR: dutycycle must be 1-100, or default");
-            } else if (dc < 1 || dc > 100) {
-                strcpy(reply, "ERROR: dutycycle must be 1-100");
+                strcpy(reply, "ERROR: dutycycle must be 10-100, or default");
+            } else if (dc < 10 || dc > 100) {
+                strcpy(reply, "ERROR: dutycycle must be 10-100");
             } else {
                 _prefs->airtime_factor = (100.0f / dc) - 1.0f;
                 savePrefs();
@@ -727,9 +734,17 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                 snprintf(reply, CLI_REPLY_SIZE, "OK - %d.%d%%", a_int, a_frac);
             }
         } else if (memcmp(config, "af ", 3) == 0) {
+            /* Range-checked (upstream f722794e), and not only for tidiness:
+             * every role computes its duty cycle as 100/(af+1), so af=-1 is a
+             * live divide-by-zero and af<-1 yields a negative percentage that
+             * wraps through uint8_t.  sanitizeNodePrefs() bounds the field to
+             * 0..9 but only on load, so an out-of-range value set at runtime
+             * is in force until the next reboot. */
             float af;
             if (!cliFloat(&config[3], cliDefaults()->airtime_factor, &af)) {
                 strcpy(reply, "Error: expected a number or default");
+            } else if (af < 0.0f || af > 9.0f) {
+                strcpy(reply, "Error: af must be 0-9");
             } else {
                 _prefs->airtime_factor = af;
                 savePrefs();

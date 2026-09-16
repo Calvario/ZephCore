@@ -1,0 +1,34 @@
+/*
+ * Wio Tracker L1 Pro 1W overlay for ZephCore.
+ * SoftDevice + UF2 bootloader layout.
+ * Console: USB CDC ACM.
+ * Battery: AIN7 = P0.31, voltage divider 2:1.
+ */
+
+/* GPS standby control — P1.09 = the L76K's WAKEUP pin (schematic net
+ * GNSS_WAKEUP). This is NOT a supply switch: per the L76K hardware design the
+ * pin only enters/exits Standby, where the RF is off but the core and I/O
+ * domain stay powered. VCC is never removed, so ephemeris/almanac/RTC are
+ * retained and each wake is a warm start. Active low with an internal
+ * pull-up, which is why the module runs even with this pin unconfigured.
+ *
+ * The luatos,air530z driver also manages this pin via on-off-gpios, but we
+ * need our own alias so ZephyrSensorManager can toggle it independently
+ * (driver PM suspend/resume hangs on modem_pipe ops). */
+/ {
+	gps_en: gps-enable {
+		compatible = "gpio-leds";
+		gps_enable_pin: gps_enable {
+			gpios = <&gpio1 9 GPIO_ACTIVE_HIGH>;
+			label = "GPS Enable";
+		};
+	};
+
+	aliases {
+		gps-enable = &gps_enable_pin;
+	};
+};
+
+/* Internal LFS mounted manually by ZephyrDataStore (block_size=128, custom erase) */
+/* External QSPI /ext auto-mounted via DTS (standard 4KB blocks) */
+#include "../../common/qspi-ext.dtsi"

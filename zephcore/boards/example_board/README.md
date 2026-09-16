@@ -12,6 +12,7 @@ Supported Boards
 | RAK4631              | `west build -b rak4631 zephcore`          | UF2 drag-drop or `west flash` |
 | RAK3401 1W           | `west build -b rak3401_1watt zephcore`    | UF2 drag-drop or `west flash` |
 | Wio Tracker L1       | `west build -b wio_tracker_l1 zephcore`   | UF2 drag-drop or `west flash` |
+| Wio Tracker L1 Pro 1W | `west build -b wio_tracker_l1_1w zephcore` | UF2 drag-drop or `west flash` |
 | SenseCAP Solar       | `west build -b sensecap_solar zephcore`    | UF2 drag-drop or `west flash` |
 | XIAO nRF52840        | `west build -b xiao_nrf52840 zephcore`     | UF2 drag-drop or `west flash` |
 | ProMicro SX1262      | `west build -b promicro_sx1262 zephcore`   | UF2 drag-drop or `west flash` |

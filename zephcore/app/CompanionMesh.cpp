@@ -3709,8 +3709,14 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 			sendPacketError(ERR_NOT_FOUND);
 		} else if (data_type == DATA_TYPE_RESERVED) {
 			sendPacketError(ERR_ILLEGAL_ARG);
-		} else if (payload_len > MAX_CHANNEL_DATA_LENGTH) {
-			LOG_WRN("CMD_SEND_CHANNEL_DATA payload too long: %d > %d", payload_len, MAX_CHANNEL_DATA_LENGTH);
+		} else if (payload_len > MAX_GROUP_DATA_LENGTH) {
+			/* Radio-side bound (165), NOT the host-frame bound (167).  These
+			 * disagree, and sendGroupData() enforces the smaller one, so gating
+			 * here on MAX_CHANNEL_DATA_LENGTH let a 166/167-byte payload pass the
+			 * frame check, fail the radio check, and come back to the app as
+			 * ERR_TABLE_FULL — the "outbound queue full, retry later" code — for a
+			 * send that can never succeed at any queue depth.  Upstream 0a82fcd2. */
+			LOG_WRN("CMD_SEND_CHANNEL_DATA payload too long: %d > %d", payload_len, MAX_GROUP_DATA_LENGTH);
 			sendPacketError(ERR_ILLEGAL_ARG);
 		} else if (sendGroupData(channel.channel, path, path_len, data_type, payload, payload_len)) {
 			sendPacketOk();

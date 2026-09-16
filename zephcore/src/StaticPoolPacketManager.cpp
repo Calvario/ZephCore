@@ -131,11 +131,22 @@ Packet *StaticPoolPacketManager::allocNew()
 
 void StaticPoolPacketManager::free(Packet *packet)
 {
-	if (packet) _unused.add(packet, 0, 0);
+	if (packet == nullptr) return;
+
+	/* _unused is sized to hold the whole pool, so the only way this add can
+	 * fail is a slot being returned twice.  That is silent corruption — the
+	 * second free drops the packet on the floor and the pool shrinks by one
+	 * for the rest of the run — so say so rather than ignoring the return.
+	 * Upstream 1d5283de. */
+	if (!_unused.add(packet, 0, 0)) {
+		LOG_WRN("free: unused queue full, possible double-free");
+	}
 }
 
 void StaticPoolPacketManager::queueOutbound(Packet *packet, uint8_t priority, uint32_t scheduled_for)
 {
+	if (packet == nullptr) return;
+
 	if (_send_queue.add(packet, priority, scheduled_for)) return;
 
 	/* Queue full — evict the least-important entry to make room.

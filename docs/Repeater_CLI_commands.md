@@ -322,8 +322,8 @@ four radio parameters together, since they are one interop-critical set.
 | `set tx <dbm>` | −9 to board max (default 30) | Set TX power |
 | `set lat <latitude>` | | Set stored latitude |
 | `set lon <longitude>` | | Set stored longitude |
-| `set dutycycle <pct>` | 1–100 | Set duty cycle percentage (converted to airtime factor internally) |
-| `set af <value>` | float | Set raw airtime factor directly |
+| `set dutycycle <pct>` | 10–100 | Set duty cycle percentage (converted to airtime factor internally as `(100/pct)-1`). The floor is 10%, not Arduino's 1%: the stored airtime factor is bounded to 0–9 on load, so a lower duty cycle would run until the next reboot and then silently become 10%. |
+| `set af <value>` | float, 0–9 | Set raw airtime factor directly. Out-of-range values are rejected: the duty cycle is computed as `100/(af+1)`, so `af = -1` is a divide-by-zero and `af < -1` wraps negative. |
 | `set txdelay <value>` | | Accepted for prefs compatibility — **ignored** (txdelay is adaptive) |
 | `set rxdelay <value>` | | Accepted for prefs compatibility — **ignored** (rxdelay is adaptive) |
 | `set direct.txdelay <value>` | | Accepted for prefs compatibility — **ignored** (direct.txdelay is adaptive) |
