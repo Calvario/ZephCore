@@ -283,19 +283,7 @@ static lr11xx_system_tcxo_supply_voltage_t get_tcxo_voltage(uint16_t mv)
 /* Get kHz value from Zephyr BW enum — needed for duty cycle timing */
 static float bw_enum_to_khz(enum lora_signal_bandwidth bw)
 {
-	switch (bw) {
-	case BW_7_KHZ:   return 7.81f;
-	case BW_10_KHZ:  return 10.42f;
-	case BW_15_KHZ:  return 15.63f;
-	case BW_20_KHZ:  return 20.83f;
-	case BW_31_KHZ:  return 31.25f;
-	case BW_41_KHZ:  return 41.67f;
-	case BW_62_KHZ:  return 62.5f;
-	case BW_125_KHZ: return 125.0f;
-	case BW_250_KHZ: return 250.0f;
-	case BW_500_KHZ: return 500.0f;
-	default:         return 125.0f;
-	}
+	return lr11xx_radio_get_lora_bw_in_hz(bw_enum_to_lr11xx(bw)) / 1000.0f;
 }
 
 /* ── Hardware reset (BUSY stuck recovery) ───────────────────────────── */
@@ -352,6 +340,14 @@ static void lr11xx_hardware_reset(struct lr11xx_data *data,
 
 /* ── Apply modem configuration ──────────────────────────────────────── */
 
+/* Share the LDRO decision between the hardware and its airtime estimate. */
+static uint8_t lr11xx_ldro(const struct lora_modem_config *mc)
+{
+	uint32_t bw_hz = lr11xx_radio_get_lora_bw_in_hz(bw_enum_to_lr11xx(mc->bandwidth));
+	uint32_t symbol_time_us = ((1U << (uint8_t)mc->datarate) * 1000000U) / bw_hz;
+	return symbol_time_us > 16380;
+}
+
 static void lr11xx_apply_modem_config(struct lr11xx_data *data,
 				      const struct lr11xx_config *cfg,
 				      bool tx_mode)
@@ -361,16 +357,11 @@ static void lr11xx_apply_modem_config(struct lr11xx_data *data,
 
 	lr11xx_radio_set_rf_freq(ctx, mc->frequency);
 
-	/* LDRO must be enabled when symbol time > 16.38ms (SF11+/BW125 etc) */
-	uint32_t bw_hz = (uint32_t)(bw_enum_to_khz(mc->bandwidth) * 1000.0f);
-	uint32_t symbol_time_us = ((1U << (uint8_t)mc->datarate) * 1000000U) / bw_hz;
-	uint8_t ldro = (symbol_time_us > 16380) ? 1 : 0;
-
 	lr11xx_radio_mod_params_lora_t mod = {
 		.sf   = (lr11xx_radio_lora_sf_t)mc->datarate,
 		.bw   = bw_enum_to_lr11xx(mc->bandwidth),
 		.cr   = cr_enum_to_lr11xx(mc->coding_rate),
-		.ldro = ldro,
+		.ldro = lr11xx_ldro(mc),
 	};
 	lr11xx_radio_set_lora_mod_params(ctx, &mod);
 
@@ -1088,20 +1079,24 @@ static uint32_t lr11xx_lora_airtime(const struct device *dev,
 	struct lr11xx_data *data = dev->data;
 	struct lora_modem_config *mc = &data->modem_cfg;
 
-	uint8_t sf = (uint8_t)mc->datarate;
-	float bw = bw_enum_to_khz(mc->bandwidth) * 1000.0f;
-	uint8_t cr = (uint8_t)mc->coding_rate + 4;
-
-	float ts = (float)(1 << sf) / bw;
-	int de = (sf >= 11 && bw <= 125000.0f) ? 1 : 0;
-	float n_payload = 8.0f + fmaxf(
-		ceilf((8.0f * data_len - 4.0f * sf + 28.0f + 16.0f) /
-		      (4.0f * (sf - 2.0f * de))) * cr,
-		0.0f);
-	float t_preamble = (mc->preamble_len + 4.25f) * ts;
-	float t_payload = n_payload * ts;
-
-	return (uint32_t)((t_preamble + t_payload) * 1000.0f);
+	/* Use Semtech's calculation, including SF5/6 synchronization and the
+	 * actual LDRO/CRC configuration.  The old SF>=11 && BW<=125 shortcut
+	 * underestimated SF10/BW62.5 and SF12/BW250, including the TX watchdog
+	 * budgets derived from this API. */
+	lr11xx_radio_mod_params_lora_t mod = {
+		.sf = (lr11xx_radio_lora_sf_t)mc->datarate,
+		.bw = bw_enum_to_lr11xx(mc->bandwidth),
+		.cr = cr_enum_to_lr11xx(mc->coding_rate),
+		.ldro = lr11xx_ldro(mc),
+	};
+	lr11xx_radio_pkt_params_lora_t pkt = {
+		.preamble_len_in_symb = mc->preamble_len,
+		.header_type = LR11XX_RADIO_LORA_PKT_EXPLICIT,
+		.pld_len_in_bytes = (uint8_t)data_len,
+		.crc = mc->packet_crc_disable ? LR11XX_RADIO_LORA_CRC_OFF
+					      : LR11XX_RADIO_LORA_CRC_ON,
+	};
+	return lr11xx_radio_get_lora_time_on_air_in_ms(&pkt, &mod);
 }
 
 /* Forward declaration — needed by LBT in send_async */

@@ -940,32 +940,40 @@ uint32_t LoRaRadioBase::getEstAirtimeFor(int len_bytes)
 	 * drifts with it — reported RX airtime, the TX airtime and duty-cycle
 	 * budget that now derive from it, and outbound_expiry.  Upstream cannot
 	 * drift this way because it asks the radio (getTimeOnAir()); these
-	 * accessors are our equivalent.  bw is read directly rather than via
-	 * getActiveBandwidthKHzX10(), whose fixed-point rounding would cost
-	 * precision at 31.25 kHz. */
+	 * accessors are our equivalent.  Resolve bandwidth through the same
+	 * enum as buildModemConfig(): a saved 62 or 62.5 both program 62.5 kHz,
+	 * and a rounded setting must not change the airtime calculation. */
 	uint8_t sf = getActiveSpreadingFactor();
 	float bw = _has_radio_override ? _override_bw
 		   : (_prefs ? _prefs->bw : (float)LoRaConfig::BANDWIDTH);
 	uint8_t cr_val = getActiveCodingRate();
 
-	if (sf < 6) sf = 6;
+	uint8_t min_sf = _loramac_node ? 6 : 5;
+	if (sf < min_sf) sf = min_sf;
 	if (sf > 12) sf = 12;
 	if (bw < 7.0f) bw = 125.0f;
+	bw = bandwidth_to_hz(bw_khz_to_enum((uint16_t)bw)) / 1000.0f;
 	if (cr_val < 5) cr_val = 5;
 	if (cr_val > 8) cr_val = 8;
 
 	float t_sym = (float)(1 << sf) / (bw * 1000.0f);
-	float t_preamble = (preambleLengthForSF(sf) + 4.25f) * t_sym;
+	/* SX126x/LR11xx/LR20xx add two synchronization symbols at SF5/6
+	 * and carry eight more header bits there.  SX127x uses the older
+	 * format.  See Semtech's lr11xx_radio_get_lora_time_on_air_numerator.
+	 * Treating SF5 as SF6 charged 397 ms for a 126-byte SF5/BW62.5 CR4/8
+	 * packet whose Semtech airtime is 237 ms (confirmed by TX timing). */
+	float fine_sync = (!_loramac_node && sf <= 6) ? 1.0f : 0.0f;
+	float t_preamble = (preambleLengthForSF(sf) + 4.25f + 2.0f * fine_sync) * t_sym;
 
 	/* LDRO threshold must track the SX126x driver's should_enable_ldro()
 	 * exactly (symbol time > 16.38 ms) so this estimate's DE matches the
 	 * hardware's DE on every SF/BW pair.  The old `sf >= 11` was only
 	 * correct at BW 125 kHz and diverged on every other bandwidth. */
 	float de = (t_sym > 0.01638f) ? 1.0f : 0.0f;
-	float num = 8.0f * len_bytes - 4.0f * sf + 28.0f + 16.0f;
+	float num = 8.0f * len_bytes - 4.0f * sf + 28.0f + 16.0f - 8.0f * fine_sync;
 	float den = 4.0f * (sf - 2.0f * de);
 	if (den < 1.0f) den = 4.0f;
-	float n_payload = 8.0f + fmaxf(ceilf(num / den) * (cr_val - 4 + 4), 0.0f);
+	float n_payload = 8.0f + fmaxf(ceilf(num / den) * cr_val, 0.0f);
 
 	float t_payload = n_payload * t_sym;
 	return (uint32_t)((t_preamble + t_payload) * 1000.0f);
