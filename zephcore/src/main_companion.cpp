@@ -250,8 +250,17 @@ static void ble_on_connected(void)
  * sync state machine), resets message sync (un-ACKed peeked message stays in
  * the queue and is re-sent on the next CMD_SYNC_NEXT_MESSAGE), and frees the
  * Ed25519 sign buffer if a sign op was interrupted (else an 8KB leak). */
+/* One deferred reply is enough: RX pauses until it has been accepted by the
+ * transport. A msgq also lets the transport's disconnect callback purge it. */
+struct pending_reply_frame {
+	uint16_t len;
+	uint8_t buf[MAX_FRAME_SIZE];
+};
+K_MSGQ_DEFINE(pending_reply, sizeof(struct pending_reply_frame), 1, 4);
+
 static void companion_session_cleanup(void)
 {
+	k_msgq_purge(&pending_reply);
 #ifdef ZEPHCORE_LORA
 	companion_mesh_ptr->cancelContactIterator();
 	companion_mesh_ptr->cancelSyncPending();
@@ -306,7 +315,7 @@ static const struct ble_callbacks ble_cbs = {
 
 /* ========== Frame send/receive (mesh ↔ BLE/USB) ========== */
 
-static size_t write_frame(const uint8_t *src, size_t len)
+static size_t transport_write_frame(const uint8_t *src, size_t len)
 {
 #if ZEPHCORE_USB_STACK
 	/* When USB owns the interface, replies must go out the CDC port — the BLE
@@ -323,6 +332,38 @@ static size_t write_frame(const uint8_t *src, size_t len)
 	}
 #endif
 	return zephcore_ble_send(src, (uint16_t)len);
+}
+
+static size_t write_frame(const uint8_t *src, size_t len)
+{
+	if (len == 0 || len > MAX_FRAME_SIZE ||
+	    k_msgq_num_used_get(&pending_reply) != 0) {
+		return 0;
+	}
+	if (transport_write_frame(src, len) == len) {
+		return len;
+	}
+	/* Only protocol replies need retention; pushes retain their existing
+	 * lossy semantics. Report success once we own a copy, so callers that
+	 * already retry (contact/message sync) don't send it twice. */
+	if (src[0] < 0x80) {
+		struct pending_reply_frame f;
+		f.len = len;
+		memcpy(f.buf, src, len);
+		if (k_msgq_put(&pending_reply, &f, K_NO_WAIT) == 0) {
+			return len;
+		}
+	}
+	return 0;
+}
+
+static void retry_pending_reply(void)
+{
+	struct pending_reply_frame f;
+	if (k_msgq_peek(&pending_reply, &f) == 0 &&
+	    transport_write_frame(f.buf, f.len) == f.len) {
+		(void)k_msgq_get(&pending_reply, &f, K_NO_WAIT);
+	}
 }
 
 /**
@@ -376,7 +417,8 @@ static void process_companion_rx(void)
 	} f;
 
 	/* Process all queued frames */
-	while (k_msgq_get(zephcore_ble_get_recv_queue(), &f, K_NO_WAIT) == 0) {
+	while (k_msgq_num_used_get(&pending_reply) == 0 &&
+	       k_msgq_get(zephcore_ble_get_recv_queue(), &f, K_NO_WAIT) == 0) {
 #ifdef ZEPHCORE_LORA
 		/* An in-flight contact dump deliberately survives commands parsed
 		 * here — it is only cancelled by CMD_APP_START (new session) or by
@@ -470,6 +512,10 @@ static void mesh_event_loop(void)
 		/* Clear the events we're handling */
 		k_event_clear(&mesh_events, events);
 
+		/* TX-idle resumes both the retained reply and commands left in RX.
+		 * Housekeeping is a fallback if a transport loses its drain kick. */
+		retry_pending_reply();
+
 #ifdef ZEPHCORE_LORA
 		/* Handle deferred UI button actions (flood advert, pref saves).
 		 * Must run in this thread — LoRa TX and flash writes block. */
@@ -489,7 +535,8 @@ static void mesh_event_loop(void)
 		/* Parse inbound BLE/USB frames + USB text-CLI lines HERE (main
 		 * thread) before loop() drains any outbound they enqueued — keeps
 		 * all mesh-state mutation on one thread (see ble_on_rx_frame). */
-		if (events & MESH_EVENT_BLE_RX) {
+		if (events & (MESH_EVENT_BLE_RX | MESH_EVENT_CONTACT_ITER |
+			      MESH_EVENT_HOUSEKEEPING)) {
 			process_companion_rx();
 #if ZEPHCORE_USB_STACK
 			struct companion_cli_line c;
@@ -731,7 +778,8 @@ public:
 	 * has not reached the TX queue yet, so a `reboot` typed into the v-contact
 	 * waits for its own ack before resetting. */
 	bool transportTxIdle() override {
-		if (companion_mesh.vcontactConfirmPending()) {
+		if (companion_mesh.vcontactConfirmPending() ||
+		    k_msgq_num_used_get(&pending_reply) != 0) {
 			return false;
 		}
 #if ZEPHCORE_USB_STACK

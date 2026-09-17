@@ -358,11 +358,15 @@ static void listen_thread_fn(void *a, void *b, void *c)
 			}
 
 			uint16_t flen = (uint16_t)hdr[1] | ((uint16_t)hdr[2] << 8);
+			if (flen > MAX_FRAME_SIZE) {
+				LOG_WRN("Oversized frame: len=%u, closing client", flen);
+				break;
+			}
 
 			/* Skip frames not from app ('<'), or bad length. */
-			if (hdr[0] != '<' || flen == 0 || flen > MAX_FRAME_SIZE) {
+			if (hdr[0] != '<' || flen == 0) {
 				/* Drain and discard the payload. */
-				for (uint16_t i = 0; i < flen && flen <= MAX_FRAME_SIZE; i++) {
+				for (uint16_t i = 0; i < flen; i++) {
 					uint8_t discard;
 					if (sock_recv_all(fd, &discard, 1) != 0) {
 						goto client_done;
