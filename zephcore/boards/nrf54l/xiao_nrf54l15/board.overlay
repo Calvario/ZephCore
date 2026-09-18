@@ -39,8 +39,7 @@
  *
  * Battery: the board has a charger (SGM40567, 200 mA) and a 2:1 divider on
  * P1.14/AIN7, gated by P1.15/VBAT_EN (already a boot-on regulator in the
- * upstream DTS). ZephCore does not read it yet — see the commented block at
- * the bottom of this file for what is known and what still has to be measured.
+ * upstream DTS). Read via the battery block at the bottom of this file.
  */
 
 #include <zephyr/dt-bindings/lora/sx126x.h>
@@ -129,47 +128,46 @@
 #include "../../common/filesystem.dtsi"
 
 /*
- * Battery voltage — NOT enabled, deliberately.
+ * Battery voltage.
  *
- * The hardware is there: the schematic shows a 2:1 divider feeding P1.14/AIN7
- * ("battery voltage = ADC sampling voltage * 2.0"), enabled by P1.15/VBAT_EN,
- * which the upstream board DTS already declares as `vbat_pwr` with
- * regulator-boot-on. So a plain ADC read needs no extra power sequencing.
+ * The schematic shows a 2:1 divider feeding P1.14/AIN7 ("battery voltage =
+ * ADC sampling voltage * 2.0"), enabled by P1.15/VBAT_EN, which the upstream
+ * board DTS already declares as `vbat_pwr` with regulator-boot-on. So a plain
+ * ADC read needs no extra power sequencing.
  *
- * What is missing is a trustworthy scale factor. ZephyrBoard computes
- * `mV = raw * vbat-mv-multiplier / 4096`, so the multiplier has to encode the
- * ADC's full-scale voltage, and the nRF54L15 SAADC is not the nRF52 part we
- * have that number for: its internal reference is 0.9 V, not 0.6 V, and DS
- * v1.0 §8.18.7 states the single-ended range as "± 0.5*VREF/GAIN" while the
- * saturation condition two lines later implies a full span of VREF/GAIN. Those
- * two readings differ by a factor of two — and getting it wrong by 2x means a
- * healthy pack reports as flat and the node warns about a battery that is fine.
+ * ZephyrBoard computes `mV = raw * vbat-mv-multiplier / 4096`, so the
+ * multiplier encodes the ADC's full-scale voltage times the divider ratio.
+ * DS v1.0 §8.18.7 is ambiguous by 2x here ("± 0.5*VREF/GAIN" vs a saturation
+ * condition implying VREF/GAIN), so it was measured on hardware (2026-09-18)
+ * by pointing this channel at the SoC's internal rails: AVDD (0.9 V nominal)
+ * read raw 991 and VDD (3.3 V rail) read raw 3777 — 0.87 V and 3.32 V at a
+ * 3.6 V full scale, impossible at 1.8 V. Full scale with gain 1/4 and the
+ * 0.9 V reference is therefore 3.6 V, and the multiplier for the 2:1 divider
+ * is 7200. Per-board trim: `set adc.multiplier target <mV>`.
  *
- * To finish this, measure it: enable the block below on a board with a known
- * cell voltage, read `raw`, and solve for the multiplier. With gain 1/4 and the
- * 0.9 V reference the full scale is either 3.6 V (multiplier 7200 for the 2:1
- * divider) or 1.8 V (multiplier 3600). One measurement settles it.
- *
- *	&adc {
- *		status = "okay";
- *
- *		#address-cells = <1>;
- *		#size-cells = <0>;
- *
- *		channel@7 {
- *			reg = <7>;
- *			zephyr,gain = "ADC_GAIN_1_4";
- *			zephyr,reference = "ADC_REF_INTERNAL";
- *			zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
- *			zephyr,input-positive = <NRF_SAADC_AIN7>;
- *			zephyr,resolution = <12>;
- *		};
- *	};
- *
- *	/ {
- *		zephyr,user {
- *			io-channels = <&adc 7>;
- *			vbat-mv-multiplier = <7200>;
- *		};
- *	};
+ * The upstream common dtsi already defines channel@7 on AIN7 with the same
+ * settings plus `zephyr,oversampling = <8>`; this node merges into it and the
+ * oversampling is inherited.
  */
+&adc {
+	status = "okay";
+
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel@7 {
+		reg = <7>;
+		zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,input-positive = <NRF_SAADC_AIN7>;
+		zephyr,resolution = <12>;
+	};
+};
+
+/ {
+	zephyr,user {
+		io-channels = <&adc 7>;
+		vbat-mv-multiplier = <7200>;
+	};
+};
