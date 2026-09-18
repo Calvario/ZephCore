@@ -160,9 +160,9 @@ lr20xx_status_t lr20xx_radio_fifo_get_tx_level( const void* context, uint16_t* f
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_radio_fifo_cfg_irq( const void* context, lr20xx_radio_fifo_flag_t rx_fifo_irq_enable,
-                                           lr20xx_radio_fifo_flag_t tx_fifo_irq_enable, uint16_t rx_fifo_high_threshold,
-                                           uint16_t tx_fifo_low_threshold, uint16_t rx_fifo_low_threshold,
-                                           uint16_t tx_fifo_high_threshold );
+					   lr20xx_radio_fifo_flag_t tx_fifo_irq_enable, uint16_t rx_fifo_high_threshold,
+					   uint16_t tx_fifo_low_threshold, uint16_t rx_fifo_low_threshold,
+					   uint16_t tx_fifo_high_threshold );
 
 /*!
  * @brief Clear specific IRQ flags for both Rx and Tx FIFO
@@ -174,7 +174,7 @@ lr20xx_status_t lr20xx_radio_fifo_cfg_irq( const void* context, lr20xx_radio_fif
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_radio_fifo_clear_irq_flags( const void* context, lr20xx_radio_fifo_flag_t rx_fifo_flags_to_clear,
-                                                   lr20xx_radio_fifo_flag_t tx_fifo_flags_to_clear );
+						   lr20xx_radio_fifo_flag_t tx_fifo_flags_to_clear );
 
 /*!
  * @brief Get FIFO events triggering a FIFO interrupt in Rx and Tx
@@ -186,7 +186,7 @@ lr20xx_status_t lr20xx_radio_fifo_clear_irq_flags( const void* context, lr20xx_r
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_radio_fifo_get_irq( const void* context, lr20xx_radio_fifo_flag_t* rx_fifo_flags,
-                                           lr20xx_radio_fifo_flag_t* tx_fifo_flags );
+					   lr20xx_radio_fifo_flag_t* tx_fifo_flags );
 
 /*!
  * @brief Clear and return FiFo IRQ flags
@@ -198,7 +198,7 @@ lr20xx_status_t lr20xx_radio_fifo_get_irq( const void* context, lr20xx_radio_fif
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_radio_fifo_get_and_clear_irq_flags( const void* context, lr20xx_radio_fifo_flag_t* rx_fifo_flags,
-                                                           lr20xx_radio_fifo_flag_t* tx_fifo_flags );
+							   lr20xx_radio_fifo_flag_t* tx_fifo_flags );
 
 /**
  * @brief Switch Tx FiFo to 1024-bytes FiFo
@@ -236,8 +236,8 @@ lr20xx_status_t lr20xx_radio_fifo_configure_1024_byte_tx_fifo( const void* conte
  * @see lr20xx_system_add_register_to_retention_mem, lr20xx_radio_fifo_configure_1024_byte_tx_fifo
  */
 lr20xx_status_t lr20xx_radio_fifo_1024_byte_tx_fifo_store_retention_mem( const void* context,
-                                                                         uint8_t     retention_slot_address,
-                                                                         uint8_t     retention_slot_size );
+									 uint8_t     retention_slot_address,
+									 uint8_t     retention_slot_size );
 
 /**
  * @brief Switch Rx FiFo to 1024-bytes FiFo
@@ -275,8 +275,8 @@ lr20xx_status_t lr20xx_radio_fifo_configure_1024_byte_rx_fifo( const void* conte
  * @see lr20xx_system_add_register_to_retention_mem, lr20xx_radio_fifo_configure_1024_byte_rx_fifo
  */
 lr20xx_status_t lr20xx_radio_fifo_1024_byte_rx_fifo_store_retention_mem( const void* context,
-                                                                         uint8_t     retention_slot_address,
-                                                                         uint8_t     retention_slot_size );
+									 uint8_t     retention_slot_address,
+									 uint8_t     retention_slot_size );
 
 #ifdef __cplusplus
 }

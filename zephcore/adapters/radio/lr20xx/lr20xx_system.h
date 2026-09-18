@@ -104,7 +104,7 @@ lr20xx_status_t lr20xx_system_wakeup( const void* context );
  * @ref lr20xx_system_clear_reset_status_info may be used for this purpose when necessary.
  */
 lr20xx_status_t lr20xx_system_get_status( const void* context, lr20xx_system_stat1_t* stat1,
-                                          lr20xx_system_stat2_t* stat2, lr20xx_system_irq_mask_t* irq_status );
+					  lr20xx_system_stat2_t* stat2, lr20xx_system_irq_mask_t* irq_status );
 
 /*!
  * @brief Clear the reset status information stored in stat2
@@ -217,7 +217,7 @@ bool lr20xx_system_dio_get_nth( uint8_t nth, lr20xx_system_dio_t* dio );
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_system_set_dio_function( const void* context, lr20xx_system_dio_t dio,
-                                                lr20xx_system_dio_func_t func, lr20xx_system_dio_drive_t drive );
+						lr20xx_system_dio_func_t func, lr20xx_system_dio_drive_t drive );
 
 /*!
  * @brief Set the RF switch configurations for a given DIO
@@ -231,7 +231,7 @@ lr20xx_status_t lr20xx_system_set_dio_function( const void* context, lr20xx_syst
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_system_set_dio_rf_switch_cfg( const void* context, lr20xx_system_dio_t dio,
-                                                     const lr20xx_system_dio_rf_switch_cfg_t rf_switch_cfg );
+						     const lr20xx_system_dio_rf_switch_cfg_t rf_switch_cfg );
 
 /*!
  * @brief Set the interrupt configurations for a given DIO
@@ -247,7 +247,7 @@ lr20xx_status_t lr20xx_system_set_dio_rf_switch_cfg( const void* context, lr20xx
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_system_set_dio_irq_cfg( const void* context, lr20xx_system_dio_t dio,
-                                               const lr20xx_system_irq_mask_t irq_cfg );
+					       const lr20xx_system_irq_mask_t irq_cfg );
 
 /*!
  * @brief Clear requested bits in the internal pending interrupt register
@@ -330,8 +330,8 @@ lr20xx_status_t lr20xx_system_cfg_clk_output( const void* context, lr20xx_system
  * @see lr20xx_system_calibrate, lr20xx_radio_common_calibrate_front_end, lr20xx_system_get_errors
  */
 lr20xx_status_t lr20xx_system_set_tcxo_mode( const void*                               context,
-                                             const lr20xx_system_tcxo_supply_voltage_t supply_voltage,
-                                             const uint32_t                            start_delay_in_32mhz_step );
+					     const lr20xx_system_tcxo_supply_voltage_t supply_voltage,
+					     const uint32_t                            start_delay_in_32mhz_step );
 
 /*!
  * @brief Configure the regulator mode to be used in specific modes
@@ -366,7 +366,7 @@ lr20xx_status_t lr20xx_system_set_reg_mode( const void* context, const lr20xx_sy
  * @see lr20xx_system_get_errors
  */
 lr20xx_status_t lr20xx_system_calibrate( const void*                            context,
-                                         const lr20xx_system_calibration_mask_t blocks_to_calibrate );
+					 const lr20xx_system_calibration_mask_t blocks_to_calibrate );
 
 /*!
  * @brief Get the value of the power supply voltage
@@ -385,7 +385,7 @@ lr20xx_status_t lr20xx_system_calibrate( const void*                            
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_system_get_vbat( const void* context, lr20xx_system_value_format_t format,
-                                        lr20xx_system_meas_res_t res, uint16_t* vbat );
+					lr20xx_system_meas_res_t res, uint16_t* vbat );
 
 /*!
  * @brief Get the value of the internal junction temperature
@@ -410,7 +410,7 @@ lr20xx_status_t lr20xx_system_get_vbat( const void* context, lr20xx_system_value
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_system_get_temp( const void* context, lr20xx_system_value_format_t format,
-                                        lr20xx_system_meas_res_t res, lr20xx_system_temp_src_t src, uint16_t* temp );
+					lr20xx_system_meas_res_t res, lr20xx_system_temp_src_t src, uint16_t* temp );
 
 /*!
  * @brief Read and return a 32-bit random number
@@ -427,8 +427,8 @@ lr20xx_status_t lr20xx_system_get_temp( const void* context, lr20xx_system_value
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_system_get_random_number( const void*                                   context,
-                                                 lr20xx_system_random_entropy_source_bitmask_t source,
-                                                 uint32_t*                                     random_number );
+						 lr20xx_system_random_entropy_source_bitmask_t source,
+						 uint32_t*                                     random_number );
 
 /*!
  * @brief Switch the transceiver into sleep mode with the request configuration
@@ -440,7 +440,7 @@ lr20xx_status_t lr20xx_system_get_random_number( const void*                    
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_system_set_sleep_mode( const void* context, const lr20xx_system_sleep_cfg_t* sleep_cfg,
-                                              const uint32_t sleep_time );
+					      const uint32_t sleep_time );
 
 /*!
  * @brief Switch the transceiver into the requested stand-by mode
@@ -521,7 +521,7 @@ lr20xx_status_t lr20xx_system_configure_xosc( const void* context, uint8_t xta, 
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_system_set_temp_comp_cfg( const void* context, lr20xx_system_temp_comp_mode_t mode,
-                                                 bool is_ntc_en );
+						 bool is_ntc_en );
 
 /*!
  * @brief Set Negative Temperature Coefficient parameters
@@ -534,7 +534,7 @@ lr20xx_status_t lr20xx_system_set_temp_comp_cfg( const void* context, lr20xx_sys
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_system_set_ntc_params( const void* context, uint16_t ntc_r_ratio, uint16_t ntc_beta,
-                                              uint8_t delay );
+					      uint8_t delay );
 
 #ifdef __cplusplus
 }

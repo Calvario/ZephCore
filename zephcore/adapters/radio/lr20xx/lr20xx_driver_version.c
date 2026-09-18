@@ -71,7 +71,7 @@
 
 const char* lr20xx_driver_version_get_version_string( void )
 {
-    return ( const char* ) LR20XX_DRIVER_VERSION;
+	return ( const char* ) LR20XX_DRIVER_VERSION;
 }
 
 /*

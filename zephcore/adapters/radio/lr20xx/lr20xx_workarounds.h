@@ -121,7 +121,7 @@ lr20xx_status_t lr20xx_workarounds_lora_disable_sx1276_compatibility_mode( const
  * lr20xx_workarounds_lora_disable_sx1276_compatibility_mode
  */
 lr20xx_status_t lr20xx_workarounds_lora_sx1276_compatibility_mode_store_retention_mem( const void* context,
-                                                                                       uint8_t     slot );
+										       uint8_t     slot );
 
 /**
  * @brief Enable the SX1276 compatibility mode for LoRa intra-packet frequency hopping
@@ -166,7 +166,7 @@ lr20xx_status_t lr20xx_workarounds_lora_freq_hop_disable_sx1276_compatibility_mo
  * lr20xx_workarounds_lora_freq_hop_disable_sx1276_compatibility_mode
  */
 lr20xx_status_t lr20xx_workarounds_lora_freq_hop_sx1276_compatibility_mode_store_retention_mem( const void* context,
-                                                                                                uint8_t     slot );
+												uint8_t     slot );
 
 /**
  * @brief Override the OOK detection threshold level
@@ -246,7 +246,7 @@ lr20xx_status_t lr20xx_workarounds_rttof_results_deviation( const void* context,
  * @see lr20xx_system_add_register_to_retention_mem, lr20xx_workarounds_rttof_results_deviation
  */
 lr20xx_status_t lr20xx_workarounds_rttof_results_deviation_store_retention_mem( const void* context, uint8_t slot_1,
-                                                                                uint8_t slot_2 );
+										uint8_t slot_2 );
 
 /*!
  * @brief Workaround helper to configure FIFO events and threshold levels with 1024-byte Tx/Rx FiFos
@@ -276,9 +276,9 @@ lr20xx_status_t lr20xx_workarounds_rttof_results_deviation_store_retention_mem( 
  * lr20xx_radio_fifo_configure_1024_byte_rx_fifo
  */
 lr20xx_status_t lr20xx_workarounds_1024_byte_fifo_cfg_irq(
-    const void* context, lr20xx_radio_fifo_flag_t rx_fifo_irq_enable, lr20xx_radio_fifo_flag_t tx_fifo_irq_enable,
-    uint16_t rx_fifo_high_threshold, uint16_t tx_fifo_low_threshold, uint16_t rx_fifo_low_threshold,
-    uint16_t tx_fifo_high_threshold );
+	const void* context, lr20xx_radio_fifo_flag_t rx_fifo_irq_enable, lr20xx_radio_fifo_flag_t tx_fifo_irq_enable,
+	uint16_t rx_fifo_high_threshold, uint16_t tx_fifo_low_threshold, uint16_t rx_fifo_low_threshold,
+	uint16_t tx_fifo_high_threshold );
 
 /**
  * @brief Store the registers to configure the 1024 bytes Tx/Rx FiFos threshold related IRQs in retention memory
@@ -296,8 +296,8 @@ lr20xx_status_t lr20xx_workarounds_1024_byte_fifo_cfg_irq(
  * @see lr20xx_system_add_register_to_retention_mem, lr20xx_workarounds_1024_byte_fifo_cfg_irq
  */
 lr20xx_status_t lr20xx_workarounds_1024_byte_fifo_cfg_irq_store_retention_mem( const void* context,
-                                                                               uint8_t     retention_slot_rx_thresholds,
-                                                                               uint8_t retention_slot_tx_thresholds );
+									       uint8_t     retention_slot_rx_thresholds,
+									       uint8_t retention_slot_tx_thresholds );
 
 #ifdef __cplusplus
 }

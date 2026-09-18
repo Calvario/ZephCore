@@ -81,7 +81,7 @@ bool MeshTimeSync::wouldAccept(const uint8_t *pubkey, uint32_t advert_ts) const
 }
 
 void MeshTimeSync::onAdvertHeard(const uint8_t *pubkey, uint32_t advert_ts,
-                                 uint8_t hops, uint32_t uptime_secs)
+				 uint8_t hops, uint32_t uptime_secs)
 {
 	if (hops > HOP_CAP) return;
 
@@ -144,8 +144,8 @@ void MeshTimeSync::onAdvertHeard(const uint8_t *pubkey, uint32_t advert_ts,
 }
 
 MeshTimeSync::Consensus MeshTimeSync::computeConsensus(uint32_t local_time,
-                                                       uint32_t uptime_secs,
-                                                       bool bootstrap) const
+						       uint32_t uptime_secs,
+						       bool bootstrap) const
 {
 	Consensus c;
 	memset(&c, 0, sizeof(c));
@@ -209,7 +209,7 @@ MeshTimeSync::Consensus MeshTimeSync::computeConsensus(uint32_t local_time,
 }
 
 MeshTimeSync::Verdict MeshTimeSync::evaluateNow(uint32_t local_time,
-                                                uint32_t uptime_secs) const
+						uint32_t uptime_secs) const
 {
 	Verdict v;
 	memset(&v, 0, sizeof(v));
@@ -415,7 +415,7 @@ const char *MeshTimeSync::reasonStr(Reason r)
 }
 
 int MeshTimeSync::formatStatus(char *out, size_t cap, uint32_t local_time,
-                               uint32_t uptime_secs, bool enabled) const
+			       uint32_t uptime_secs, bool enabled) const
 {
 	Verdict v = evaluateNow(local_time, uptime_secs);
 	const Consensus &c = v.consensus;

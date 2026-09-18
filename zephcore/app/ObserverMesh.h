@@ -19,13 +19,13 @@
 #include "observer_creds.h"
 
 #ifndef FIRMWARE_VERSION
-  // Real version injected by CMakeLists.txt (-DFIRMWARE_VERSION); this fallback
-  // only applies to builds that bypass that injection and should never surface.
-  #define FIRMWARE_VERSION   "v0.0.0-dev"
+	// Real version injected by CMakeLists.txt (-DFIRMWARE_VERSION); this fallback
+	// only applies to builds that bypass that injection and should never surface.
+	#define FIRMWARE_VERSION   "v0.0.0-dev"
 #endif
 
 #ifndef FIRMWARE_BUILD_DATE
-  #define FIRMWARE_BUILD_DATE   __DATE__
+	#define FIRMWARE_BUILD_DATE   __DATE__
 #endif
 
 namespace mesh {

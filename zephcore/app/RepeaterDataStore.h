@@ -24,39 +24,39 @@
 
 class RepeaterDataStore {
 public:
-    RepeaterDataStore();
+	RepeaterDataStore();
 
-    /* Initialize filesystem and repeater directory */
-    bool begin();
+	/* Initialize filesystem and repeater directory */
+	bool begin();
 
-    /* Identity management */
-    bool loadIdentity(mesh::LocalIdentity& id);
-    bool saveIdentity(const mesh::LocalIdentity& id);
+	/* Identity management */
+	bool loadIdentity(mesh::LocalIdentity& id);
+	bool saveIdentity(const mesh::LocalIdentity& id);
 
-    /* Prefs management */
-    bool loadPrefs(NodePrefs& prefs);
-    bool savePrefs(const NodePrefs& prefs);
+	/* Prefs management */
+	bool loadPrefs(NodePrefs& prefs);
+	bool savePrefs(const NodePrefs& prefs);
 
-    /* ACL management - paths passed to ClientACL */
-    const char* getAclPath() const;
+	/* ACL management - paths passed to ClientACL */
+	const char* getAclPath() const;
 
-    /* Region management - paths passed to RegionMap */
-    const char* getRegionsPath() const;
+	/* Region management - paths passed to RegionMap */
+	const char* getRegionsPath() const;
 
-    /* Factory reset - erase all repeater data */
-    bool formatFileSystem();
+	/* Factory reset - erase all repeater data */
+	bool formatFileSystem();
 
-    /* True if this LittleFS volume already holds THIS role's data.  False
-     * means the volume belongs to something else - a fresh chip, a companion,
-     * or a node that was running Arduino MeshCore, whose nRF52 filesystems
-     * overlap our lfs_partition (devdocs/HANDOVER_lfs_arduino_overlap.md).
-     * Callers format on false; see the note on BASE_PATH below. */
-    bool hasRoleData() const;
+	/* True if this LittleFS volume already holds THIS role's data.  False
+	 * means the volume belongs to something else - a fresh chip, a companion,
+	 * or a node that was running Arduino MeshCore, whose nRF52 filesystems
+	 * overlap our lfs_partition (devdocs/HANDOVER_lfs_arduino_overlap.md).
+	 * Callers format on false; see the note on BASE_PATH below. */
+	bool hasRoleData() const;
 
-    /* Get base path for repeater storage */
-    const char* getBasePath() const;
+	/* Get base path for repeater storage */
+	const char* getBasePath() const;
 
 private:
-    bool _initialized;
-    static constexpr const char* BASE_PATH = "/lfs/repeater";
+	bool _initialized;
+	static constexpr const char* BASE_PATH = "/lfs/repeater";
 };

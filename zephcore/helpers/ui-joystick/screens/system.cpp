@@ -36,9 +36,9 @@ enum SysDevItem { SYSDEV_BUZZER=0, SYSDEV_BLUETOOTH, SYSDEV_OFFGRID, SYSDEV_LEDS
  * rotate but whose stick still ends up upside down in a custom case. */
 enum SysDspItem { SYSDSP_BRIGHT=0, SYSDSP_SCROFF, SYSDSP_BATT, SYSDSP_WAKE,
 #if MC_DISPLAY_ROTATE_SUPPORTED
-                  SYSDSP_ROTATE,
+									SYSDSP_ROTATE,
 #endif
-                  SYSDSP_INPUT_ROTATE, SYSDSP_COUNT };
+									SYSDSP_INPUT_ROTATE, SYSDSP_COUNT };
 /* Info submenu items */
 enum SysInfoItem { SYSINFO_TIME=0, SYSINFO_STATS, SYSINFO_RADIO, SYSINFO_COUNT };
 /* Power submenu items */

@@ -62,8 +62,8 @@
  */
 typedef enum lr11xx_status_e
 {
-    LR11XX_STATUS_OK    = 0,
-    LR11XX_STATUS_ERROR = 3,  /* matches lr11xx_hal_status_t ERROR value */
+	LR11XX_STATUS_OK    = 0,
+	LR11XX_STATUS_ERROR = 3,  /* matches lr11xx_hal_status_t ERROR value */
 } lr11xx_status_t;
 
 /*

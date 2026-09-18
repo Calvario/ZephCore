@@ -77,7 +77,7 @@ extern "C" {
  * @return lr20xx_status_t Operation status
  */
 lr20xx_status_t lr20xx_radio_ook_set_modulation_params( const void*                          context,
-                                                        const lr20xx_radio_ook_mod_params_t* params );
+							const lr20xx_radio_ook_mod_params_t* params );
 
 /**
  * @brief Set the packet parameters for OOK packets
@@ -143,8 +143,8 @@ lr20xx_status_t lr20xx_radio_ook_set_crc_params( const void* context, uint32_t c
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_radio_ook_set_syncword( const void*   context,
-                                               const uint8_t syncword[LR20XX_RADIO_OOK_SYNCWORD_LENGTH],
-                                               uint8_t nb_bits, lr20xx_radio_ook_syncword_bit_order_t bit_order );
+					       const uint8_t syncword[LR20XX_RADIO_OOK_SYNCWORD_LENGTH],
+					       uint8_t nb_bits, lr20xx_radio_ook_syncword_bit_order_t bit_order );
 
 /**
  * @brief Set the node and broadcast addresses for OOK packets
@@ -203,7 +203,7 @@ lr20xx_status_t lr20xx_radio_ook_get_packet_status( const void* context, lr20xx_
  * @return lr20xx_status_t Operation status
  */
 lr20xx_status_t lr20xx_radio_ook_set_rx_detector( const void*                           context,
-                                                  const lr20xx_radio_ook_rx_detector_t* rx_detector );
+						  const lr20xx_radio_ook_rx_detector_t* rx_detector );
 
 /**
  * @brief Set whitening parameters for OOK packet
@@ -214,7 +214,7 @@ lr20xx_status_t lr20xx_radio_ook_set_rx_detector( const void*                   
  * @return lr20xx_status_t Operation status
  */
 lr20xx_status_t lr20xx_radio_ook_set_whitening_params( const void*                                context,
-                                                       const lr20xx_radio_ook_whitening_params_t* params );
+						       const lr20xx_radio_ook_whitening_params_t* params );
 
 /**
  * @brief Get the time on air in ms for OOK transmission
@@ -226,8 +226,8 @@ lr20xx_status_t lr20xx_radio_ook_set_whitening_params( const void*              
  * @returns Time-on-air value in ms for OOK transmission
  */
 uint32_t lr20xx_radio_ook_get_time_on_air_in_ms( const lr20xx_radio_ook_pkt_params_t* pkt_p,
-                                                 const lr20xx_radio_ook_mod_params_t* mod_p,
-                                                 uint8_t                              syncword_len_in_bit );
+						 const lr20xx_radio_ook_mod_params_t* mod_p,
+						 uint8_t                              syncword_len_in_bit );
 
 #ifdef __cplusplus
 }

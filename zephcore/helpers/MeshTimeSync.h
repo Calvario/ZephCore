@@ -23,21 +23,21 @@
 #include <mesh/RTC.h>
 
 #ifdef CONFIG_ZEPHCORE_TIMESYNC_TABLE_SIZE
-  #define MESHTIMESYNC_TABLE_SIZE  CONFIG_ZEPHCORE_TIMESYNC_TABLE_SIZE
+	#define MESHTIMESYNC_TABLE_SIZE  CONFIG_ZEPHCORE_TIMESYNC_TABLE_SIZE
 #else
-  #define MESHTIMESYNC_TABLE_SIZE  32
+	#define MESHTIMESYNC_TABLE_SIZE  32
 #endif
 
 #ifdef CONFIG_ZEPHCORE_TIMESYNC_QUORUM
-  #define MESHTIMESYNC_QUORUM  CONFIG_ZEPHCORE_TIMESYNC_QUORUM
+	#define MESHTIMESYNC_QUORUM  CONFIG_ZEPHCORE_TIMESYNC_QUORUM
 #else
-  #define MESHTIMESYNC_QUORUM  6
+	#define MESHTIMESYNC_QUORUM  6
 #endif
 
 #ifndef FIRMWARE_BUILD_EPOCH
-  /* Injected by CMakeLists.txt (build-time UNIX epoch, the "provably dead
-   * clock" floor). 0 disables bootstrap mode entirely. */
-  #define FIRMWARE_BUILD_EPOCH 0u
+	/* Injected by CMakeLists.txt (build-time UNIX epoch, the "provably dead
+	 * clock" floor). 0 disables bootstrap mode entirely. */
+	#define FIRMWARE_BUILD_EPOCH 0u
 #endif
 
 class MeshTimeSync {

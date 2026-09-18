@@ -82,7 +82,7 @@ extern "C" {
  * @see lr20xx_radio_lora_get_recommended_ppm_offset, lr20xx_workarounds_rttof_results_deviation
  */
 lr20xx_status_t lr20xx_radio_lora_set_modulation_params( const void*                           context,
-                                                         const lr20xx_radio_lora_mod_params_t* mod_params );
+							 const lr20xx_radio_lora_mod_params_t* mod_params );
 
 /**
  * @brief Set the packet parameters for LoRa packets
@@ -100,7 +100,7 @@ lr20xx_status_t lr20xx_radio_lora_set_modulation_params( const void*            
  * @return lr20xx_status_t Operation status
  */
 lr20xx_status_t lr20xx_radio_lora_set_packet_params( const void*                           context,
-                                                     const lr20xx_radio_lora_pkt_params_t* pkt_params );
+						     const lr20xx_radio_lora_pkt_params_t* pkt_params );
 
 /**
  * @brief Configure a timeout given in number of LoRa symbols before stopping reception if no LoRa preamble symbols are
@@ -142,7 +142,7 @@ lr20xx_status_t lr20xx_radio_lora_configure_timeout_by_number_of_symbols( const 
  * @see lr20xx_radio_lora_configure_timeout_by_number_of_symbols, lr20xx_radio_convert_nb_symb_to_mant_exp
  */
 lr20xx_status_t lr20xx_radio_lora_configure_timeout_by_mantissa_exponent_symbols( const void* context, uint8_t mantissa,
-                                                                                  uint8_t exponent );
+										  uint8_t exponent );
 
 /**
  * @brief Helper function to get the mantissa and exponent for a given number of symbol
@@ -244,7 +244,7 @@ lr20xx_status_t lr20xx_radio_lora_set_syncword( const void* context, uint8_t syn
  * @see lr20xx_radio_lora_set_cad
  */
 lr20xx_status_t lr20xx_radio_lora_configure_cad_params( const void*                           context,
-                                                        const lr20xx_radio_lora_cad_params_t* cad_params );
+							const lr20xx_radio_lora_cad_params_t* cad_params );
 
 /**
  * @brief Start Channel Activity Detection (CAD) operation
@@ -285,7 +285,7 @@ lr20xx_status_t lr20xx_radio_lora_set_cad( const void* context );
  * @see lr20xx_radio_common_reset_rx_stats
  */
 lr20xx_status_t lr20xx_radio_lora_get_rx_statistics( const void*                        context,
-                                                     lr20xx_radio_lora_rx_statistics_t* statistics );
+						     lr20xx_radio_lora_rx_statistics_t* statistics );
 
 /**
  * @brief Get the status of the last received LoRa packet
@@ -302,7 +302,7 @@ lr20xx_status_t lr20xx_radio_lora_get_rx_statistics( const void*                
  * @return lr20xx_status_t Operation status
  */
 lr20xx_status_t lr20xx_radio_lora_get_packet_status( const void*                        context,
-                                                     lr20xx_radio_lora_packet_status_t* pkt_status );
+						     lr20xx_radio_lora_packet_status_t* pkt_status );
 
 /**
  * @brief Set the address for filtering in reception
@@ -315,7 +315,7 @@ lr20xx_status_t lr20xx_radio_lora_get_packet_status( const void*                
  * @return lr20xx_status_t Operation status
  */
 lr20xx_status_t lr20xx_radio_lora_set_address( const void* context, uint8_t address_offset, uint8_t address_length,
-                                               const uint8_t* address );
+					       const uint8_t* address );
 
 /**
  * @brief Configure LoRa intra-packet frequency hopping
@@ -347,8 +347,8 @@ lr20xx_status_t lr20xx_radio_lora_set_freq_hop( const void* context, const lr20x
  * @return lr20xx_status_t Operation status
  */
 lr20xx_status_t lr20xx_radio_lora_configure_side_detector_cad(
-    const void* context, const lr20xx_radio_lora_side_detector_cad_configuration_t* side_detector_cad_configurations,
-    uint8_t n_side_detector_cad_configurations );
+	const void* context, const lr20xx_radio_lora_side_detector_cad_configuration_t* side_detector_cad_configurations,
+	uint8_t n_side_detector_cad_configurations );
 
 /**
  * @brief Configure LoRa side detectors
@@ -383,8 +383,8 @@ lr20xx_status_t lr20xx_radio_lora_configure_side_detector_cad(
  * @return lr20xx_status_t Operation status
  */
 lr20xx_status_t lr20xx_radio_lora_configure_side_detectors(
-    const void* context, const lr20xx_radio_lora_side_detector_cfg_t* side_detector_cfgs,
-    uint8_t n_side_detector_cfgs );
+	const void* context, const lr20xx_radio_lora_side_detector_cfg_t* side_detector_cfgs,
+	uint8_t n_side_detector_cfgs );
 
 /**
  * @brief Configure the LoRa syncwords for side detectors
@@ -398,7 +398,7 @@ lr20xx_status_t lr20xx_radio_lora_configure_side_detectors(
  * @return lr20xx_status_t Operation status
  */
 lr20xx_status_t lr20xx_radio_lora_set_side_detector_syncwords( const void* context, const uint8_t* syncword,
-                                                               uint8_t n_syncword );
+							       uint8_t n_syncword );
 
 /**
  * @brief Compute the numerator for LoRa time-on-air computation.
@@ -411,7 +411,7 @@ lr20xx_status_t lr20xx_radio_lora_set_side_detector_syncwords( const void* conte
  * @returns LoRa time-on-air numerator
  */
 uint32_t lr20xx_radio_lora_get_time_on_air_numerator( const lr20xx_radio_lora_pkt_params_t* pkt_p,
-                                                      const lr20xx_radio_lora_mod_params_t* mod_p );
+						      const lr20xx_radio_lora_mod_params_t* mod_p );
 
 /**
  * @brief Get the actual value in Hertz of a given LoRa bandwidth
@@ -431,7 +431,7 @@ uint32_t lr20xx_radio_lora_get_bw_in_hz( lr20xx_radio_lora_bw_t bw );
  * @returns Time-on-air value in ms for LoRa transmission
  */
 uint32_t lr20xx_radio_lora_get_time_on_air_in_ms( const lr20xx_radio_lora_pkt_params_t* pkt_p,
-                                                  const lr20xx_radio_lora_mod_params_t* mod_p );
+						  const lr20xx_radio_lora_mod_params_t* mod_p );
 
 /**
  * @brief Helper function to compute recommended ppm offset value from SF and BW
@@ -466,7 +466,7 @@ uint32_t lr20xx_radio_lora_get_time_on_air_in_ms( const lr20xx_radio_lora_pkt_pa
  * @see lr20xx_radio_lora_set_modulation_params
  */
 lr20xx_radio_lora_ppm_t lr20xx_radio_lora_get_recommended_ppm_offset( lr20xx_radio_lora_sf_t sf,
-                                                                      lr20xx_radio_lora_bw_t bw );
+								      lr20xx_radio_lora_bw_t bw );
 #ifdef __cplusplus
 }
 #endif

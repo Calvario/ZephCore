@@ -98,7 +98,7 @@ static uint32_t lr11xx_radio_timings_get_lora_rx_input_delay_in_us( lr11xx_radio
  * @returns LoRa symbol time in microsecond
  */
 static uint32_t lr11xx_radio_timings_get_lora_symb_time_in_us( const lr11xx_radio_lora_sf_t sf,
-                                                               const lr11xx_radio_lora_bw_t bw );
+							       const lr11xx_radio_lora_bw_t bw );
 
 /*
  * -----------------------------------------------------------------------------
@@ -106,17 +106,17 @@ static uint32_t lr11xx_radio_timings_get_lora_symb_time_in_us( const lr11xx_radi
  */
 
 uint32_t lr11xx_radio_timings_get_delay_between_last_bit_sent_and_rx_done_in_us(
-    const lr11xx_radio_mod_params_lora_t* mod_params )
+	const lr11xx_radio_mod_params_lora_t* mod_params )
 {
-    return lr11xx_radio_timings_get_lora_rx_input_delay_in_us( mod_params->bw ) +
-           2 * lr11xx_radio_timings_get_lora_symb_time_in_us( mod_params->sf, mod_params->bw ) +
-           RX_DONE_IRQ_PROCESSING_TIME_IN_US;
+	return lr11xx_radio_timings_get_lora_rx_input_delay_in_us( mod_params->bw ) +
+		   2 * lr11xx_radio_timings_get_lora_symb_time_in_us( mod_params->sf, mod_params->bw ) +
+		   RX_DONE_IRQ_PROCESSING_TIME_IN_US;
 }
 
 uint32_t lr11xx_radio_timings_get_delay_between_last_bit_sent_and_tx_done_in_us(
-    const lr11xx_radio_ramp_time_t ramp_time )
+	const lr11xx_radio_ramp_time_t ramp_time )
 {
-    return lr11xx_radio_timings_get_pa_ramp_time_in_us( ramp_time ) + TX_DONE_IRQ_PROCESSING_TIME_IN_US;
+	return lr11xx_radio_timings_get_pa_ramp_time_in_us( ramp_time ) + TX_DONE_IRQ_PROCESSING_TIME_IN_US;
 }
 
 /*
@@ -126,97 +126,97 @@ uint32_t lr11xx_radio_timings_get_delay_between_last_bit_sent_and_tx_done_in_us(
 
 static uint32_t lr11xx_radio_timings_get_pa_ramp_time_in_us( const lr11xx_radio_ramp_time_t ramp_time )
 {
-    switch( ramp_time )
-    {
-    case LR11XX_RADIO_RAMP_16_US:
-    {
-        return 16;
-    }
-    case LR11XX_RADIO_RAMP_32_US:
-    {
-        return 32;
-    }
-    case LR11XX_RADIO_RAMP_48_US:
-    {
-        return 48;
-    }
-    case LR11XX_RADIO_RAMP_64_US:
-    {
-        return 64;
-    }
-    case LR11XX_RADIO_RAMP_80_US:
-    {
-        return 80;
-    }
-    case LR11XX_RADIO_RAMP_96_US:
-    {
-        return 96;
-    }
-    case LR11XX_RADIO_RAMP_112_US:
-    {
-        return 112;
-    }
-    case LR11XX_RADIO_RAMP_128_US:
-    {
-        return 128;
-    }
-    case LR11XX_RADIO_RAMP_144_US:
-    {
-        return 144;
-    }
-    case LR11XX_RADIO_RAMP_160_US:
-    {
-        return 160;
-    }
-    case LR11XX_RADIO_RAMP_176_US:
-    {
-        return 176;
-    }
-    case LR11XX_RADIO_RAMP_192_US:
-    {
-        return 192;
-    }
-    case LR11XX_RADIO_RAMP_208_US:
-    {
-        return 208;
-    }
-    case LR11XX_RADIO_RAMP_240_US:
-    {
-        return 240;
-    }
-    case LR11XX_RADIO_RAMP_272_US:
-    {
-        return 272;
-    }
-    case LR11XX_RADIO_RAMP_304_US:
-    {
-        return 304;
-    }
-    default:
-        return 0;
-    }
+	switch( ramp_time )
+	{
+	case LR11XX_RADIO_RAMP_16_US:
+	{
+		return 16;
+	}
+	case LR11XX_RADIO_RAMP_32_US:
+	{
+		return 32;
+	}
+	case LR11XX_RADIO_RAMP_48_US:
+	{
+		return 48;
+	}
+	case LR11XX_RADIO_RAMP_64_US:
+	{
+		return 64;
+	}
+	case LR11XX_RADIO_RAMP_80_US:
+	{
+		return 80;
+	}
+	case LR11XX_RADIO_RAMP_96_US:
+	{
+		return 96;
+	}
+	case LR11XX_RADIO_RAMP_112_US:
+	{
+		return 112;
+	}
+	case LR11XX_RADIO_RAMP_128_US:
+	{
+		return 128;
+	}
+	case LR11XX_RADIO_RAMP_144_US:
+	{
+		return 144;
+	}
+	case LR11XX_RADIO_RAMP_160_US:
+	{
+		return 160;
+	}
+	case LR11XX_RADIO_RAMP_176_US:
+	{
+		return 176;
+	}
+	case LR11XX_RADIO_RAMP_192_US:
+	{
+		return 192;
+	}
+	case LR11XX_RADIO_RAMP_208_US:
+	{
+		return 208;
+	}
+	case LR11XX_RADIO_RAMP_240_US:
+	{
+		return 240;
+	}
+	case LR11XX_RADIO_RAMP_272_US:
+	{
+		return 272;
+	}
+	case LR11XX_RADIO_RAMP_304_US:
+	{
+		return 304;
+	}
+	default:
+		return 0;
+	}
 }
 
 /* RX input pipeline delay by bandwidth (SWDR001 §6.1, characterised values) */
 static uint32_t lr11xx_radio_timings_get_lora_rx_input_delay_in_us( lr11xx_radio_lora_bw_t bw )
 {
-    switch( bw )
-    {
-    case LR11XX_RADIO_LORA_BW_500:
-        return 16;   /* 500 kHz: 16µs */
-    case LR11XX_RADIO_LORA_BW_250:
-        return 31;   /* 250 kHz: 31µs */
-    case LR11XX_RADIO_LORA_BW_125:
-        return 57;   /* 125 kHz: 57µs */
-    default:
-        return 0;
-    }
+	switch( bw )
+	{
+	case LR11XX_RADIO_LORA_BW_500:
+		return 16;   /* 500 kHz: 16µs */
+	case LR11XX_RADIO_LORA_BW_250:
+		return 31;   /* 250 kHz: 31µs */
+	case LR11XX_RADIO_LORA_BW_125:
+		return 57;   /* 125 kHz: 57µs */
+	default:
+		return 0;
+	}
 }
 
 static uint32_t lr11xx_radio_timings_get_lora_symb_time_in_us( const lr11xx_radio_lora_sf_t sf,
-                                                               const lr11xx_radio_lora_bw_t bw )
+							       const lr11xx_radio_lora_bw_t bw )
 {
-    return ( 1 << ( uint8_t ) sf ) * 1000000 / lr11xx_radio_get_lora_bw_in_hz( bw );
+	return ( 1 << ( uint8_t ) sf ) * 1000000 / lr11xx_radio_get_lora_bw_in_hz( bw );
 }
 
 /* --- EOF ------------------------------------------------------------------ */

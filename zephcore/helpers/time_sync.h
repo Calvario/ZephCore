@@ -21,7 +21,7 @@ enum time_sync_source {
 };
 
 #if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK) || \
-    IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_BUTTON)
+	IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_BUTTON)
 
 void time_sync_report(enum time_sync_source src);
 

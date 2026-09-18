@@ -66,8 +66,8 @@ extern "C" {
  */
 typedef enum lr20xx_hal_status_e
 {
-    LR20XX_HAL_STATUS_OK    = 0,
-    LR20XX_HAL_STATUS_ERROR = 3,
+		LR20XX_HAL_STATUS_OK    = 0,
+		LR20XX_HAL_STATUS_ERROR = 3,
 } lr20xx_hal_status_t;
 
 /*
@@ -105,7 +105,7 @@ lr20xx_hal_status_t lr20xx_hal_wakeup( const void* context );
  * @returns Operation status
  */
 lr20xx_hal_status_t lr20xx_hal_write( const void* context, const uint8_t* command, const uint16_t command_length,
-                                      const uint8_t* data, const uint16_t data_length );
+				      const uint8_t* data, const uint16_t data_length );
 
 /*!
  * @brief Radio data transfer - read
@@ -128,7 +128,7 @@ lr20xx_hal_status_t lr20xx_hal_write( const void* context, const uint8_t* comman
  * expects that zeros be sent on the MOSI line when this command is reading the command response data.
  */
 lr20xx_hal_status_t lr20xx_hal_read( const void* context, const uint8_t* command, const uint16_t command_length,
-                                     uint8_t* data, const uint16_t data_length );
+				     uint8_t* data, const uint16_t data_length );
 
 /*!
  * @brief  Direct read from the SPI bus
@@ -169,8 +169,8 @@ lr20xx_hal_status_t lr20xx_hal_direct_read( const void* context, uint8_t* data, 
  * expects that zeros be sent on the MOSI line when this command is reading the command response data.
  */
 lr20xx_hal_status_t lr20xx_hal_direct_read_fifo( const void* context, const uint8_t* command,
-                                                 const uint16_t command_length, uint8_t* data,
-                                                 const uint16_t data_length );
+						 const uint16_t command_length, uint8_t* data,
+						 const uint16_t data_length );
 
 #ifdef __cplusplus
 }

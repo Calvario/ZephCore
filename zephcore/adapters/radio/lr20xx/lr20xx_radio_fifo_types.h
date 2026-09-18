@@ -66,13 +66,13 @@ extern "C" {
  */
 enum lr20xx_radio_fifo_flag_e
 {
-    LR20XX_RADIO_FIFO_FLAG_NONE           = ( 0 << 0 ),
-    LR20XX_RADIO_FIFO_FLAG_EMPTY          = ( 1 << 0 ),
-    LR20XX_RADIO_FIFO_FLAG_THRESHOLD_LOW  = ( 1 << 1 ),
-    LR20XX_RADIO_FIFO_FLAG_THRESHOLD_HIGH = ( 1 << 2 ),
-    LR20XX_RADIO_FIFO_FLAG_FULL           = ( 1 << 3 ),
-    LR20XX_RADIO_FIFO_FLAG_OVERFLOW       = ( 1 << 4 ),
-    LR20XX_RADIO_FIFO_FLAG_UNDERFLOW      = ( 1 << 5 ),
+	LR20XX_RADIO_FIFO_FLAG_NONE           = ( 0 << 0 ),
+	LR20XX_RADIO_FIFO_FLAG_EMPTY          = ( 1 << 0 ),
+	LR20XX_RADIO_FIFO_FLAG_THRESHOLD_LOW  = ( 1 << 1 ),
+	LR20XX_RADIO_FIFO_FLAG_THRESHOLD_HIGH = ( 1 << 2 ),
+	LR20XX_RADIO_FIFO_FLAG_FULL           = ( 1 << 3 ),
+	LR20XX_RADIO_FIFO_FLAG_OVERFLOW       = ( 1 << 4 ),
+	LR20XX_RADIO_FIFO_FLAG_UNDERFLOW      = ( 1 << 5 ),
 };
 
 /**

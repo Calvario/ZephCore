@@ -66,9 +66,9 @@ extern "C" {
  * @brief Default GFSK sync word value
  */
 #define LR11XX_RADIO_GFSK_SYNC_WORD_DEFAULT            \
-    {                                                  \
-        0x97, 0x23, 0x52, 0x25, 0x56, 0x53, 0x65, 0x64 \
-    }
+		{                                                  \
+				0x97, 0x23, 0x52, 0x25, 0x56, 0x53, 0x65, 0x64 \
+		}
 
 /*
  * -----------------------------------------------------------------------------
@@ -143,7 +143,7 @@ lr11xx_status_t lr11xx_radio_get_pkt_type( const void* context, lr11xx_radio_pkt
  * @returns Operation status
  */
 lr11xx_status_t lr11xx_radio_get_rx_buffer_status( const void*                      context,
-                                                   lr11xx_radio_rx_buffer_status_t* rx_buffer_status );
+						   lr11xx_radio_rx_buffer_status_t* rx_buffer_status );
 
 /*!
  * @brief Get the status of last GFSK received packet
@@ -193,7 +193,7 @@ lr11xx_status_t lr11xx_radio_get_rssi_inst( const void* context, int8_t* rssi_in
  * @returns Operation status
  */
 lr11xx_status_t lr11xx_radio_set_gfsk_sync_word( const void*   context,
-                                                 const uint8_t gfsk_sync_word[LR11XX_RADIO_GFSK_SYNC_WORD_LENGTH] );
+						 const uint8_t gfsk_sync_word[LR11XX_RADIO_GFSK_SYNC_WORD_LENGTH] );
 
 /*!
  * @brief Set the LoRa modem sync word
@@ -219,7 +219,7 @@ lr11xx_status_t lr11xx_radio_set_lora_sync_word( const void* context, const uint
  * than 0x303.
  */
 lr11xx_status_t lr11xx_radio_set_lora_public_network( const void*                            context,
-                                                      const lr11xx_radio_lora_network_type_t network_type );
+						      const lr11xx_radio_lora_network_type_t network_type );
 
 /*!
  * @brief Start RX operations with a timeout in millisecond
@@ -358,8 +358,8 @@ lr11xx_status_t lr11xx_radio_set_rf_freq( const void* context, const uint32_t fr
  * @returns Operation status
  */
 lr11xx_status_t lr11xx_radio_auto_tx_rx( const void* context, const uint32_t delay,
-                                         const lr11xx_radio_intermediary_mode_t intermediary_mode,
-                                         const uint32_t                         timeout );
+					 const lr11xx_radio_intermediary_mode_t intermediary_mode,
+					 const uint32_t                         timeout );
 
 /*!
  * @brief Set Channel Activity Detection configuration
@@ -396,7 +396,7 @@ lr11xx_status_t lr11xx_radio_set_pkt_type( const void* context, const lr11xx_rad
  * @see lr11xx_radio_set_pkt_type
  */
 lr11xx_status_t lr11xx_radio_set_gfsk_mod_params( const void*                           context,
-                                                  const lr11xx_radio_mod_params_gfsk_t* mod_params );
+						  const lr11xx_radio_mod_params_gfsk_t* mod_params );
 
 /*!
  * @brief Set the modulation parameters for LoRa packets
@@ -411,7 +411,7 @@ lr11xx_status_t lr11xx_radio_set_gfsk_mod_params( const void*                   
  * @see lr11xx_radio_set_pkt_type
  */
 lr11xx_status_t lr11xx_radio_set_lora_mod_params( const void*                           context,
-                                                  const lr11xx_radio_mod_params_lora_t* mod_params );
+						  const lr11xx_radio_mod_params_lora_t* mod_params );
 
 /*!
  * @brief Set the packet parameters for GFSK packets
@@ -426,7 +426,7 @@ lr11xx_status_t lr11xx_radio_set_lora_mod_params( const void*                   
  * @see lr11xx_radio_set_pkt_type, lr11xx_radio_set_gfsk_mod_params
  */
 lr11xx_status_t lr11xx_radio_set_gfsk_pkt_params( const void*                           context,
-                                                  const lr11xx_radio_pkt_params_gfsk_t* pkt_params );
+						  const lr11xx_radio_pkt_params_gfsk_t* pkt_params );
 
 /*!
  * @brief Set the packet parameters for LoRa packets
@@ -441,7 +441,7 @@ lr11xx_status_t lr11xx_radio_set_gfsk_pkt_params( const void*                   
  * @see lr11xx_radio_set_pkt_type, lr11xx_radio_set_lora_mod_params
  */
 lr11xx_status_t lr11xx_radio_set_lora_pkt_params( const void*                           context,
-                                                  const lr11xx_radio_pkt_params_lora_t* pkt_params );
+						  const lr11xx_radio_pkt_params_lora_t* pkt_params );
 
 /*!
  * @brief Set the parameters for TX power and power amplifier ramp time
@@ -463,7 +463,7 @@ lr11xx_status_t lr11xx_radio_set_lora_pkt_params( const void*                   
  * @returns Operation status
  */
 lr11xx_status_t lr11xx_radio_set_tx_params( const void* context, const int8_t pwr_in_dbm,
-                                            const lr11xx_radio_ramp_time_t ramp_time );
+					    const lr11xx_radio_ramp_time_t ramp_time );
 
 /*!
  * @brief Sets the Node and Broadcast address used for GFSK
@@ -477,7 +477,7 @@ lr11xx_status_t lr11xx_radio_set_tx_params( const void* context, const int8_t pw
  * @returns Operation status
  */
 lr11xx_status_t lr11xx_radio_set_pkt_address( const void* context, const uint8_t node_address,
-                                              const uint8_t broadcast_address );
+					      const uint8_t broadcast_address );
 
 /*!
  * @brief Alter the chip mode after successfull transmission or reception operation
@@ -490,7 +490,7 @@ lr11xx_status_t lr11xx_radio_set_pkt_address( const void* context, const uint8_t
  * @returns Operation status
  */
 lr11xx_status_t lr11xx_radio_set_rx_tx_fallback_mode( const void*                         context,
-                                                      const lr11xx_radio_fallback_modes_t fallback_mode );
+						      const lr11xx_radio_fallback_modes_t fallback_mode );
 
 /*!
  * @brief Configure and start a Rx Duty Cycle operation
@@ -519,8 +519,8 @@ lr11xx_status_t lr11xx_radio_set_rx_tx_fallback_mode( const void*               
  * @see lr11xx_radio_set_cad_params
  */
 lr11xx_status_t lr11xx_radio_set_rx_duty_cycle( const void* context, const uint32_t rx_period_in_ms,
-                                                const uint32_t                          sleep_period_in_ms,
-                                                const lr11xx_radio_rx_duty_cycle_mode_t mode );
+						const uint32_t                          sleep_period_in_ms,
+						const lr11xx_radio_rx_duty_cycle_mode_t mode );
 
 /*!
  * @brief Configure and start a Rx Duty Cycle operation
@@ -549,9 +549,9 @@ lr11xx_status_t lr11xx_radio_set_rx_duty_cycle( const void* context, const uint3
  * @see lr11xx_radio_set_cad_params
  */
 lr11xx_status_t lr11xx_radio_set_rx_duty_cycle_with_timings_in_rtc_step( const void*    context,
-                                                                         const uint32_t rx_period_in_rtc_step,
-                                                                         const uint32_t sleep_period_in_rtc_step,
-                                                                         const lr11xx_radio_rx_duty_cycle_mode_t mode );
+									 const uint32_t rx_period_in_rtc_step,
+									 const uint32_t sleep_period_in_rtc_step,
+									 const lr11xx_radio_rx_duty_cycle_mode_t mode );
 
 /*!
  * @brief Set the Power Amplifier configuration
@@ -666,7 +666,7 @@ lr11xx_status_t lr11xx_radio_cfg_rx_boosted( const void* context, const bool ena
  * @returns Operation status
  */
 lr11xx_status_t lr11xx_radio_set_rssi_calibration( const void*                                  context,
-                                                   const lr11xx_radio_rssi_calibration_table_t* rssi_cal_table );
+						   const lr11xx_radio_rssi_calibration_table_t* rssi_cal_table );
 
 /*!
  * @brief Gets the radio bw parameter for a given bandwidth in Hz
@@ -689,7 +689,7 @@ lr11xx_status_t lr11xx_radio_get_gfsk_rx_bandwidth( uint32_t bw_in_hz, lr11xx_ra
  * @returns LoRa time-on-air numerator
  */
 uint32_t lr11xx_radio_get_lora_time_on_air_numerator( const lr11xx_radio_pkt_params_lora_t* pkt_p,
-                                                      const lr11xx_radio_mod_params_lora_t* mod_p );
+						      const lr11xx_radio_mod_params_lora_t* mod_p );
 
 /**
  * @brief Get the actual value in Hertz of a given LoRa bandwidth
@@ -709,7 +709,7 @@ uint32_t lr11xx_radio_get_lora_bw_in_hz( lr11xx_radio_lora_bw_t bw );
  * @returns Time-on-air value in ms for LoRa transmission
  */
 uint32_t lr11xx_radio_get_lora_time_on_air_in_ms( const lr11xx_radio_pkt_params_lora_t* pkt_p,
-                                                  const lr11xx_radio_mod_params_lora_t* mod_p );
+						  const lr11xx_radio_mod_params_lora_t* mod_p );
 
 /**
  * @brief Compute the numerator for GFSK time-on-air computation.
@@ -732,7 +732,7 @@ uint32_t lr11xx_radio_get_gfsk_time_on_air_numerator( const lr11xx_radio_pkt_par
  * @returns Time-on-air value in ms for GFSK transmission
  */
 uint32_t lr11xx_radio_get_gfsk_time_on_air_in_ms( const lr11xx_radio_pkt_params_gfsk_t* pkt_p,
-                                                  const lr11xx_radio_mod_params_gfsk_t* mod_p );
+						  const lr11xx_radio_mod_params_gfsk_t* mod_p );
 
 /**
  * @brief Get the number of RTC steps for a given time in millisecond

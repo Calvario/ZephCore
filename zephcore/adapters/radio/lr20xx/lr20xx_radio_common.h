@@ -101,8 +101,8 @@ extern "C" {
  * @see lr20xx_system_get_errors, lr20xx_radio_common_calibrate_front_end_helper
  */
 lr20xx_status_t lr20xx_radio_common_calibrate_front_end(
-    const void* context, const lr20xx_radio_common_raw_front_end_calibration_value_t* front_end_calibration_values,
-    uint8_t n_front_end_calibration_values );
+	const void* context, const lr20xx_radio_common_raw_front_end_calibration_value_t* front_end_calibration_values,
+	uint8_t n_front_end_calibration_values );
 
 /*!
  * @brief Helper function to execute front end calibration procedure
@@ -123,8 +123,8 @@ lr20xx_status_t lr20xx_radio_common_calibrate_front_end(
  * @see lr20xx_radio_common_calibrate_front_end
  */
 lr20xx_status_t lr20xx_radio_common_calibrate_front_end_helper(
-    const void* context, const lr20xx_radio_common_front_end_calibration_value_t* front_end_calibration_structures,
-    uint8_t n_front_end_calibration_structures );
+	const void* context, const lr20xx_radio_common_front_end_calibration_value_t* front_end_calibration_structures,
+	uint8_t n_front_end_calibration_structures );
 
 /**
  * @brief Helper function that computes the number of RTC steps from a given time in millisecond
@@ -155,7 +155,7 @@ lr20xx_status_t lr20xx_radio_common_set_rf_freq( const void* context, uint32_t f
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_radio_common_set_rx_path( const void* context, lr20xx_radio_common_rx_path_t rx_path,
-                                                 lr20xx_radio_common_rx_path_boost_mode_t boost_mode );
+						 lr20xx_radio_common_rx_path_boost_mode_t boost_mode );
 
 /*!
  * @brief Set the Power Amplifier configuration
@@ -192,7 +192,7 @@ lr20xx_status_t lr20xx_radio_common_set_pa_cfg( const void* context, const lr20x
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_radio_common_set_tx_params( const void* context, const int8_t power_half_dbm,
-                                                   const lr20xx_radio_common_ramp_time_t ramp_time );
+						   const lr20xx_radio_common_ramp_time_t ramp_time );
 
 /*!
  * @brief Set RSSI calibration table(s)
@@ -206,8 +206,8 @@ lr20xx_status_t lr20xx_radio_common_set_tx_params( const void* context, const in
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_radio_common_set_rssi_calibration(
-    const void* context, const lr20xx_radio_common_rssi_calibration_gain_table_t* rssi_cal_table_lf,
-    const lr20xx_radio_common_rssi_calibration_gain_table_t* rssi_cal_table_hf );
+	const void* context, const lr20xx_radio_common_rssi_calibration_gain_table_t* rssi_cal_table_lf,
+	const lr20xx_radio_common_rssi_calibration_gain_table_t* rssi_cal_table_hf );
 
 /*!
  * @brief Configure the chip mode shall be in after transmission or reception operation
@@ -227,7 +227,7 @@ lr20xx_status_t lr20xx_radio_common_set_rssi_calibration(
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_radio_common_set_rx_tx_fallback_mode( const void*                                context,
-                                                             const lr20xx_radio_common_fallback_modes_t fallback_mode );
+							     const lr20xx_radio_common_fallback_modes_t fallback_mode );
 
 /*!
  * @brief Set the packet type to be used
@@ -264,7 +264,7 @@ lr20xx_status_t lr20xx_radio_common_get_pkt_type( const void* context, lr20xx_ra
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_radio_common_set_rx_timeout_stop_event( const void* context,
-                                                               const bool  is_stopped_on_preamble_detection );
+							       const bool  is_stopped_on_preamble_detection );
 
 /*!
  * @brief Reset internal Rx stats
@@ -328,7 +328,7 @@ lr20xx_status_t lr20xx_radio_common_set_rx( const void* context, const uint32_t 
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_radio_common_set_rx_with_timeout_in_rtc_step( const void*    context,
-                                                                     const uint32_t timeout_in_rtc_step );
+								     const uint32_t timeout_in_rtc_step );
 
 /*!
  * @brief Start RX operations with a pre-configured default timeout
@@ -368,7 +368,7 @@ lr20xx_status_t lr20xx_radio_common_set_tx( const void* context, const uint32_t 
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_radio_common_set_tx_with_timeout_in_rtc_step( const void*    context,
-                                                                     const uint32_t timeout_in_rtc_step );
+								     const uint32_t timeout_in_rtc_step );
 
 /*!
  * @brief Start TX operations with a pre-configured default timeout
@@ -418,8 +418,8 @@ lr20xx_status_t lr20xx_radio_common_select_pa( const void* context, lr20xx_radio
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_radio_common_set_rx_duty_cycle( const void* context, const uint32_t rx_period_in_ms,
-                                                       const uint32_t sleep_period_in_ms,
-                                                       const lr20xx_radio_common_rx_duty_cycle_mode_t mode );
+						       const uint32_t sleep_period_in_ms,
+						       const lr20xx_radio_common_rx_duty_cycle_mode_t mode );
 
 /*!
  * @brief Configure and start a Rx Duty Cycle operation with timings in RTC step
@@ -454,8 +454,8 @@ lr20xx_status_t lr20xx_radio_common_set_rx_duty_cycle( const void* context, cons
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_radio_common_set_rx_duty_cycle_with_timing_in_rtc_step(
-    const void* context, const uint32_t rx_period_in_rtc_step, const uint32_t sleep_period_in_rtc_step,
-    const lr20xx_radio_common_rx_duty_cycle_mode_t mode );
+	const void* context, const uint32_t rx_period_in_rtc_step, const uint32_t sleep_period_in_rtc_step,
+	const lr20xx_radio_common_rx_duty_cycle_mode_t mode );
 
 /**
  * @brief Configure the automatic Tx operation after Rx, or automatic Rx operation after Tx
@@ -496,7 +496,7 @@ lr20xx_status_t lr20xx_radio_common_set_rx_duty_cycle_with_timing_in_rtc_step(
  * @return lr20xx_status_t
  */
 lr20xx_status_t lr20xx_radio_common_configure_auto_tx_rx(
-    const void* context, const lr20xx_radio_common_auto_tx_rx_configuration_t* configuration );
+	const void* context, const lr20xx_radio_common_auto_tx_rx_configuration_t* configuration );
 
 /*!
  * @brief Get the length in byte of the last received packet
@@ -518,7 +518,7 @@ lr20xx_status_t lr20xx_radio_common_get_rx_packet_length( const void* context, u
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_radio_common_set_default_rx_tx_timeout( const void* context, uint32_t rx_timeout_in_ms,
-                                                               uint32_t tx_timeout_in_ms );
+							       uint32_t tx_timeout_in_ms );
 
 /*!
  * @brief Set default timeout values for RX and TX operations
@@ -533,8 +533,8 @@ lr20xx_status_t lr20xx_radio_common_set_default_rx_tx_timeout( const void* conte
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_radio_common_set_default_rx_tx_timeout_in_rtc_step( const void* context,
-                                                                           uint32_t    rx_timeout_in_rtc_step,
-                                                                           uint32_t    tx_timeout_in_rtc_step );
+									   uint32_t    rx_timeout_in_rtc_step,
+									   uint32_t    tx_timeout_in_rtc_step );
 
 /*!
  * @brief Set a timestamp source for a given configuration slot
@@ -549,8 +549,8 @@ lr20xx_status_t lr20xx_radio_common_set_default_rx_tx_timeout_in_rtc_step( const
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_radio_common_set_timestamp_source( const void*                              context,
-                                                          lr20xx_radio_common_timestamp_cfg_slot_t cfg_slot,
-                                                          lr20xx_radio_common_timestamp_source_t   source );
+							  lr20xx_radio_common_timestamp_cfg_slot_t cfg_slot,
+							  lr20xx_radio_common_timestamp_source_t   source );
 
 /*!
  * @brief Get the elapsed time since radio event registered at given configuration slot
@@ -567,8 +567,8 @@ lr20xx_status_t lr20xx_radio_common_set_timestamp_source( const void*           
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_radio_common_get_elapsed_time_in_tick( const void*                              context,
-                                                              lr20xx_radio_common_timestamp_cfg_slot_t cfg_slot,
-                                                              uint32_t* elapsed_time_in_tick );
+							      lr20xx_radio_common_timestamp_cfg_slot_t cfg_slot,
+							      uint32_t* elapsed_time_in_tick );
 
 /*!
  * @brief Launch a CCA (Clear Channel Assessment) operation
@@ -611,7 +611,7 @@ lr20xx_status_t lr20xx_radio_common_set_agc_gain( const void* context, lr20xx_ra
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_radio_common_set_cad_params( const void*                             context,
-                                                    const lr20xx_radio_common_cad_params_t* params );
+						    const lr20xx_radio_common_cad_params_t* params );
 
 /*!
  * @brief Set the chip in non-LoRa CAD mode

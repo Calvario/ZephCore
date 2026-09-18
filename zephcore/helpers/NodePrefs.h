@@ -41,11 +41,11 @@
 #define ZC_RADIO_FREQ_MAX_MHZ   2500.0f
 #define ZC_RADIO_BW_MIN_KHZ     7.0f
 #ifdef CONFIG_ZEPHCORE_RADIO_LR2021
-  #define ZC_RADIO_BW_MAX_KHZ   1000.0f
-  #define ZC_RADIO_BW_RANGE_STR "7-1000"
+	#define ZC_RADIO_BW_MAX_KHZ   1000.0f
+	#define ZC_RADIO_BW_RANGE_STR "7-1000"
 #else
-  #define ZC_RADIO_BW_MAX_KHZ   500.0f
-  #define ZC_RADIO_BW_RANGE_STR "7-500"
+	#define ZC_RADIO_BW_MAX_KHZ   500.0f
+	#define ZC_RADIO_BW_RANGE_STR "7-500"
 #endif
 
 #define TELEM_MODE_DENY            0

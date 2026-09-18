@@ -1,24 +1,24 @@
 /*
- * RAK4631 overlay for SoftDevice + UF2 bootloader.
- * App at 0x26000, storage at 0xD4000, bootloader at 0xF4000.
- * Uses SoftDevice s140 v6.1.1 (ends at 0x26000).
- * Console: USB CDC ACM.
- * Battery: AIN3 = P0.05, voltage divider per RAK4631 schematic.
- *
- * QSPI Flash: Optional external flash on WisBlock Base boards.
- * Supports: P25Q16H, MX25R1635F, W25Q16, GD25Q16, IS25LP080, ZD25WQ16
- * If no QSPI flash present, falls back to internal flash only.
- *
- * GPS: RAK1910 (u-blox MAX-7Q) on UART1 at 9600 baud (Slot A)
- * Sensors: Auto-detected on I2C0 - supports:
- *   - RAK1901 (SHTC3) at 0x70
- *   - RAK1902 (LPS22HB) at 0x5C
- *   - RAK1906 (BME680) at 0x76
- *
- * Optional SSD1306 128x64 @ 0x3C on I2C0 (P0.13/P0.14, no reset GPIO).
- * If the panel is absent, display init may fail
- * at runtime; UI continues without OLED.
- */
+  * RAK4631 overlay for SoftDevice + UF2 bootloader.
+  * App at 0x26000, storage at 0xD4000, bootloader at 0xF4000.
+  * Uses SoftDevice s140 v6.1.1 (ends at 0x26000).
+  * Console: USB CDC ACM.
+  * Battery: AIN3 = P0.05, voltage divider per RAK4631 schematic.
+  *
+  * QSPI Flash: Optional external flash on WisBlock Base boards.
+  * Supports: P25Q16H, MX25R1635F, W25Q16, GD25Q16, IS25LP080, ZD25WQ16
+  * If no QSPI flash present, falls back to internal flash only.
+  *
+  * GPS: RAK1910 (u-blox MAX-7Q) on UART1 at 9600 baud (Slot A)
+  * Sensors: Auto-detected on I2C0 - supports:
+  *   - RAK1901 (SHTC3) at 0x70
+  *   - RAK1902 (LPS22HB) at 0x5C
+  *   - RAK1906 (BME680) at 0x76
+  *
+  * Optional SSD1306 128x64 @ 0x3C on I2C0 (P0.13/P0.14, no reset GPIO).
+  * If the panel is absent, display init may fail
+  * at runtime; UI continues without OLED.
+  */
 
 #include <zephyr/dt-bindings/adc/nrf-saadc.h>
 #include <zephyr/dt-bindings/input/input-event-codes.h>
@@ -100,45 +100,45 @@
 };
 
 &lora {
-       dio1-gpios = <&gpio1 15 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
-       rx-boosted;
+	dio1-gpios = <&gpio1 15 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+	rx-boosted;
 
-       /* Upstream DTS labels P1.05 as rx-enable-gpios (per-direction
-        * antenna control), but on RAK4631 this pin is the SX1262 module
-        * power-enable (HIGH = on; see MeshCore variants/rak4631). The
-        * driver toggles per-direction GPIOs each TX/RX, which would
-        * pulse this pin LOW during RX. Stop the driver from touching it
-        * by deleting the property; the gpio-hog below pins it HIGH. */
-       /delete-property/ rx-enable-gpios;
+	/* Upstream DTS labels P1.05 as rx-enable-gpios (per-direction
+	 * antenna control), but on RAK4631 this pin is the SX1262 module
+	 * power-enable (HIGH = on; see MeshCore variants/rak4631). The
+	 * driver toggles per-direction GPIOs each TX/RX, which would
+	 * pulse this pin LOW during RX. Stop the driver from touching it
+	 * by deleting the property; the gpio-hog below pins it HIGH. */
+	/delete-property/ rx-enable-gpios;
 };
 
 &gpio1 {
-       sx1262_power_en {
-               gpio-hog;
-               gpios = <5 GPIO_ACTIVE_HIGH>;
-               output-high;
-               line-name = "sx1262-power-en";
-       };
+	sx1262_power_en {
+		gpio-hog;
+		gpios = <5 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "sx1262-power-en";
+	};
 
-       /* 3V3_S rail enable — WB_IO2 / P1.02, HIGH = on. This is the switched
-        * 3.3V bus on every WisBlock base board: it feeds the GPS slot, the
-        * sensor slot and the OLED. Without this the pin sits at its reset
-        * default (input/float) and the GPS module is simply never powered.
-        *
-        * Hogged rather than exposed as `chosen zephcore,gps-power`: the rail is
-        * not GPS-private, so duty-cycling it for the GPS would also drop the
-        * I2C sensors and the display.
-        *
-        * Note this pin is often described as "GPS reset" (it lands on the
-        * RAK1910/RAK12500 RESET_N in Slot A). Do not drive it as a reset —
-        * u-blox specify RESET_N as a reset only, not an enable (the SiP draws
-        * significant current while held in reset). See MeshCore PR #3051. */
-       v3v3s_en {
-               gpio-hog;
-               gpios = <2 GPIO_ACTIVE_HIGH>;
-               output-high;
-               line-name = "3v3s-enable";
-       };
+	/* 3V3_S rail enable — WB_IO2 / P1.02, HIGH = on. This is the switched
+	 * 3.3V bus on every WisBlock base board: it feeds the GPS slot, the
+	 * sensor slot and the OLED. Without this the pin sits at its reset
+	 * default (input/float) and the GPS module is simply never powered.
+	 *
+	 * Hogged rather than exposed as `chosen zephcore,gps-power`: the rail is
+	 * not GPS-private, so duty-cycling it for the GPS would also drop the
+	 * I2C sensors and the display.
+	 *
+	 * Note this pin is often described as "GPS reset" (it lands on the
+	 * RAK1910/RAK12500 RESET_N in Slot A). Do not drive it as a reset —
+	 * u-blox specify RESET_N as a reset only, not an enable (the SiP draws
+	 * significant current while held in reset). See MeshCore PR #3051. */
+	v3v3s_en {
+		gpio-hog;
+		gpios = <2 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "3v3s-enable";
+	};
 };
 
 /* LEDs are active-high on this board (stock RAK4631 DTS used active-low). */
@@ -151,15 +151,15 @@
 };
 
 /*
- * GPS on UART1 - RAK1910 (u-blox MAX-7Q) at 9600 baud, Slot A.
- *
- * The WisBlock GPS slot is wired to the core module's Serial1 = P0.15 (MCU RX
- * <- GPS TX) / P0.16 (MCU TX -> GPS RX), which is Zephyr's uart1 on this board
- * (uart0 is P0.19/P0.20 = Serial2, which the GPS slot does not reach). Matches
- * MeshCore variants/rak4631 (PIN_SERIAL1_RX 15 / _TX 16) and ZephCore's sibling
- * RAK-family boards gat562_30s and rak3401_1watt. uart1 is also nrf-uarte
- * upstream, whereas uart0 is the legacy nrf-uart.
- */
+  * GPS on UART1 - RAK1910 (u-blox MAX-7Q) at 9600 baud, Slot A.
+  *
+  * The WisBlock GPS slot is wired to the core module's Serial1 = P0.15 (MCU RX
+  * <- GPS TX) / P0.16 (MCU TX -> GPS RX), which is Zephyr's uart1 on this board
+  * (uart0 is P0.19/P0.20 = Serial2, which the GPS slot does not reach). Matches
+  * MeshCore variants/rak4631 (PIN_SERIAL1_RX 15 / _TX 16) and ZephCore's sibling
+  * RAK-family boards gat562_30s and rak3401_1watt. uart1 is also nrf-uarte
+  * upstream, whereas uart0 is the legacy nrf-uart.
+  */
 &uart1 {
 	current-speed = <9600>;
 	gnss: gnss-nmea-generic {
@@ -168,8 +168,8 @@
 };
 
 /* uart0 (P0.19/P0.20) is unused — console is USB CDC ACM and the GPS is on
- * uart1. Upstream leaves it enabled at 115200; turn it off so it does not
- * hold pins or a UARTE instance. */
+  * uart1. Upstream leaves it enabled at 115200; turn it off so it does not
+  * hold pins or a UARTE instance. */
 &uart0 {
 	status = "disabled";
 };
@@ -204,11 +204,11 @@
 };
 
 /*
- * QSPI Flash — disabled.
- * RAK19003 Mini Base Board has no QSPI flash. The upstream DTS enables &qspi,
- * which hangs at boot if no chip is present. Disable it explicitly.
- * For base boards with QSPI (RAK19007, RAK5005-O), create a separate variant.
- */
+  * QSPI Flash — disabled.
+  * RAK19003 Mini Base Board has no QSPI flash. The upstream DTS enables &qspi,
+  * which hangs at boot if no chip is present. Disable it explicitly.
+  * For base boards with QSPI (RAK19007, RAK5005-O), create a separate variant.
+  */
 &qspi {
 	status = "disabled";
 };

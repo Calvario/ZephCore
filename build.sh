@@ -80,7 +80,7 @@ ESP32_boards=(
 if [[ $1 == "nrf" ]]; then
     for board in "${nRF_boards[@]}"; do
         board_clean_for_path=$(echo "$board" | sed -e 's/\//-/g')
-        
+
         # build nRF companions (production is the default — no extra conf needed)
         echo "Now building $board companion"
         if [[ $board == "wio_tracker_l1" ]]; then
@@ -238,7 +238,7 @@ fi
 if [[ $1 == "esp32" ]]; then
     for board in "${ESP32_boards[@]}"; do
         board_clean_for_path=$(echo "$board" | sed -e 's/\//-/g')
-        
+
         if [[ $board =~ (esp32[^/]*) ]]; then
             chip="${BASH_REMATCH[1]}"
         else
@@ -337,7 +337,7 @@ print(str(size // 1048576) + "MB")
             cp build/zephcore/zephyr/zephyr.signed.bin \
                 firmware/"$board_clean_for_path"-companion-"$COMMIT_HASH"-update.bin
         fi
-        
+
         if [[ $2 == "repeaters" ]]; then
             # build ESP32 repeaters
             echo "Now building $board repeater"

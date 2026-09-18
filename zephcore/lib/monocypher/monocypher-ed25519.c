@@ -210,7 +210,7 @@ void crypto_sha512_init(crypto_sha512_ctx *ctx)
 }
 
 void crypto_sha512_update(crypto_sha512_ctx *ctx,
-                          const u8 *message, size_t message_size)
+			  const u8 *message, size_t message_size)
 {
 	// Avoid undefined NULL pointer increments with empty messages
 	if (message_size == 0) {
@@ -313,7 +313,7 @@ void crypto_sha512(u8 hash[64], const u8 *message, size_t message_size)
 /// HMAC SHA 512 ///
 ////////////////////
 void crypto_sha512_hmac_init(crypto_sha512_hmac_ctx *ctx,
-                             const u8 *key, size_t key_size)
+			     const u8 *key, size_t key_size)
 {
 	// hash key if it is too long
 	if (key_size > 128) {
@@ -330,7 +330,7 @@ void crypto_sha512_hmac_init(crypto_sha512_hmac_ctx *ctx,
 }
 
 void crypto_sha512_hmac_update(crypto_sha512_hmac_ctx *ctx,
-                               const u8 *message, size_t message_size)
+			       const u8 *message, size_t message_size)
 {
 	crypto_sha512_update(&ctx->ctx, message, message_size);
 }
@@ -352,7 +352,7 @@ void crypto_sha512_hmac_final(crypto_sha512_hmac_ctx *ctx, u8 hmac[64])
 }
 
 void crypto_sha512_hmac(u8 hmac[64], const u8 *key, size_t key_size,
-                        const u8 *message, size_t message_size)
+			const u8 *message, size_t message_size)
 {
 	crypto_sha512_hmac_ctx ctx;
 	crypto_sha512_hmac_init  (&ctx, key, key_size);
@@ -364,8 +364,8 @@ void crypto_sha512_hmac(u8 hmac[64], const u8 *key, size_t key_size,
 /// HKDF SHA 512 ///
 ////////////////////
 void crypto_sha512_hkdf_expand(u8       *okm,  size_t okm_size,
-                               const u8 *prk,  size_t prk_size,
-                               const u8 *info, size_t info_size)
+			       const u8 *prk,  size_t prk_size,
+			       const u8 *info, size_t info_size)
 {
 	int not_first = 0;
 	u8 ctr = 1;
@@ -397,9 +397,9 @@ void crypto_sha512_hkdf_expand(u8       *okm,  size_t okm_size,
 }
 
 void crypto_sha512_hkdf(u8       *okm , size_t okm_size,
-                        const u8 *ikm , size_t ikm_size,
-                        const u8 *salt, size_t salt_size,
-                        const u8 *info, size_t info_size)
+			const u8 *ikm , size_t ikm_size,
+			const u8 *salt, size_t salt_size,
+			const u8 *info, size_t info_size)
 {
 	// Extract
 	u8 prk[64];
@@ -428,10 +428,10 @@ void crypto_ed25519_key_pair(u8 secret_key[64], u8 public_key[32], u8 seed[32])
 }
 
 static void hash_reduce(u8 h[32],
-                        const u8 *a, size_t a_size,
-                        const u8 *b, size_t b_size,
-                        const u8 *c, size_t c_size,
-                        const u8 *d, size_t d_size)
+			const u8 *a, size_t a_size,
+			const u8 *b, size_t b_size,
+			const u8 *c, size_t c_size,
+			const u8 *d, size_t d_size)
 {
 	u8 hash[64];
 	crypto_sha512_ctx ctx;
@@ -445,8 +445,8 @@ static void hash_reduce(u8 h[32],
 }
 
 static void ed25519_dom_sign(u8 signature[64], const u8 secret_key[64],
-                             const u8 *dom,     size_t dom_size,
-                             const u8 *message, size_t message_size)
+			     const u8 *dom,     size_t dom_size,
+			     const u8 *message, size_t message_size)
 {
 	u8 a[64];  // secret scalar and prefix
 	u8 r[32];  // secret deterministic "random" nonce
@@ -467,13 +467,13 @@ static void ed25519_dom_sign(u8 signature[64], const u8 secret_key[64],
 }
 
 void crypto_ed25519_sign(u8 signature [64], const u8 secret_key[64],
-                         const u8 *message, size_t message_size)
+			 const u8 *message, size_t message_size)
 {
 	ed25519_dom_sign(signature, secret_key, 0, 0, message, message_size);
 }
 
 int crypto_ed25519_check(const u8 signature[64], const u8 public_key[32],
-                         const u8 *msg, size_t msg_size)
+			 const u8 *msg, size_t msg_size)
 {
 	u8 h_ram[32];
 	hash_reduce(h_ram, signature, 32, public_key, 32, msg, msg_size, 0, 0);
@@ -483,14 +483,14 @@ int crypto_ed25519_check(const u8 signature[64], const u8 public_key[32],
 static const u8 domain[34] = "SigEd25519 no Ed25519 collisions\1";
 
 void crypto_ed25519_ph_sign(uint8_t signature[64], const uint8_t secret_key[64],
-                            const uint8_t message_hash[64])
+			    const uint8_t message_hash[64])
 {
 	ed25519_dom_sign(signature, secret_key, domain, sizeof(domain),
 	                 message_hash, 64);
 }
 
 int crypto_ed25519_ph_check(const uint8_t sig[64], const uint8_t pk[32],
-                            const uint8_t msg_hash[64])
+			    const uint8_t msg_hash[64])
 {
 	u8 h_ram[32];
 	hash_reduce(h_ram, domain, sizeof(domain), sig, 32, pk, 32, msg_hash, 64);

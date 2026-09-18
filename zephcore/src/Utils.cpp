@@ -69,7 +69,7 @@ fail:
 
 /* AES-ECB using PSA Crypto (ECB_NO_PADDING) */
 static int aes_ecb_crypt(const uint8_t *key, size_t key_len, const uint8_t *src, int src_len,
-                         uint8_t *dest, bool encrypt)
+			 uint8_t *dest, bool encrypt)
 {
 	if (src_len % 16 != 0) {
 		LOG_ERR("src_len=%d not multiple of 16", src_len);

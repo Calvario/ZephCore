@@ -1,0 +1,23 @@
+# Normalize every detected text file to LF in the index and on checkout.
+# `text=auto` leaves binary files byte-preserved.
+* text=auto eol=lf
+
+# Windows command scripts require CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Patches are applied with `git apply` at configure time. Their context lines
+# must match the target files' line endings: LF everywhere except loramac-node,
+# whose upstream sources are CRLF, so its patches are checked out as CRLF.
+*.patch text eol=lf
+zephcore/patches/modules/loramac-node/*.patch text eol=crlf
+
+# Firmware images and other binaries.
+*.bin binary
+*.hex binary
+*.uf2 binary
+*.zip binary
+*.elf binary
+*.jpg binary
+*.png binary
+*.pdf binary

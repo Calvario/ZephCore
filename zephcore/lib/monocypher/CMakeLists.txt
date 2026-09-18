@@ -10,7 +10,7 @@
 
 zephyr_library_named(monocypher)
 zephyr_library_sources(
-	monocypher.c
-	monocypher-ed25519.c
+    monocypher.c
+    monocypher-ed25519.c
 )
 zephyr_library_include_directories(.)

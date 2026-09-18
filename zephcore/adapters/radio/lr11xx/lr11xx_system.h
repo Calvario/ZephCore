@@ -106,7 +106,7 @@ lr11xx_status_t lr11xx_system_wakeup( const void* context );
  * @ref lr11xx_system_clear_reset_status_info may be used for this purpose when necessary.
  */
 lr11xx_status_t lr11xx_system_get_status( const void* context, lr11xx_system_stat1_t* stat1,
-                                          lr11xx_system_stat2_t* stat2, lr11xx_system_irq_mask_t* irq_status );
+					  lr11xx_system_stat2_t* stat2, lr11xx_system_irq_mask_t* irq_status );
 
 /*!
  * @brief Clear the reset status information stored in stat2
@@ -127,7 +127,7 @@ lr11xx_status_t lr11xx_system_clear_reset_status_info( const void* context );
  */
 static inline lr11xx_status_t lr11xx_system_get_irq_status( const void* context, lr11xx_system_irq_mask_t* irq_status )
 {
-    return lr11xx_system_get_status( context, 0, 0, irq_status );
+		return lr11xx_system_get_status( context, 0, 0, irq_status );
 }
 
 /*!
@@ -242,7 +242,7 @@ lr11xx_status_t lr11xx_system_calibrate_image( const void* context, const uint8_
  * @see lr11xx_system_calibrate_image
  */
 lr11xx_status_t lr11xx_system_calibrate_image_in_mhz( const void* context, const uint16_t freq1_in_mhz,
-                                                      const uint16_t freq2_in_mhz );
+						      const uint16_t freq2_in_mhz );
 
 /*!
  * @brief Set the RF switch configurations for each RF setup
@@ -257,7 +257,7 @@ lr11xx_status_t lr11xx_system_calibrate_image_in_mhz( const void* context, const
  * @returns Operation status
  */
 lr11xx_status_t lr11xx_system_set_dio_as_rf_switch( const void*                         context,
-                                                    const lr11xx_system_rfswitch_cfg_t* rf_switch_cfg );
+						    const lr11xx_system_rfswitch_cfg_t* rf_switch_cfg );
 
 /*!
  * @brief Set which interrupt signals are redirected to the dedicated DIO pin
@@ -276,8 +276,8 @@ lr11xx_status_t lr11xx_system_set_dio_as_rf_switch( const void*                 
  * @see lr11xx_system_clear_irq_status
  */
 lr11xx_status_t lr11xx_system_set_dio_irq_params( const void*                    context,
-                                                  const lr11xx_system_irq_mask_t irqs_to_enable_dio1,
-                                                  const lr11xx_system_irq_mask_t irqs_to_enable_dio2 );
+						  const lr11xx_system_irq_mask_t irqs_to_enable_dio1,
+						  const lr11xx_system_irq_mask_t irqs_to_enable_dio2 );
 
 /*!
  * @brief Clear requested bits in the internal pending interrupt register
@@ -313,7 +313,7 @@ lr11xx_status_t lr11xx_system_get_and_clear_irq_status( const void* context, lr1
  * @see lr11xx_system_calibrate, lr11xx_system_calibrate_image
  */
 lr11xx_status_t lr11xx_system_cfg_lfclk( const void* context, const lr11xx_system_lfclk_cfg_t lfclock_cfg,
-                                         const bool wait_for_32k_ready );
+					 const bool wait_for_32k_ready );
 
 /*!
  * @brief Enable and configure TCXO supply voltage and detection timeout
@@ -334,7 +334,7 @@ lr11xx_status_t lr11xx_system_cfg_lfclk( const void* context, const lr11xx_syste
  * @see lr11xx_system_calibrate, lr11xx_system_calibrate_image
  */
 lr11xx_status_t lr11xx_system_set_tcxo_mode( const void* context, const lr11xx_system_tcxo_supply_voltage_t tune,
-                                             const uint32_t timeout );
+					     const uint32_t timeout );
 
 /*!
  * @brief Software reset of the chip.
@@ -399,7 +399,7 @@ lr11xx_status_t lr11xx_system_get_temp( const void* context, uint16_t* temp );
  * @see lr11xx_system_set_standby, lr11xx_system_set_fs
  */
 lr11xx_status_t lr11xx_system_set_sleep( const void* context, const lr11xx_system_sleep_cfg_t sleep_cfg,
-                                         const uint32_t sleep_time );
+					 const uint32_t sleep_time );
 
 /*!
  * @brief Set the device into the requested Standby mode
@@ -450,7 +450,7 @@ lr11xx_status_t lr11xx_system_erase_infopage( const void* context, const lr11xx_
  * @see lr11xx_system_erase_infopage, lr11xx_system_read_infopage
  */
 lr11xx_status_t lr11xx_system_write_infopage( const void* context, const lr11xx_system_infopage_id_t info_page_id,
-                                              const uint16_t address, const uint32_t* data, const uint8_t length );
+					      const uint16_t address, const uint32_t* data, const uint8_t length );
 
 /*!
  * @brief Read data from an info page
@@ -468,7 +468,7 @@ lr11xx_status_t lr11xx_system_write_infopage( const void* context, const lr11xx_
  * @see lr11xx_system_erase_infopage, lr11xx_system_write_infopage
  */
 lr11xx_status_t lr11xx_system_read_infopage( const void* context, const lr11xx_system_infopage_id_t info_page_id,
-                                             const uint16_t address, uint32_t* data, const uint8_t length );
+					     const uint16_t address, uint32_t* data, const uint8_t length );
 
 /*!
  * @brief Read and return the Unique Identifier of the LR11XX
@@ -530,8 +530,8 @@ lr11xx_status_t lr11xx_system_read_pin( const void* context, lr11xx_system_pin_t
  * @see LR11XX_SYSTEM_PIN_LENGTH
  */
 lr11xx_status_t lr11xx_system_read_pin_custom_eui( const void* context, lr11xx_system_uid_t device_eui,
-                                                   lr11xx_system_join_eui_t join_eui, uint8_t rfu,
-                                                   lr11xx_system_pin_t pin );
+						   lr11xx_system_join_eui_t join_eui, uint8_t rfu,
+						   lr11xx_system_pin_t pin );
 
 /*!
  * @brief Read and return a 32-bit random number

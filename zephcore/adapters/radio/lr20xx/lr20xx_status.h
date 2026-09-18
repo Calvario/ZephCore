@@ -50,14 +50,14 @@
  *
  */
 #define RETURN_STATUS_ON_NOT_OK( call )      \
-    do                                       \
-    {                                        \
-        const lr20xx_status_t status = call; \
-        if( status != LR20XX_STATUS_OK )     \
-        {                                    \
-            return status;                   \
-        }                                    \
-    } while( 0 )
+	do                                       \
+	{                                        \
+		const lr20xx_status_t status = call; \
+		if( status != LR20XX_STATUS_OK )     \
+		{                                    \
+			return status;                   \
+		}                                    \
+	} while( 0 )
 
 /*
  * -----------------------------------------------------------------------------
@@ -74,8 +74,8 @@
  */
 typedef enum lr20xx_status_e
 {
-    LR20XX_STATUS_OK    = 0,
-    LR20XX_STATUS_ERROR = 3,
+	LR20XX_STATUS_OK    = 0,
+	LR20XX_STATUS_ERROR = 3,
 } lr20xx_status_t;
 
 /*

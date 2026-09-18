@@ -29,7 +29,7 @@
  * host gets a clean disconnect/re-enumerate.  Gated to exactly the boards that
  * both exhibit the defect and expose the PHY knob to fix it. */
 #if defined(CONFIG_SOC_FAMILY_ESPRESSIF_ESP32) && \
-    DT_NODE_HAS_COMPAT(DT_CHOSEN(zephyr_console), espressif_esp32_usb_serial)
+	DT_NODE_HAS_COMPAT(DT_CHOSEN(zephyr_console), espressif_esp32_usb_serial)
 #include <hal/usb_serial_jtag_ll.h>
 #define ESP32_USB_SERIAL_DETACH 1
 #endif
@@ -89,9 +89,9 @@
  * companion branch wraps it in (LOG || COMPANION_USB || COMPANION_SERIAL), and
  * ZEPHCORE_COMPANION is the compile definition that identifies that branch. */
 #if !defined(CONFIG_CDC_ACM_SERIAL_INITIALIZE_AT_BOOT) && \
-    (defined(CONFIG_USB_CDC_ACM) || defined(CONFIG_USBD_CDC_ACM_CLASS))
+	(defined(CONFIG_USB_CDC_ACM) || defined(CONFIG_USBD_CDC_ACM_CLASS))
 #if !defined(ZEPHCORE_COMPANION) || defined(CONFIG_LOG) || \
-    defined(CONFIG_ZEPHCORE_COMPANION_USB) || defined(CONFIG_ZEPHCORE_COMPANION_SERIAL)
+	defined(CONFIG_ZEPHCORE_COMPANION_USB) || defined(CONFIG_ZEPHCORE_COMPANION_SERIAL)
 #include <ZephyrUSBCDC.h>
 #define ZEPHCORE_USBD_DETACH 1
 #endif
@@ -114,11 +114,11 @@ static const struct gpio_dt_spec tx_led =
  * compile out.  led1 is checked as well because ui_common.c falls back to it
  * when a board has no led0. */
 #if HAS_TX_LED && DT_NODE_EXISTS(DT_ALIAS(led0)) && \
-    DT_SAME_NODE(DT_ALIAS(led0), DT_ALIAS(lora_tx_led))
+	DT_SAME_NODE(DT_ALIAS(led0), DT_ALIAS(lora_tx_led))
 #define ZEPHCORE_LED_PIN_SHARED 1
 #elif HAS_TX_LED && !DT_NODE_EXISTS(DT_ALIAS(led0)) && \
-      DT_NODE_EXISTS(DT_ALIAS(led1)) && \
-      DT_SAME_NODE(DT_ALIAS(led1), DT_ALIAS(lora_tx_led))
+	  DT_NODE_EXISTS(DT_ALIAS(led1)) && \
+	  DT_SAME_NODE(DT_ALIAS(led1), DT_ALIAS(lora_tx_led))
 #define ZEPHCORE_LED_PIN_SHARED 1
 #else
 #define ZEPHCORE_LED_PIN_SHARED 0
@@ -128,7 +128,7 @@ static const struct gpio_dt_spec tx_led =
 LOG_MODULE_REGISTER(zephcore_board, CONFIG_ZEPHCORE_BOARD_LOG_LEVEL);
 
 #if DT_NODE_EXISTS(DT_PATH(zephyr_user)) && \
-    DT_NODE_HAS_PROP(DT_PATH(zephyr_user), io_channels)
+	DT_NODE_HAS_PROP(DT_PATH(zephyr_user), io_channels)
 #include <zephyr/drivers/adc.h>
 #include <zephyr/drivers/regulator.h>
 
@@ -231,7 +231,7 @@ uint16_t ZephyrBoard::getBattMilliVolts()
 	}
 	return 0;
 #elif DT_NODE_EXISTS(DT_PATH(zephyr_user)) && \
-    DT_NODE_HAS_PROP(DT_PATH(zephyr_user), io_channels)
+	DT_NODE_HAS_PROP(DT_PATH(zephyr_user), io_channels)
 	if (!adc_is_ready_dt(&vbat_adc)) {
 		LOG_ERR("ADC not ready");
 		return 0;
@@ -315,7 +315,7 @@ uint8_t ZephyrBoard::getBattPercent()
 bool ZephyrBoard::setAdcMultiplier(float multiplier)
 {
 #if DT_NODE_EXISTS(DT_PATH(zephyr_user)) && \
-    DT_NODE_HAS_PROP(DT_PATH(zephyr_user), io_channels)
+	DT_NODE_HAS_PROP(DT_PATH(zephyr_user), io_channels)
 	_adc_multiplier_override = multiplier;
 	return true;
 #else
@@ -327,7 +327,7 @@ bool ZephyrBoard::setAdcMultiplier(float multiplier)
 float ZephyrBoard::getAdcMultiplier() const
 {
 #if DT_NODE_EXISTS(DT_PATH(zephyr_user)) && \
-    DT_NODE_HAS_PROP(DT_PATH(zephyr_user), io_channels)
+	DT_NODE_HAS_PROP(DT_PATH(zephyr_user), io_channels)
 	return (_adc_multiplier_override != 0.0f)
 		? _adc_multiplier_override
 		: (float)VBAT_MV_MULTIPLIER;

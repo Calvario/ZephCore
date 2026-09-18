@@ -110,7 +110,7 @@ static const struct gpio_dt_spec s_heartbeat_led =
 /* Second LED for unread-message indication. Repeaters use led1 for LoRa TX
  * (via lora-tx-led alias) — no offline queue, so this is companion-only. */
 #if HAS_HEARTBEAT_LED && DT_NODE_HAS_PROP(DT_ALIAS(led0), gpios) && \
-    DT_NODE_HAS_PROP(DT_ALIAS(led1), gpios) && !defined(ZEPHCORE_REPEATER)
+	DT_NODE_HAS_PROP(DT_ALIAS(led1), gpios) && !defined(ZEPHCORE_REPEATER)
 static const struct gpio_dt_spec s_msg_led =
 	GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios);
 #define HAS_MSG_LED 1

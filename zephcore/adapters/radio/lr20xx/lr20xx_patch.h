@@ -89,7 +89,7 @@ extern "C" {
  * @see lr20xx_patch_enable_pram, lr20xx_regmem_write_regmem32, lr20xx_patch_get_version
  */
 lr20xx_status_t lr20xx_patch_load_pram( const void* context, const uint32_t address, const uint32_t* buffer,
-                                        const uint32_t length );
+					const uint32_t length );
 
 /**
  * @brief Enable Patch RAM (PRAM)

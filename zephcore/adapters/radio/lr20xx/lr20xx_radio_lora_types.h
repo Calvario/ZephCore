@@ -77,14 +77,14 @@ extern "C" {
  */
 typedef enum
 {
-    LR20XX_RADIO_LORA_SF5  = 0x05,  //!< Spreading factor 5
-    LR20XX_RADIO_LORA_SF6  = 0x06,  //!< Spreading factor 6
-    LR20XX_RADIO_LORA_SF7  = 0x07,  //!< Spreading factor 7
-    LR20XX_RADIO_LORA_SF8  = 0x08,  //!< Spreading factor 8
-    LR20XX_RADIO_LORA_SF9  = 0x09,  //!< Spreading factor 9
-    LR20XX_RADIO_LORA_SF10 = 0x0A,  //!< Spreading factor 10
-    LR20XX_RADIO_LORA_SF11 = 0x0B,  //!< Spreading factor 11
-    LR20XX_RADIO_LORA_SF12 = 0x0C,  //!< Spreading factor 12
+	LR20XX_RADIO_LORA_SF5  = 0x05,  //!< Spreading factor 5
+	LR20XX_RADIO_LORA_SF6  = 0x06,  //!< Spreading factor 6
+	LR20XX_RADIO_LORA_SF7  = 0x07,  //!< Spreading factor 7
+	LR20XX_RADIO_LORA_SF8  = 0x08,  //!< Spreading factor 8
+	LR20XX_RADIO_LORA_SF9  = 0x09,  //!< Spreading factor 9
+	LR20XX_RADIO_LORA_SF10 = 0x0A,  //!< Spreading factor 10
+	LR20XX_RADIO_LORA_SF11 = 0x0B,  //!< Spreading factor 11
+	LR20XX_RADIO_LORA_SF12 = 0x0C,  //!< Spreading factor 12
 } lr20xx_radio_lora_sf_t;
 
 /**
@@ -92,18 +92,18 @@ typedef enum
  */
 typedef enum
 {
-    LR20XX_RADIO_LORA_BW_31   = 0x02,  //!< Bandwidth 31.25 kHz
-    LR20XX_RADIO_LORA_BW_41   = 0x0A,  //!< Bandwidth 41.67 kHz
-    LR20XX_RADIO_LORA_BW_83   = 0x0B,  //!< Bandwidth 83.34 kHz
-    LR20XX_RADIO_LORA_BW_62   = 0x03,  //!< Bandwidth 62.50 kHz
-    LR20XX_RADIO_LORA_BW_101  = 0x0C,  //!< Bandwidth 101.5625 kHz
-    LR20XX_RADIO_LORA_BW_125  = 0x04,  //!< Bandwidth 125 kHz
-    LR20XX_RADIO_LORA_BW_203  = 0x0D,  //!< Bandwidth 203 kHz
-    LR20XX_RADIO_LORA_BW_250  = 0x05,  //!< Bandwidth 250 kHz
-    LR20XX_RADIO_LORA_BW_406  = 0x0E,  //!< Bandwidth 406 kHz
-    LR20XX_RADIO_LORA_BW_500  = 0x06,  //!< Bandwidth 500 kHz
-    LR20XX_RADIO_LORA_BW_812  = 0x0F,  //!< Bandwidth 812 kHz
-    LR20XX_RADIO_LORA_BW_1000 = 0x07,  //!< Bandwidth 1000 kHz
+	LR20XX_RADIO_LORA_BW_31   = 0x02,  //!< Bandwidth 31.25 kHz
+	LR20XX_RADIO_LORA_BW_41   = 0x0A,  //!< Bandwidth 41.67 kHz
+	LR20XX_RADIO_LORA_BW_83   = 0x0B,  //!< Bandwidth 83.34 kHz
+	LR20XX_RADIO_LORA_BW_62   = 0x03,  //!< Bandwidth 62.50 kHz
+	LR20XX_RADIO_LORA_BW_101  = 0x0C,  //!< Bandwidth 101.5625 kHz
+	LR20XX_RADIO_LORA_BW_125  = 0x04,  //!< Bandwidth 125 kHz
+	LR20XX_RADIO_LORA_BW_203  = 0x0D,  //!< Bandwidth 203 kHz
+	LR20XX_RADIO_LORA_BW_250  = 0x05,  //!< Bandwidth 250 kHz
+	LR20XX_RADIO_LORA_BW_406  = 0x0E,  //!< Bandwidth 406 kHz
+	LR20XX_RADIO_LORA_BW_500  = 0x06,  //!< Bandwidth 500 kHz
+	LR20XX_RADIO_LORA_BW_812  = 0x0F,  //!< Bandwidth 812 kHz
+	LR20XX_RADIO_LORA_BW_1000 = 0x07,  //!< Bandwidth 1000 kHz
 } lr20xx_radio_lora_bw_t;
 
 /**
@@ -111,16 +111,16 @@ typedef enum
  */
 typedef enum
 {
-    LR20XX_RADIO_LORA_NO_CR                   = 0x00,  //!< No Coding Rate
-    LR20XX_RADIO_LORA_CR_4_5                  = 0x01,  //!< Short Interleaver Parity code
-    LR20XX_RADIO_LORA_CR_4_6                  = 0x02,  //!< Short Interleaver Hamming code 2/3
-    LR20XX_RADIO_LORA_CR_4_7                  = 0x03,  //!< Short Interleaver Hamming code 7/5
-    LR20XX_RADIO_LORA_CR_4_8                  = 0x04,  //!< Short Interleaver Hamming code 1/2
-    LR20XX_RADIO_LORA_CR_LI_4_5               = 0x05,  //!< Long Interleaver Parity code
-    LR20XX_RADIO_LORA_CR_LI_4_6               = 0x06,  //!< Long Interleaver Hamming code 2/3
-    LR20XX_RADIO_LORA_CR_LI_4_8               = 0x07,  //!< Long Interleaver Hamming code 1/2
-    LR20XX_RADIO_LORA_CR_LI_CONVOLUTIONAL_4_6 = 0x08,  //!< Long Interleaver Convolutional code 2/3
-    LR20XX_RADIO_LORA_CR_LI_CONVOLUTIONAL_4_8 = 0x09,  //!< Long Interleaver Convolutional code 1/2
+	LR20XX_RADIO_LORA_NO_CR                   = 0x00,  //!< No Coding Rate
+	LR20XX_RADIO_LORA_CR_4_5                  = 0x01,  //!< Short Interleaver Parity code
+	LR20XX_RADIO_LORA_CR_4_6                  = 0x02,  //!< Short Interleaver Hamming code 2/3
+	LR20XX_RADIO_LORA_CR_4_7                  = 0x03,  //!< Short Interleaver Hamming code 7/5
+	LR20XX_RADIO_LORA_CR_4_8                  = 0x04,  //!< Short Interleaver Hamming code 1/2
+	LR20XX_RADIO_LORA_CR_LI_4_5               = 0x05,  //!< Long Interleaver Parity code
+	LR20XX_RADIO_LORA_CR_LI_4_6               = 0x06,  //!< Long Interleaver Hamming code 2/3
+	LR20XX_RADIO_LORA_CR_LI_4_8               = 0x07,  //!< Long Interleaver Hamming code 1/2
+	LR20XX_RADIO_LORA_CR_LI_CONVOLUTIONAL_4_6 = 0x08,  //!< Long Interleaver Convolutional code 2/3
+	LR20XX_RADIO_LORA_CR_LI_CONVOLUTIONAL_4_8 = 0x09,  //!< Long Interleaver Convolutional code 1/2
 } lr20xx_radio_lora_cr_t;
 
 /**
@@ -128,8 +128,8 @@ typedef enum
  */
 typedef enum
 {
-    LR20XX_RADIO_LORA_NO_PPM  = 0x00,  //!< No PPM offset: use full range of modulation
-    LR20XX_RADIO_LORA_PPM_1_4 = 0x01,  //!< 1 bin every 4
+	LR20XX_RADIO_LORA_NO_PPM  = 0x00,  //!< No PPM offset: use full range of modulation
+	LR20XX_RADIO_LORA_PPM_1_4 = 0x01,  //!< 1 bin every 4
 } lr20xx_radio_lora_ppm_t;
 
 /**
@@ -137,11 +137,11 @@ typedef enum
  */
 typedef enum
 {
-    LR20XX_RADIO_LORA_PKT_EXPLICIT = 0x00,  //!< (aka. variable length packet) The packet is sent with a header
-                                            //!< containing payload length so the receiver adapts to the payload length
-    LR20XX_RADIO_LORA_PKT_IMPLICIT =
-        0x01,  //!< (aka. fixed length packet) The packet is sent without header so the receiver must be configured to
-               //!< receive the same payload length as the transmitted one
+	LR20XX_RADIO_LORA_PKT_EXPLICIT = 0x00,  //!< (aka. variable length packet) The packet is sent with a header
+											//!< containing payload length so the receiver adapts to the payload length
+	LR20XX_RADIO_LORA_PKT_IMPLICIT =
+		0x01,  //!< (aka. fixed length packet) The packet is sent without header so the receiver must be configured to
+			   //!< receive the same payload length as the transmitted one
 } lr20xx_radio_lora_pkt_mode_t;
 
 /**
@@ -149,9 +149,9 @@ typedef enum
  */
 typedef enum
 {
-    LR20XX_RADIO_LORA_CRC_DISABLED = 0x00,  //!< CRC is not appended to the packet sent over the air
-    LR20XX_RADIO_LORA_CRC_ENABLED =
-        0x01,  //!< CRC is appended to the packet sent over the air, and checked upon reception
+	LR20XX_RADIO_LORA_CRC_DISABLED = 0x00,  //!< CRC is not appended to the packet sent over the air
+	LR20XX_RADIO_LORA_CRC_ENABLED =
+		0x01,  //!< CRC is appended to the packet sent over the air, and checked upon reception
 } lr20xx_radio_lora_crc_t;
 
 /**
@@ -159,8 +159,8 @@ typedef enum
  */
 typedef enum
 {
-    LR20XX_RADIO_LORA_IQ_STANDARD = 0x00,  //!< IQ standard
-    LR20XX_RADIO_LORA_IQ_INVERTED = 0x01,  //!< IQ inverted
+	LR20XX_RADIO_LORA_IQ_STANDARD = 0x00,  //!< IQ standard
+	LR20XX_RADIO_LORA_IQ_INVERTED = 0x01,  //!< IQ inverted
 } lr20xx_radio_lora_iq_t;
 
 /**
@@ -172,12 +172,12 @@ typedef enum
  */
 typedef enum
 {
-    LR20XX_RADIO_LORA_CAD_EXIT_MODE_STANDBYRC =
-        0x00,  //!< The chip goes to fallback mode after CAD operation, no matter what the result of CAD is
-    LR20XX_RADIO_LORA_CAD_EXIT_MODE_RX = 0x01,  //!< If the CAD operation detects an activity, the chip enters in RX
-                                                //!< mode. Otherwise it enters in fallback mode
-    LR20XX_RADIO_LORA_CAD_EXIT_MODE_TX = 0x10,  //!< If the CAD operation does not detect an activity, the chip enters
-                                                //!< in TX mode. Otherwise it enters in fallback mode
+	LR20XX_RADIO_LORA_CAD_EXIT_MODE_STANDBYRC =
+		0x00,  //!< The chip goes to fallback mode after CAD operation, no matter what the result of CAD is
+	LR20XX_RADIO_LORA_CAD_EXIT_MODE_RX = 0x01,  //!< If the CAD operation detects an activity, the chip enters in RX
+												//!< mode. Otherwise it enters in fallback mode
+	LR20XX_RADIO_LORA_CAD_EXIT_MODE_TX = 0x10,  //!< If the CAD operation does not detect an activity, the chip enters
+												//!< in TX mode. Otherwise it enters in fallback mode
 } lr20xx_radio_lora_cad_exit_mode_t;
 
 /**
@@ -185,8 +185,8 @@ typedef enum
  */
 typedef enum
 {
-    LR20XX_RADIO_LORA_HOPPING_CTRL_DISABLED = 0x00,  //!< LoRa intra-packet frequency hopping disabled
-    LR20XX_RADIO_LORA_HOPPING_CTRL_ENABLED  = 0x01,  //!< LoRa intra-packet frequency hopping enabled
+	LR20XX_RADIO_LORA_HOPPING_CTRL_DISABLED = 0x00,  //!< LoRa intra-packet frequency hopping disabled
+	LR20XX_RADIO_LORA_HOPPING_CTRL_ENABLED  = 0x01,  //!< LoRa intra-packet frequency hopping enabled
 } lr20xx_radio_lora_hopping_ctrl_t;
 
 /**
@@ -221,16 +221,16 @@ typedef enum
  */
 typedef struct lr20xx_radio_lora_cad_params_s
 {
-    uint8_t cad_symb_nb;  //!< Number of symbols to search for CAD operation
-    uint8_t pnr_delta;    //!< Peak to Noise Ratio. Possible values are:
-                          //!< - 0: then the exact number of requested symbols @p cad_symb_nb is used to determine the
-                          //!< activity detection;
-                          //!< - 8: best-effort CAD is activated.
-    lr20xx_radio_lora_cad_exit_mode_t cad_exit_mode;  //!< Action taken automatically at the end of CAD operation
-    uint32_t cad_timeout_in_pll_step;  //!< Timeout in PLL steps used while in exit mode, if applicable. Max value is
-                                       //!< 0x00FFFFFF PLL steps
-    uint8_t cad_detect_peak;  //!< Ratio for CAD between correlator peak and average to identify a peak as a detection
-                              //!< (default: 0x32)
+	uint8_t cad_symb_nb;  //!< Number of symbols to search for CAD operation
+	uint8_t pnr_delta;    //!< Peak to Noise Ratio. Possible values are:
+						  //!< - 0: then the exact number of requested symbols @p cad_symb_nb is used to determine the
+						  //!< activity detection;
+						  //!< - 8: best-effort CAD is activated.
+	lr20xx_radio_lora_cad_exit_mode_t cad_exit_mode;  //!< Action taken automatically at the end of CAD operation
+	uint32_t cad_timeout_in_pll_step;  //!< Timeout in PLL steps used while in exit mode, if applicable. Max value is
+									   //!< 0x00FFFFFF PLL steps
+	uint8_t cad_detect_peak;  //!< Ratio for CAD between correlator peak and average to identify a peak as a detection
+							  //!< (default: 0x32)
 } lr20xx_radio_lora_cad_params_t;
 
 /**
@@ -238,11 +238,11 @@ typedef struct lr20xx_radio_lora_cad_params_s
  */
 typedef struct
 {
-    uint16_t                     preamble_len_in_symb;  //!< LoRa Preamble length [symbols]
-    lr20xx_radio_lora_pkt_mode_t pkt_mode;              //!< LoRa packet mode configuration
-    uint8_t                      pld_len_in_bytes;      //!< LoRa Payload length [bytes]
-    lr20xx_radio_lora_crc_t      crc;                   //!< LoRa CRC configuration
-    lr20xx_radio_lora_iq_t       iq;                    //!< LoRa IQ configuration
+	uint16_t                     preamble_len_in_symb;  //!< LoRa Preamble length [symbols]
+	lr20xx_radio_lora_pkt_mode_t pkt_mode;              //!< LoRa packet mode configuration
+	uint8_t                      pld_len_in_bytes;      //!< LoRa Payload length [bytes]
+	lr20xx_radio_lora_crc_t      crc;                   //!< LoRa CRC configuration
+	lr20xx_radio_lora_iq_t       iq;                    //!< LoRa IQ configuration
 } lr20xx_radio_lora_pkt_params_t;
 
 /**
@@ -252,10 +252,10 @@ typedef struct
  */
 typedef struct
 {
-    lr20xx_radio_lora_sf_t  sf;   //!< Spreading factor
-    lr20xx_radio_lora_bw_t  bw;   //!< Bandwidth
-    lr20xx_radio_lora_cr_t  cr;   //!< Coding rate
-    lr20xx_radio_lora_ppm_t ppm;  //!< PPM offset
+	lr20xx_radio_lora_sf_t  sf;   //!< Spreading factor
+	lr20xx_radio_lora_bw_t  bw;   //!< Bandwidth
+	lr20xx_radio_lora_cr_t  cr;   //!< Coding rate
+	lr20xx_radio_lora_ppm_t ppm;  //!< PPM offset
 } lr20xx_radio_lora_mod_params_t;
 
 /**
@@ -263,13 +263,13 @@ typedef struct
  */
 typedef struct lr20xx_radio_lora_rx_statistics_s
 {
-    uint16_t n_received_packets;       //!< Number of received packets
-    uint16_t n_crc_errors;             //!< Number of received packets with CRC error
-    uint16_t n_header_errors;          //!< Number of received packets with header error (Rx configured in
-                                       //!< LR20XX_RADIO_LORA_PKT_EXPLICIT and header CRC check failed)
-    uint16_t n_header_valid;           //!< Number of detected header valid
-    uint16_t n_false_synchronisation;  //!< Number of false synchronisation (preamble detected but syncword not
-                                       //!< detected, probably preamble detected on noise)
+	uint16_t n_received_packets;       //!< Number of received packets
+	uint16_t n_crc_errors;             //!< Number of received packets with CRC error
+	uint16_t n_header_errors;          //!< Number of received packets with header error (Rx configured in
+									   //!< LR20XX_RADIO_LORA_PKT_EXPLICIT and header CRC check failed)
+	uint16_t n_header_valid;           //!< Number of detected header valid
+	uint16_t n_false_synchronisation;  //!< Number of false synchronisation (preamble detected but syncword not
+									   //!< detected, probably preamble detected on noise)
 } lr20xx_radio_lora_rx_statistics_t;
 
 /**
@@ -277,19 +277,19 @@ typedef struct lr20xx_radio_lora_rx_statistics_s
  */
 typedef struct lr20xx_radio_lora_packet_status_s
 {
-    uint8_t                 packet_length_bytes;  //!< Length of last received packet in bytes
-    lr20xx_radio_lora_crc_t crc;                  //!< CRC presence of the received packet
-    lr20xx_radio_lora_cr_t  cr;                   //!< Coding rate of the received packet
-    uint8_t                 detector;             //!< Identifier of detectors that received / detected the packet
-    int16_t rssi_pkt_in_dbm;          //!< Average energy in dBm at the input of the chip over the last packet received
-    uint8_t rssi_pkt_half_dbm_count;  //!< Count of 0.5 dBm to subtract to rssi_pkt_in_dbm value in dBm
-    int8_t  snr_pkt_raw;              //!< Estimation of the SNR on last packet received expressed in 0.25dB
-    int16_t
-        rssi_signal_pkt_in_dbm;  //!< Estimation of the mean energy of the LoRa signal over the last packet received.
-                                 //!< Equivalent to rssi_pkt_in_dbm if snr_pkt_raw is positive, to rssi_pkt_in_dbm
-                                 //!< + (snr_pkt_raw/4) if snr_pkt_raw is negative
-    uint8_t rssi_signal_pkt_half_dbm_count;  //!< Count of 0.5 dBm to subtract to rssi_signal_pkt_in_dbm value in dBm
-    int32_t freq_offset_hz;                  //!< Frequency offset of the last packet received in Hz
+	uint8_t                 packet_length_bytes;  //!< Length of last received packet in bytes
+	lr20xx_radio_lora_crc_t crc;                  //!< CRC presence of the received packet
+	lr20xx_radio_lora_cr_t  cr;                   //!< Coding rate of the received packet
+	uint8_t                 detector;             //!< Identifier of detectors that received / detected the packet
+	int16_t rssi_pkt_in_dbm;          //!< Average energy in dBm at the input of the chip over the last packet received
+	uint8_t rssi_pkt_half_dbm_count;  //!< Count of 0.5 dBm to subtract to rssi_pkt_in_dbm value in dBm
+	int8_t  snr_pkt_raw;              //!< Estimation of the SNR on last packet received expressed in 0.25dB
+	int16_t
+		rssi_signal_pkt_in_dbm;  //!< Estimation of the mean energy of the LoRa signal over the last packet received.
+								 //!< Equivalent to rssi_pkt_in_dbm if snr_pkt_raw is positive, to rssi_pkt_in_dbm
+								 //!< + (snr_pkt_raw/4) if snr_pkt_raw is negative
+	uint8_t rssi_signal_pkt_half_dbm_count;  //!< Count of 0.5 dBm to subtract to rssi_signal_pkt_in_dbm value in dBm
+	int32_t freq_offset_hz;                  //!< Frequency offset of the last packet received in Hz
 } lr20xx_radio_lora_packet_status_t;
 
 /**
@@ -297,11 +297,11 @@ typedef struct lr20xx_radio_lora_packet_status_s
  */
 typedef struct
 {
-    lr20xx_radio_lora_hopping_ctrl_t hop_ctrl;  //!< LoRa intra-packet frequency hopping control
-    uint16_t  hop_period;  //!< Number of LoRa symbols between two RF frequency changes (valid values in [0:16383])
-    uint32_t* freq_hop;    //!< List of frequencies. It is up to the caller to ensure that the array pointed to contains
-                           //!< at least nb_freq_hop items
-    uint8_t nb_freq_hop;   //!< Number of frequencies in @ref freq_hop. Possible value in [0:40] included
+	lr20xx_radio_lora_hopping_ctrl_t hop_ctrl;  //!< LoRa intra-packet frequency hopping control
+	uint16_t  hop_period;  //!< Number of LoRa symbols between two RF frequency changes (valid values in [0:16383])
+	uint32_t* freq_hop;    //!< List of frequencies. It is up to the caller to ensure that the array pointed to contains
+						   //!< at least nb_freq_hop items
+	uint8_t nb_freq_hop;   //!< Number of frequencies in @ref freq_hop. Possible value in [0:40] included
 } lr20xx_radio_lora_hopping_cfg_t;
 
 /**
@@ -309,8 +309,8 @@ typedef struct
  */
 typedef struct
 {
-    uint8_t pnr_delta;
-    uint8_t det_peak;
+	uint8_t pnr_delta;
+	uint8_t det_peak;
 } lr20xx_radio_lora_side_detector_cad_configuration_t;
 
 /**
@@ -318,9 +318,9 @@ typedef struct
  */
 typedef struct
 {
-    lr20xx_radio_lora_sf_t  sf;   //!< Spreading factor
-    lr20xx_radio_lora_ppm_t ppm;  //!< PPM offset
-    lr20xx_radio_lora_iq_t  iq;   //!< LoRa IQ configuration
+	lr20xx_radio_lora_sf_t  sf;   //!< Spreading factor
+	lr20xx_radio_lora_ppm_t ppm;  //!< PPM offset
+	lr20xx_radio_lora_iq_t  iq;   //!< LoRa IQ configuration
 } lr20xx_radio_lora_side_detector_cfg_t;
 
 /*

@@ -28,22 +28,22 @@ extern "C" {
  * command/response protocol and stalls BUSY HIGH permanently.
  */
 struct lr11xx_hal_context {
-    const struct device *spi_dev;
-    struct spi_config spi_cfg;
+	const struct device *spi_dev;
+	struct spi_config spi_cfg;
 
-    struct gpio_dt_spec nss;    /* chip select, software-controlled, ACTIVE_LOW in DTS */
-    struct gpio_dt_spec reset;  /* hardware reset, ACTIVE_LOW in DTS */
-    struct gpio_dt_spec busy;   /* busy indicator, high = chip processing */
-    struct gpio_dt_spec dio1;   /* IRQ output from chip */
+	struct gpio_dt_spec nss;    /* chip select, software-controlled, ACTIVE_LOW in DTS */
+	struct gpio_dt_spec reset;  /* hardware reset, ACTIVE_LOW in DTS */
+	struct gpio_dt_spec busy;   /* busy indicator, high = chip processing */
+	struct gpio_dt_spec dio1;   /* IRQ output from chip */
 
-    struct gpio_dt_spec dio2;   /* optional: RF switch or second IRQ */
-    struct gpio_dt_spec rxen;   /* optional: external LNA enable */
-    struct gpio_dt_spec txen;   /* optional: external PA enable */
+	struct gpio_dt_spec dio2;   /* optional: RF switch or second IRQ */
+	struct gpio_dt_spec rxen;   /* optional: external LNA enable */
+	struct gpio_dt_spec txen;   /* optional: external PA enable */
 
-    uint16_t tcxo_voltage_mv;   /* 0 = XTAL, non-zero = TCXO supply in mV */
-    uint32_t tcxo_startup_us;   /* TCXO startup time; passed to SetTcxoMode timeout */
+	uint16_t tcxo_voltage_mv;   /* 0 = XTAL, non-zero = TCXO supply in mV */
+	uint32_t tcxo_startup_us;   /* TCXO startup time; passed to SetTcxoMode timeout */
 
-    volatile bool radio_is_sleeping;
+	volatile bool radio_is_sleeping;
 };
 
 /**
@@ -62,7 +62,7 @@ typedef void (*lr11xx_dio1_callback_t)(void *user_data);
  * @param cb Must be ISR-safe (e.g., submit to a k_work_q, not block)
  */
 void lr11xx_hal_set_dio1_callback(struct lr11xx_hal_context *ctx,
-                                   lr11xx_dio1_callback_t cb, void *user_data);
+				   lr11xx_dio1_callback_t cb, void *user_data);
 
 void lr11xx_hal_enable_dio1_irq(struct lr11xx_hal_context *ctx);
 void lr11xx_hal_disable_dio1_irq(struct lr11xx_hal_context *ctx);

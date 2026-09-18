@@ -52,233 +52,233 @@
  */
 class SimpleLPP {
 public:
-    /**
-     * Constructor
-     * @param buffer   Buffer to write LPP data into
-     * @param max_size Maximum buffer size
-     */
-    SimpleLPP(uint8_t *buffer, size_t max_size)
-        : _buffer(buffer), _maxsize(max_size), _cursor(0) {}
+	/**
+	 * Constructor
+	 * @param buffer   Buffer to write LPP data into
+	 * @param max_size Maximum buffer size
+	 */
+	SimpleLPP(uint8_t *buffer, size_t max_size)
+		: _buffer(buffer), _maxsize(max_size), _cursor(0) {}
 
-    /** Reset the buffer cursor for reuse */
-    void reset() { _cursor = 0; }
+	/** Reset the buffer cursor for reuse */
+	void reset() { _cursor = 0; }
 
-    /** Get current encoded data size */
-    size_t getSize() const { return _cursor; }
+	/** Get current encoded data size */
+	size_t getSize() const { return _cursor; }
 
-    /** Get pointer to buffer */
-    uint8_t *getBuffer() { return _buffer; }
+	/** Get pointer to buffer */
+	uint8_t *getBuffer() { return _buffer; }
 
-    /** Get const pointer to buffer */
-    const uint8_t *getBuffer() const { return _buffer; }
+	/** Get const pointer to buffer */
+	const uint8_t *getBuffer() const { return _buffer; }
 
-    /**
-     * Add temperature reading
-     * @param channel Channel number (0 = self)
-     * @param celsius Temperature in degrees Celsius
-     * @return Number of bytes written, or 0 on overflow
-     */
-    uint8_t addTemperature(uint8_t channel, float celsius) {
-        int16_t val = (int16_t)(celsius * LPP_TEMPERATURE_MULT);
-        return addField2Signed(channel, LPP_TEMPERATURE, val);
-    }
+	/**
+	 * Add temperature reading
+	 * @param channel Channel number (0 = self)
+	 * @param celsius Temperature in degrees Celsius
+	 * @return Number of bytes written, or 0 on overflow
+	 */
+	uint8_t addTemperature(uint8_t channel, float celsius) {
+		int16_t val = (int16_t)(celsius * LPP_TEMPERATURE_MULT);
+		return addField2Signed(channel, LPP_TEMPERATURE, val);
+	}
 
-    /**
-     * Add relative humidity reading
-     * @param channel Channel number
-     * @param percent Humidity in percent (0-100)
-     * @return Number of bytes written, or 0 on overflow
-     */
-    uint8_t addRelativeHumidity(uint8_t channel, float percent) {
-        uint8_t val = (uint8_t)(percent * LPP_HUMIDITY_MULT);
-        return addField1(channel, LPP_RELATIVE_HUMIDITY, val);
-    }
+	/**
+	 * Add relative humidity reading
+	 * @param channel Channel number
+	 * @param percent Humidity in percent (0-100)
+	 * @return Number of bytes written, or 0 on overflow
+	 */
+	uint8_t addRelativeHumidity(uint8_t channel, float percent) {
+		uint8_t val = (uint8_t)(percent * LPP_HUMIDITY_MULT);
+		return addField1(channel, LPP_RELATIVE_HUMIDITY, val);
+	}
 
-    /**
-     * Add luminosity reading
-     *
-     * The LPP type is nominally lux at 1-unit resolution, and a real
-     * ambient-light part gives lux. Boards whose light sensor reports a
-     * relative scale instead (the T1000-E photocell's 0-100) send that scale
-     * through unchanged — matching what Arduino MeshCore reports there, so a
-     * node reads the same after reflashing.
-     *
-     * @param channel Channel number
-     * @param value Luminosity, clamped to the 16-bit field
-     * @return Number of bytes written, or 0 on overflow
-     */
-    uint8_t addLuminosity(uint8_t channel, float value) {
-        if (value < 0.0f) value = 0.0f;
-        if (value > 65535.0f) value = 65535.0f;
-        return addField2Unsigned(channel, LPP_LUMINOSITY, (uint16_t)value);
-    }
+	/**
+	 * Add luminosity reading
+	 *
+	 * The LPP type is nominally lux at 1-unit resolution, and a real
+	 * ambient-light part gives lux. Boards whose light sensor reports a
+	 * relative scale instead (the T1000-E photocell's 0-100) send that scale
+	 * through unchanged — matching what Arduino MeshCore reports there, so a
+	 * node reads the same after reflashing.
+	 *
+	 * @param channel Channel number
+	 * @param value Luminosity, clamped to the 16-bit field
+	 * @return Number of bytes written, or 0 on overflow
+	 */
+	uint8_t addLuminosity(uint8_t channel, float value) {
+		if (value < 0.0f) value = 0.0f;
+		if (value > 65535.0f) value = 65535.0f;
+		return addField2Unsigned(channel, LPP_LUMINOSITY, (uint16_t)value);
+	}
 
-    /**
-     * Add barometric pressure reading
-     * @param channel Channel number
-     * @param hpa Pressure in hectopascals (hPa / mbar)
-     * @return Number of bytes written, or 0 on overflow
-     */
-    uint8_t addBarometricPressure(uint8_t channel, float hpa) {
-        uint16_t val = (uint16_t)(hpa * LPP_PRESSURE_MULT);
-        return addField2Unsigned(channel, LPP_BAROMETRIC_PRESSURE, val);
-    }
+	/**
+	 * Add barometric pressure reading
+	 * @param channel Channel number
+	 * @param hpa Pressure in hectopascals (hPa / mbar)
+	 * @return Number of bytes written, or 0 on overflow
+	 */
+	uint8_t addBarometricPressure(uint8_t channel, float hpa) {
+		uint16_t val = (uint16_t)(hpa * LPP_PRESSURE_MULT);
+		return addField2Unsigned(channel, LPP_BAROMETRIC_PRESSURE, val);
+	}
 
-    /**
-     * Add voltage reading
-     * @param channel Channel number
-     * @param volts Voltage in volts
-     * @return Number of bytes written, or 0 on overflow
-     */
-    uint8_t addVoltage(uint8_t channel, float volts) {
-        int16_t val = (int16_t)(volts * LPP_VOLTAGE_MULT);
-        return addField2Signed(channel, LPP_VOLTAGE, val);
-    }
+	/**
+	 * Add voltage reading
+	 * @param channel Channel number
+	 * @param volts Voltage in volts
+	 * @return Number of bytes written, or 0 on overflow
+	 */
+	uint8_t addVoltage(uint8_t channel, float volts) {
+		int16_t val = (int16_t)(volts * LPP_VOLTAGE_MULT);
+		return addField2Signed(channel, LPP_VOLTAGE, val);
+	}
 
-    /**
-     * Add current reading
-     *
-     * Type 117 is signed in CayenneLPP (and in Arduino MeshCore, which uses
-     * the reference encoder), so a bidirectional monitor like the INA219 can
-     * report discharge as a negative value. Casting a negative float to an
-     * unsigned type is UB and saturates to 0 on the FPU, which silently
-     * reported 0 mA on every discharging node.
-     *
-     * @param channel Channel number
-     * @param amps Current in amperes (negative = reverse flow)
-     * @return Number of bytes written, or 0 on overflow
-     */
-    uint8_t addCurrent(uint8_t channel, float amps) {
-        int16_t val = (int16_t)(amps * LPP_CURRENT_MULT);
-        return addField2Signed(channel, LPP_CURRENT, val);
-    }
+	/**
+	 * Add current reading
+	 *
+	 * Type 117 is signed in CayenneLPP (and in Arduino MeshCore, which uses
+	 * the reference encoder), so a bidirectional monitor like the INA219 can
+	 * report discharge as a negative value. Casting a negative float to an
+	 * unsigned type is UB and saturates to 0 on the FPU, which silently
+	 * reported 0 mA on every discharging node.
+	 *
+	 * @param channel Channel number
+	 * @param amps Current in amperes (negative = reverse flow)
+	 * @return Number of bytes written, or 0 on overflow
+	 */
+	uint8_t addCurrent(uint8_t channel, float amps) {
+		int16_t val = (int16_t)(amps * LPP_CURRENT_MULT);
+		return addField2Signed(channel, LPP_CURRENT, val);
+	}
 
-    /**
-     * Add power reading
-     * @param channel Channel number
-     * @param watts Power in watts
-     * @return Number of bytes written, or 0 on overflow
-     */
-    uint8_t addPower(uint8_t channel, float watts) {
-        uint16_t val = (uint16_t)watts;
-        return addField2Unsigned(channel, LPP_POWER, val);
-    }
+	/**
+	 * Add power reading
+	 * @param channel Channel number
+	 * @param watts Power in watts
+	 * @return Number of bytes written, or 0 on overflow
+	 */
+	uint8_t addPower(uint8_t channel, float watts) {
+		uint16_t val = (uint16_t)watts;
+		return addField2Unsigned(channel, LPP_POWER, val);
+	}
 
-    /**
-     * Add altitude reading
-     * @param channel Channel number
-     * @param meters Altitude in meters
-     * @return Number of bytes written, or 0 on overflow
-     */
-    uint8_t addAltitude(uint8_t channel, float meters) {
-        int16_t val = (int16_t)meters;
-        return addField2Signed(channel, LPP_ALTITUDE, val);
-    }
+	/**
+	 * Add altitude reading
+	 * @param channel Channel number
+	 * @param meters Altitude in meters
+	 * @return Number of bytes written, or 0 on overflow
+	 */
+	uint8_t addAltitude(uint8_t channel, float meters) {
+		int16_t val = (int16_t)meters;
+		return addField2Signed(channel, LPP_ALTITUDE, val);
+	}
 
-    /**
-     * Add distance reading
-     * @param channel Channel number
-     * @param meters Distance in meters
-     * @return Number of bytes written, or 0 on overflow
-     */
-    uint8_t addDistance(uint8_t channel, float meters) {
-        uint32_t val = (uint32_t)(meters * LPP_DISTANCE_MULT);
-        return addField4(channel, LPP_DISTANCE, val);
-    }
+	/**
+	 * Add distance reading
+	 * @param channel Channel number
+	 * @param meters Distance in meters
+	 * @return Number of bytes written, or 0 on overflow
+	 */
+	uint8_t addDistance(uint8_t channel, float meters) {
+		uint32_t val = (uint32_t)(meters * LPP_DISTANCE_MULT);
+		return addField4(channel, LPP_DISTANCE, val);
+	}
 
-    /**
-     * Add analog input (generic sensor value)
-     * @param channel Channel number
-     * @param value Analog value (scaled by 0.01)
-     * @return Number of bytes written, or 0 on overflow
-     */
-    uint8_t addAnalogInput(uint8_t channel, float value) {
-        int16_t val = (int16_t)(value * LPP_ANALOG_MULT);
-        return addField2Signed(channel, LPP_ANALOG_INPUT, val);
-    }
+	/**
+	 * Add analog input (generic sensor value)
+	 * @param channel Channel number
+	 * @param value Analog value (scaled by 0.01)
+	 * @return Number of bytes written, or 0 on overflow
+	 */
+	uint8_t addAnalogInput(uint8_t channel, float value) {
+		int16_t val = (int16_t)(value * LPP_ANALOG_MULT);
+		return addField2Signed(channel, LPP_ANALOG_INPUT, val);
+	}
 
-    /**
-     * Add GPS location
-     * @param channel Channel number
-     * @param latitude Latitude in degrees
-     * @param longitude Longitude in degrees
-     * @param altitude Altitude in meters
-     * @return Number of bytes written, or 0 on overflow
-     */
-    uint8_t addGPS(uint8_t channel, float latitude, float longitude, float altitude) {
-        /* GPS format: 3 bytes lat, 3 bytes lon, 3 bytes alt (all signed, big-endian) */
-        if (_cursor + 11 > _maxsize) return 0;
+	/**
+	 * Add GPS location
+	 * @param channel Channel number
+	 * @param latitude Latitude in degrees
+	 * @param longitude Longitude in degrees
+	 * @param altitude Altitude in meters
+	 * @return Number of bytes written, or 0 on overflow
+	 */
+	uint8_t addGPS(uint8_t channel, float latitude, float longitude, float altitude) {
+		/* GPS format: 3 bytes lat, 3 bytes lon, 3 bytes alt (all signed, big-endian) */
+		if (_cursor + 11 > _maxsize) return 0;
 
-        int32_t lat = (int32_t)(latitude * LPP_GPS_LAT_LON_MULT);
-        int32_t lon = (int32_t)(longitude * LPP_GPS_LAT_LON_MULT);
-        int32_t alt = (int32_t)(altitude * LPP_GPS_ALT_MULT);
+		int32_t lat = (int32_t)(latitude * LPP_GPS_LAT_LON_MULT);
+		int32_t lon = (int32_t)(longitude * LPP_GPS_LAT_LON_MULT);
+		int32_t alt = (int32_t)(altitude * LPP_GPS_ALT_MULT);
 
-        _buffer[_cursor++] = channel;
-        _buffer[_cursor++] = LPP_GPS;
+		_buffer[_cursor++] = channel;
+		_buffer[_cursor++] = LPP_GPS;
 
-        /* Latitude - 3 bytes signed */
-        _buffer[_cursor++] = (lat >> 16) & 0xFF;
-        _buffer[_cursor++] = (lat >> 8) & 0xFF;
-        _buffer[_cursor++] = lat & 0xFF;
+		/* Latitude - 3 bytes signed */
+		_buffer[_cursor++] = (lat >> 16) & 0xFF;
+		_buffer[_cursor++] = (lat >> 8) & 0xFF;
+		_buffer[_cursor++] = lat & 0xFF;
 
-        /* Longitude - 3 bytes signed */
-        _buffer[_cursor++] = (lon >> 16) & 0xFF;
-        _buffer[_cursor++] = (lon >> 8) & 0xFF;
-        _buffer[_cursor++] = lon & 0xFF;
+		/* Longitude - 3 bytes signed */
+		_buffer[_cursor++] = (lon >> 16) & 0xFF;
+		_buffer[_cursor++] = (lon >> 8) & 0xFF;
+		_buffer[_cursor++] = lon & 0xFF;
 
-        /* Altitude - 3 bytes signed */
-        _buffer[_cursor++] = (alt >> 16) & 0xFF;
-        _buffer[_cursor++] = (alt >> 8) & 0xFF;
-        _buffer[_cursor++] = alt & 0xFF;
+		/* Altitude - 3 bytes signed */
+		_buffer[_cursor++] = (alt >> 16) & 0xFF;
+		_buffer[_cursor++] = (alt >> 8) & 0xFF;
+		_buffer[_cursor++] = alt & 0xFF;
 
-        return 11;
-    }
+		return 11;
+	}
 
 private:
-    uint8_t *_buffer;
-    size_t _maxsize;
-    size_t _cursor;
+	uint8_t *_buffer;
+	size_t _maxsize;
+	size_t _cursor;
 
-    /* Add 1-byte unsigned field */
-    uint8_t addField1(uint8_t channel, uint8_t type, uint8_t value) {
-        if (_cursor + 3 > _maxsize) return 0;
-        _buffer[_cursor++] = channel;
-        _buffer[_cursor++] = type;
-        _buffer[_cursor++] = value;
-        return 3;
-    }
+	/* Add 1-byte unsigned field */
+	uint8_t addField1(uint8_t channel, uint8_t type, uint8_t value) {
+		if (_cursor + 3 > _maxsize) return 0;
+		_buffer[_cursor++] = channel;
+		_buffer[_cursor++] = type;
+		_buffer[_cursor++] = value;
+		return 3;
+	}
 
-    /* Add 2-byte unsigned field (big-endian) */
-    uint8_t addField2Unsigned(uint8_t channel, uint8_t type, uint16_t value) {
-        if (_cursor + 4 > _maxsize) return 0;
-        _buffer[_cursor++] = channel;
-        _buffer[_cursor++] = type;
-        _buffer[_cursor++] = (value >> 8) & 0xFF;
-        _buffer[_cursor++] = value & 0xFF;
-        return 4;
-    }
+	/* Add 2-byte unsigned field (big-endian) */
+	uint8_t addField2Unsigned(uint8_t channel, uint8_t type, uint16_t value) {
+		if (_cursor + 4 > _maxsize) return 0;
+		_buffer[_cursor++] = channel;
+		_buffer[_cursor++] = type;
+		_buffer[_cursor++] = (value >> 8) & 0xFF;
+		_buffer[_cursor++] = value & 0xFF;
+		return 4;
+	}
 
-    /* Add 2-byte signed field (big-endian) */
-    uint8_t addField2Signed(uint8_t channel, uint8_t type, int16_t value) {
-        if (_cursor + 4 > _maxsize) return 0;
-        _buffer[_cursor++] = channel;
-        _buffer[_cursor++] = type;
-        _buffer[_cursor++] = (value >> 8) & 0xFF;
-        _buffer[_cursor++] = value & 0xFF;
-        return 4;
-    }
+	/* Add 2-byte signed field (big-endian) */
+	uint8_t addField2Signed(uint8_t channel, uint8_t type, int16_t value) {
+		if (_cursor + 4 > _maxsize) return 0;
+		_buffer[_cursor++] = channel;
+		_buffer[_cursor++] = type;
+		_buffer[_cursor++] = (value >> 8) & 0xFF;
+		_buffer[_cursor++] = value & 0xFF;
+		return 4;
+	}
 
-    /* Add 4-byte unsigned field (big-endian) */
-    uint8_t addField4(uint8_t channel, uint8_t type, uint32_t value) {
-        if (_cursor + 6 > _maxsize) return 0;
-        _buffer[_cursor++] = channel;
-        _buffer[_cursor++] = type;
-        _buffer[_cursor++] = (value >> 24) & 0xFF;
-        _buffer[_cursor++] = (value >> 16) & 0xFF;
-        _buffer[_cursor++] = (value >> 8) & 0xFF;
-        _buffer[_cursor++] = value & 0xFF;
-        return 6;
-    }
+	/* Add 4-byte unsigned field (big-endian) */
+	uint8_t addField4(uint8_t channel, uint8_t type, uint32_t value) {
+		if (_cursor + 6 > _maxsize) return 0;
+		_buffer[_cursor++] = channel;
+		_buffer[_cursor++] = type;
+		_buffer[_cursor++] = (value >> 24) & 0xFF;
+		_buffer[_cursor++] = (value >> 16) & 0xFF;
+		_buffer[_cursor++] = (value >> 8) & 0xFF;
+		_buffer[_cursor++] = value & 0xFF;
+		return 6;
+	}
 };
 
 #endif /* SIMPLE_LPP_H */

@@ -79,7 +79,7 @@ extern "C" {
  * @return lr20xx_status_t Operation status
  */
 lr20xx_status_t lr20xx_radio_flrc_set_modulation_params( const void*                           context,
-                                                         const lr20xx_radio_flrc_mod_params_t* params );
+							 const lr20xx_radio_flrc_mod_params_t* params );
 
 /**
  * @brief Set the packet parameters for FLRC packets
@@ -152,8 +152,8 @@ lr20xx_status_t lr20xx_radio_flrc_get_pkt_status( const void* context, lr20xx_ra
  * @see lr20xx_radio_flrc_set_syncword
  */
 lr20xx_status_t lr20xx_radio_flrc_set_short_syncword(
-    const void* context, uint8_t syncword_index,
-    const uint8_t short_syncword[LR20XX_RADIO_FLRC_SHORT_SYNCWORD_LENGTH] );
+	const void* context, uint8_t syncword_index,
+	const uint8_t short_syncword[LR20XX_RADIO_FLRC_SHORT_SYNCWORD_LENGTH] );
 
 /**
  * @brief Set the syncword for FLRC packet
@@ -172,7 +172,7 @@ lr20xx_status_t lr20xx_radio_flrc_set_short_syncword(
  * @see lr20xx_radio_flrc_set_short_syncword
  */
 lr20xx_status_t lr20xx_radio_flrc_set_syncword( const void* context, uint8_t syncword_index,
-                                                const uint8_t syncword[LR20XX_RADIO_FLRC_SYNCWORD_LENGTH] );
+						const uint8_t syncword[LR20XX_RADIO_FLRC_SYNCWORD_LENGTH] );
 
 /**
  * @brief Helper function to get the time-on-air of FLRC packet, in microseconds
@@ -187,7 +187,7 @@ lr20xx_status_t lr20xx_radio_flrc_set_syncword( const void* context, uint8_t syn
  * @see lr20xx_radio_flrc_set_modulation_params, lr20xx_radio_flrc_set_pkt_params
  */
 uint32_t lr20xx_get_flrc_time_on_air_in_us( const lr20xx_radio_flrc_pkt_params_t* pkt_params,
-                                            const lr20xx_radio_flrc_mod_params_t* mod_params );
+					    const lr20xx_radio_flrc_mod_params_t* mod_params );
 
 #ifdef __cplusplus
 }

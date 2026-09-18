@@ -83,7 +83,7 @@ extern "C" {
  * @see lr11xx_regmem_read_regmem32
  */
 lr11xx_status_t lr11xx_regmem_write_regmem32( const void* context, const uint32_t address, const uint32_t* buffer,
-                                              const uint8_t length );
+					      const uint8_t length );
 
 /*!
  * @brief Read words into register memory space of LR11XX.
@@ -102,7 +102,7 @@ lr11xx_status_t lr11xx_regmem_write_regmem32( const void* context, const uint32_
  * @see lr11xx_regmem_write_regmem32
  */
 lr11xx_status_t lr11xx_regmem_read_regmem32( const void* context, const uint32_t address, uint32_t* buffer,
-                                             const uint8_t length );
+					     const uint8_t length );
 
 /*!
  * @brief Write bytes into register memory space of LR11XX.
@@ -119,7 +119,7 @@ lr11xx_status_t lr11xx_regmem_read_regmem32( const void* context, const uint32_t
  * @see lr11xx_regmem_read_mem8
  */
 lr11xx_status_t lr11xx_regmem_write_mem8( const void* context, const uint32_t address, const uint8_t* buffer,
-                                          const uint8_t length );
+					  const uint8_t length );
 
 /*!
  * @brief Read bytes into register memory space of LR11XX.
@@ -138,7 +138,7 @@ lr11xx_status_t lr11xx_regmem_write_mem8( const void* context, const uint32_t ad
  * @see lr11xx_regmem_write_mem8
  */
 lr11xx_status_t lr11xx_regmem_read_mem8( const void* context, const uint32_t address, uint8_t* buffer,
-                                         const uint8_t length );
+					 const uint8_t length );
 
 /*!
  * @brief Write bytes into radio TX buffer memory space of LR11XX.
@@ -167,7 +167,7 @@ lr11xx_status_t lr11xx_regmem_write_buffer8( const void* context, const uint8_t*
  * @see lr11xx_regmem_write_buffer8
  */
 lr11xx_status_t lr11xx_regmem_read_buffer8( const void* context, uint8_t* buffer, const uint8_t offset,
-                                            const uint8_t length );
+					    const uint8_t length );
 
 /*!
  * @brief Clear radio RX buffer
@@ -191,7 +191,7 @@ lr11xx_status_t lr11xx_regmem_clear_rxbuffer( const void* context );
  * @returns Operation status
  */
 lr11xx_status_t lr11xx_regmem_write_regmem32_mask( const void* context, const uint32_t address, const uint32_t mask,
-                                                   const uint32_t data );
+						   const uint32_t data );
 
 #ifdef __cplusplus
 }

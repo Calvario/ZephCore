@@ -38,11 +38,11 @@ LOG_MODULE_REGISTER(zephcore_gps, CONFIG_ZEPHCORE_GPS_LOG_LEVEL);
 
 /* ========== GNSS Support ========== */
 #if DT_HAS_COMPAT_STATUS_OKAY(gnss_nmea_generic) || \
-    DT_HAS_COMPAT_STATUS_OKAY(u_blox_m8) || \
-    DT_HAS_COMPAT_STATUS_OKAY(u_blox_f9p) || \
-    DT_HAS_COMPAT_STATUS_OKAY(quectel_lcx6g) || \
-    DT_HAS_COMPAT_STATUS_OKAY(quectel_lc76g) || \
-    DT_HAS_COMPAT_STATUS_OKAY(luatos_air530z)
+	DT_HAS_COMPAT_STATUS_OKAY(u_blox_m8) || \
+	DT_HAS_COMPAT_STATUS_OKAY(u_blox_f9p) || \
+	DT_HAS_COMPAT_STATUS_OKAY(quectel_lcx6g) || \
+	DT_HAS_COMPAT_STATUS_OKAY(quectel_lc76g) || \
+	DT_HAS_COMPAT_STATUS_OKAY(luatos_air530z)
 #define HAS_GNSS 1
 #include <zephyr/drivers/gnss.h>
 #else
@@ -63,7 +63,7 @@ LOG_MODULE_REGISTER(zephcore_gps, CONFIG_ZEPHCORE_GPS_LOG_LEVEL);
 
 /* GNSS module hangs off a UART we can write to (any compatible). */
 #if HAS_GNSS && DT_NODE_HAS_STATUS(DT_NODELABEL(gnss), okay) && \
-    DT_NODE_HAS_STATUS(DT_BUS(DT_NODELABEL(gnss)), okay)
+	DT_NODE_HAS_STATUS(DT_BUS(DT_NODELABEL(gnss)), okay)
 #define HAS_GPS_UART 1
 #else
 #define HAS_GPS_UART 0
@@ -148,7 +148,7 @@ static uint8_t consecutive_good_fixes = 0;
 static bool first_fix_acquired = false;  /* True after first 3-good-fix cycle since enable. Cleared on gps_enable(false) and at boot. */
 static bool first_acquire_used = false;  /* True once the one-time long cold-start window has ended (fix or timeout). Cleared on gps_enable(false) and at boot. */
 static bool gps_time_synced = false;     /* True after GPS syncs RTC. Starts false at boot (RTC reset),
-                                          * set true after 3 good fixes, cleared when GPS disabled. */
+										  * set true after 3 good fixes, cleared when GPS disabled. */
 static int64_t last_fix_uptime_ms = 0;  /* k_uptime when last validated fix was acquired */
 static int64_t standby_start_ms = 0;    /* k_uptime when standby started (for next-wake calc) */
 static uint64_t standby_interval_ms = 0; /* How long standby lasts (for next-wake calc) */
@@ -1382,8 +1382,8 @@ void gps_power_off_for_shutdown(void)
  * NMEA keeps streaming straight into the suspend. Those boards give up the
  * ~0.5-1 mA HFCLK saving; uptime wins. */
 #if HAS_GPS_UART && defined(CONFIG_PM_DEVICE) && \
-    (HAS_GPS_POWER_CONTROL || HAS_GPS_POWER_REGULATOR) && \
-    DT_NODE_HAS_COMPAT(DT_BUS(DT_NODELABEL(gnss)), nordic_nrf_uarte)
+	(HAS_GPS_POWER_CONTROL || HAS_GPS_POWER_REGULATOR) && \
+	DT_NODE_HAS_COMPAT(DT_BUS(DT_NODELABEL(gnss)), nordic_nrf_uarte)
 #define HAS_GPS_UART_PM 1
 #else
 #define HAS_GPS_UART_PM 0

@@ -88,7 +88,7 @@ extern "C" {
  * @see lr20xx_regmem_read_regmem32
  */
 lr20xx_status_t lr20xx_regmem_write_regmem32( const void* context, const uint32_t address, const uint32_t* buffer,
-                                              const uint8_t length );
+					      const uint8_t length );
 
 /*!
  * @brief Read-modify-write data at given register/memory address
@@ -101,7 +101,7 @@ lr20xx_status_t lr20xx_regmem_write_regmem32( const void* context, const uint32_
  * @returns Operation status
  */
 lr20xx_status_t lr20xx_regmem_write_regmem32_mask( const void* context, const uint32_t address, const uint32_t mask,
-                                                   const uint32_t data );
+						   const uint32_t data );
 
 /*!
  * @brief Read up to 32 words into register memory space of the transceiver.
@@ -120,7 +120,7 @@ lr20xx_status_t lr20xx_regmem_write_regmem32_mask( const void* context, const ui
  * @see lr20xx_regmem_write_regmem32
  */
 lr20xx_status_t lr20xx_regmem_read_regmem32( const void* context, const uint32_t address, uint32_t* buffer,
-                                             const uint8_t length );
+					     const uint8_t length );
 
 #ifdef __cplusplus
 }

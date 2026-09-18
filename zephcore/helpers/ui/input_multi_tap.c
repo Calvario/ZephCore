@@ -135,22 +135,22 @@ static int __maybe_unused multi_tap_init(const struct device *dev)
 		     "tap-codes must have at least 1 entry");                                      \
 	BUILD_ASSERT(DT_INST_PROP_LEN(inst, tap_codes) <= 5,                                     \
 		     "tap-codes must have at most 5 entries");                                     \
-                                                                                                   \
+																																																	 \
 	INPUT_CALLBACK_DEFINE_NAMED(                                                               \
 		COND_CODE_1(DT_INST_NODE_HAS_PROP(inst, input),                                   \
 			(DEVICE_DT_GET_OR_NULL(DT_INST_PHANDLE(inst, input))),                    \
 			(NULL)),                                                                   \
 		multi_tap_cb, (void *)DEVICE_DT_INST_GET(inst),                                    \
 		multi_tap_cb_##inst);                                                              \
-                                                                                                   \
+																																																	 \
 	static const uint16_t multi_tap_input_codes_##inst[] =                                     \
 		DT_INST_PROP(inst, input_codes);                                                   \
-                                                                                                   \
+																																																	 \
 	static const uint16_t multi_tap_codes_##inst[] =                                           \
 		DT_INST_PROP(inst, tap_codes);                                                     \
-                                                                                                   \
+																																																	 \
 	static struct multi_tap_data multi_tap_data_##inst;                                        \
-                                                                                                   \
+																																																	 \
 	static const struct multi_tap_config multi_tap_config_##inst = {                           \
 		.input_dev = COND_CODE_1(DT_INST_NODE_HAS_PROP(inst, input),                      \
 			(DEVICE_DT_GET_OR_NULL(DT_INST_PHANDLE(inst, input))),                    \
@@ -161,7 +161,7 @@ static int __maybe_unused multi_tap_init(const struct device *dev)
 		.num_input_codes = DT_INST_PROP_LEN(inst, input_codes),                            \
 		.num_tap_codes = DT_INST_PROP_LEN(inst, tap_codes),                                \
 	};                                                                                         \
-                                                                                                   \
+																																																	 \
 	DEVICE_DT_INST_DEFINE(inst, multi_tap_init, NULL,                                          \
 			      &multi_tap_data_##inst,                                              \
 			      &multi_tap_config_##inst,                                            \

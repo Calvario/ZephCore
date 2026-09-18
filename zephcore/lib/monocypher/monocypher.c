@@ -218,8 +218,8 @@ void crypto_chacha20_h(u8 out[32], const u8 key[32], const u8 in [16])
 }
 
 u64 crypto_chacha20_djb(u8 *cipher_text, const u8 *plain_text,
-                        size_t text_size, const u8 key[32], const u8 nonce[8],
-                        u64 ctr)
+			size_t text_size, const u8 key[32], const u8 nonce[8],
+			u64 ctr)
 {
 	u32 input[16];
 	load32_le_buf(input     , chacha20_constant, 4);
@@ -277,8 +277,8 @@ u64 crypto_chacha20_djb(u8 *cipher_text, const u8 *plain_text,
 }
 
 u32 crypto_chacha20_ietf(u8 *cipher_text, const u8 *plain_text,
-                         size_t text_size,
-                         const u8 key[32], const u8 nonce[12], u32 ctr)
+			 size_t text_size,
+			 const u8 key[32], const u8 nonce[12], u32 ctr)
 {
 	u64 big_ctr = ctr + ((u64)load32_le(nonce) << 32);
 	return (u32)crypto_chacha20_djb(cipher_text, plain_text, text_size,
@@ -286,8 +286,8 @@ u32 crypto_chacha20_ietf(u8 *cipher_text, const u8 *plain_text,
 }
 
 u64 crypto_chacha20_x(u8 *cipher_text, const u8 *plain_text,
-                      size_t text_size,
-                      const u8 key[32], const u8 nonce[24], u64 ctr)
+		      size_t text_size,
+		      const u8 key[32], const u8 nonce[24], u64 ctr)
 {
 	u8 sub_key[32];
 	crypto_chacha20_h(sub_key, key, nonce);
@@ -309,7 +309,7 @@ u64 crypto_chacha20_x(u8 *cipher_text, const u8 *plain_text,
 // Postcondition:
 //   ctx->h <= 4_ffffffff_ffffffff_ffffffff_ffffffff
 static void poly_blocks(crypto_poly1305_ctx *ctx, const u8 *in,
-                        size_t nb_blocks, unsigned end)
+			size_t nb_blocks, unsigned end)
 {
 	// Local all the things!
 	const u32 r0 = ctx->r[0];
@@ -376,7 +376,7 @@ void crypto_poly1305_init(crypto_poly1305_ctx *ctx, const u8 key[32])
 }
 
 void crypto_poly1305_update(crypto_poly1305_ctx *ctx,
-                            const u8 *message, size_t message_size)
+			    const u8 *message, size_t message_size)
 {
 	// Avoid undefined NULL pointer increments with empty messages
 	if (message_size == 0) {
@@ -441,7 +441,7 @@ void crypto_poly1305_final(crypto_poly1305_ctx *ctx, u8 mac[16])
 }
 
 void crypto_poly1305(u8     mac[16],  const u8 *message,
-                     size_t message_size, const u8  key[32])
+		     size_t message_size, const u8  key[32])
 {
 	crypto_poly1305_ctx ctx;
 	crypto_poly1305_init  (&ctx, key);
@@ -529,7 +529,7 @@ static void blake2b_compress(crypto_blake2b_ctx *ctx, int is_last_block)
 }
 
 void crypto_blake2b_keyed_init(crypto_blake2b_ctx *ctx, size_t hash_size,
-                               const u8 *key, size_t key_size)
+			       const u8 *key, size_t key_size)
 {
 	// initial hash
 	COPY(ctx->hash, iv, 8);
@@ -558,7 +558,7 @@ void crypto_blake2b_init(crypto_blake2b_ctx *ctx, size_t hash_size)
 }
 
 void crypto_blake2b_update(crypto_blake2b_ctx *ctx,
-                           const u8 *message, size_t message_size)
+			   const u8 *message, size_t message_size)
 {
 	// Avoid undefined NULL pointer increments with empty messages
 	if (message_size == 0) {
@@ -638,8 +638,8 @@ void crypto_blake2b_final(crypto_blake2b_ctx *ctx, u8 *hash)
 }
 
 void crypto_blake2b_keyed(u8 *hash,          size_t hash_size,
-                          const u8 *key,     size_t key_size,
-                          const u8 *message, size_t message_size)
+			  const u8 *key,     size_t key_size,
+			  const u8 *message, size_t message_size)
 {
 	crypto_blake2b_ctx ctx;
 	crypto_blake2b_keyed_init(&ctx, hash_size, key, key_size);
@@ -670,7 +670,7 @@ static void blake_update_32(crypto_blake2b_ctx *ctx, u32 input)
 }
 
 static void blake_update_32_buf(crypto_blake2b_ctx *ctx,
-                                const u8 *buf, u32 size)
+				const u8 *buf, u32 size)
 {
 	blake_update_32(ctx, size);
 	crypto_blake2b_update(ctx, buf, size);
@@ -686,7 +686,7 @@ static void  xor_block(blk *o,const blk*in){FOR(i, 0, 128) o->a[i] ^= in->a[i];}
 // (One could use a stream cipher with a seed hash as the key, but
 //  this would introduce another dependency —and point of failure.)
 static void extended_hash(u8       *digest, u32 digest_size,
-                          const u8 *input , u32 input_size)
+			  const u8 *input , u32 input_size)
 {
 	crypto_blake2b_ctx ctx;
 	crypto_blake2b_init  (&ctx, MIN(digest_size, 64));
@@ -719,7 +719,7 @@ static void extended_hash(u8       *digest, u32 digest_size,
 	a += b + ((LSB(a) * LSB(b)) << 1);  d ^= a;  d = rotr64(d, 16); \
 	c += d + ((LSB(c) * LSB(d)) << 1);  b ^= c;  b = rotr64(b, 63)
 #define ROUND(v0,  v1,  v2,  v3,  v4,  v5,  v6,  v7,	\
-              v8,  v9, v10, v11, v12, v13, v14, v15)	\
+	      v8,  v9, v10, v11, v12, v13, v14, v15)	\
 	G(v0, v4,  v8, v12);  G(v1, v5,  v9, v13); \
 	G(v2, v6, v10, v14);  G(v3, v7, v11, v15); \
 	G(v0, v5, v10, v15);  G(v1, v6, v11, v12); \
@@ -747,9 +747,9 @@ static void g_rounds(blk *b)
 const crypto_argon2_extras crypto_argon2_no_extras = { 0, 0, 0, 0 };
 
 void crypto_argon2(u8 *hash, u32 hash_size, void *work_area,
-                   crypto_argon2_config config,
-                   crypto_argon2_inputs inputs,
-                   crypto_argon2_extras extras)
+		   crypto_argon2_config config,
+		   crypto_argon2_inputs inputs,
+		   crypto_argon2_extras extras)
 {
 	const u32 segment_size = config.nb_blocks / config.nb_lanes / 4;
 	const u32 lane_size    = segment_size * 4;
@@ -1517,7 +1517,7 @@ static int scalar_bit(const u8 s[32], int i)
 /// X-25519 /// Taken from SUPERCOP's ref10 implementation.
 ///////////////
 static void scalarmult(u8 q[32], const u8 scalar[32], const u8 p[32],
-                       int nb_bits)
+		       int nb_bits)
 {
 	// computes the scalar product
 	fe x1;
@@ -1576,8 +1576,8 @@ static void scalarmult(u8 q[32], const u8 scalar[32], const u8 p[32],
 }
 
 void crypto_x25519(u8       raw_shared_secret[32],
-                   const u8 your_secret_key  [32],
-                   const u8 their_public_key [32])
+		   const u8 your_secret_key  [32],
+		   const u8 their_public_key [32])
 {
 	// restrict the possible scalar values
 	u8 e[32];
@@ -1587,7 +1587,7 @@ void crypto_x25519(u8       raw_shared_secret[32],
 }
 
 void crypto_x25519_public_key(u8       public_key[32],
-                              const u8 secret_key[32])
+			      const u8 secret_key[32])
 {
 	static const u8 base_point[32] = {9};
 	crypto_x25519(public_key, secret_key, base_point);
@@ -1697,7 +1697,7 @@ void crypto_eddsa_reduce(u8 reduced[32], const u8 expanded[64])
 
 // r = (a * b) + c
 void crypto_eddsa_mul_add(u8 r[32],
-                          const u8 a[32], const u8 b[32], const u8 c[32])
+			  const u8 a[32], const u8 b[32], const u8 c[32])
 {
 	u32 A[8];  load32_le_buf(A, a, 8);
 	u32 B[8];  load32_le_buf(B, b, 8);
@@ -1998,7 +1998,7 @@ static int slide_step(slide_ctx *ctx, int width, int i, const u8 scalar[32])
 #define P_W_SIZE  (1<<(P_W_WIDTH-2))
 
 int crypto_eddsa_check_equation(const u8 signature[64], const u8 public_key[32],
-                                const u8 h[32])
+				const u8 h[32])
 {
 	ge minus_A; // -public_key
 	ge minus_R; // -first_half_of_signature
@@ -2168,7 +2168,7 @@ static const ge_precomp b_comb_high[8] = {
 };
 
 static void lookup_add(ge *p, ge_precomp *tmp_c, fe tmp_a, fe tmp_b,
-                       const ge_precomp comb[8], const u8 scalar[32], int i)
+		       const ge_precomp comb[8], const u8 scalar[32], int i)
 {
 	u8 teeth = (u8)((scalar_bit(scalar, i)          ) +
 	                (scalar_bit(scalar, i + 32) << 1) +
@@ -2263,9 +2263,9 @@ void crypto_eddsa_key_pair(u8 secret_key[64], u8 public_key[32], u8 seed[32])
 }
 
 static void hash_reduce(u8 h[32],
-                        const u8 *a, size_t a_size,
-                        const u8 *b, size_t b_size,
-                        const u8 *c, size_t c_size)
+			const u8 *a, size_t a_size,
+			const u8 *b, size_t b_size,
+			const u8 *c, size_t c_size)
 {
 	u8 hash[64];
 	crypto_blake2b_ctx ctx;
@@ -2333,7 +2333,7 @@ static void hash_reduce(u8 h[32],
 //   S              = ((h * a) + r) % L
 //   signature      = R || S
 void crypto_eddsa_sign(u8 signature [64], const u8 secret_key[64],
-                       const u8 *message, size_t message_size)
+		       const u8 *message, size_t message_size)
 {
 	u8 a[64];  // secret scalar and prefix
 	u8 r[32];  // secret deterministic "random" nonce
@@ -2361,7 +2361,7 @@ void crypto_eddsa_sign(u8 signature [64], const u8 secret_key[64],
 //
 // The last two steps are done in crypto_eddsa_check_equation()
 int crypto_eddsa_check(const u8  signature[64], const u8 public_key[32],
-                       const u8 *message, size_t message_size)
+		       const u8 *message, size_t message_size)
 {
 	u8 h[32];
 	hash_reduce(h, signature, 32, public_key, 32, message, message_size);
@@ -2820,7 +2820,7 @@ static void redc(u32 u[8], u32 x[16])
 }
 
 void crypto_x25519_inverse(u8 blind_salt [32], const u8 private_key[32],
-                           const u8 curve_point[32])
+			   const u8 curve_point[32])
 {
 	static const  u8 Lm2[32] = { // L - 2
 		0xeb, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58,
@@ -2888,8 +2888,8 @@ void crypto_x25519_inverse(u8 blind_salt [32], const u8 private_key[32],
 /// Authenticated encryption ///
 ////////////////////////////////
 static void lock_auth(u8 mac[16], const u8  auth_key[32],
-                      const u8 *ad         , size_t ad_size,
-                      const u8 *cipher_text, size_t text_size)
+		      const u8 *ad         , size_t ad_size,
+		      const u8 *cipher_text, size_t text_size)
 {
 	u8 sizes[16]; // Not secret, not wiped
 	store64_le(sizes + 0, ad_size);
@@ -2905,7 +2905,7 @@ static void lock_auth(u8 mac[16], const u8  auth_key[32],
 }
 
 void crypto_aead_init_x(crypto_aead_ctx *ctx,
-                        u8 const key[32], const u8 nonce[24])
+			u8 const key[32], const u8 nonce[24])
 {
 	crypto_chacha20_h(ctx->key, key, nonce);
 	COPY(ctx->nonce, nonce + 16, 8);
@@ -2913,7 +2913,7 @@ void crypto_aead_init_x(crypto_aead_ctx *ctx,
 }
 
 void crypto_aead_init_djb(crypto_aead_ctx *ctx,
-                          const u8 key[32], const u8 nonce[8])
+			  const u8 key[32], const u8 nonce[8])
 {
 	COPY(ctx->key  , key  , 32);
 	COPY(ctx->nonce, nonce,  8);
@@ -2921,7 +2921,7 @@ void crypto_aead_init_djb(crypto_aead_ctx *ctx,
 }
 
 void crypto_aead_init_ietf(crypto_aead_ctx *ctx,
-                           const u8 key[32], const u8 nonce[12])
+			   const u8 key[32], const u8 nonce[12])
 {
 	COPY(ctx->key  , key      , 32);
 	COPY(ctx->nonce, nonce + 4,  8);
@@ -2929,8 +2929,8 @@ void crypto_aead_init_ietf(crypto_aead_ctx *ctx,
 }
 
 void crypto_aead_write(crypto_aead_ctx *ctx, u8 *cipher_text, u8 mac[16],
-                       const u8 *ad,         size_t ad_size,
-                       const u8 *plain_text, size_t text_size)
+		       const u8 *ad,         size_t ad_size,
+		       const u8 *plain_text, size_t text_size)
 {
 	u8 auth_key[64]; // the last 32 bytes are used for rekeying.
 	crypto_chacha20_djb(auth_key, 0, 64, ctx->key, ctx->nonce, ctx->counter);
@@ -2942,8 +2942,8 @@ void crypto_aead_write(crypto_aead_ctx *ctx, u8 *cipher_text, u8 mac[16],
 }
 
 int crypto_aead_read(crypto_aead_ctx *ctx, u8 *plain_text, const u8 mac[16],
-                     const u8 *ad,          size_t ad_size,
-                     const u8 *cipher_text, size_t text_size)
+		     const u8 *ad,          size_t ad_size,
+		     const u8 *cipher_text, size_t text_size)
 {
 	u8 auth_key[64]; // the last 32 bytes are used for rekeying.
 	u8 real_mac[16];
@@ -2961,8 +2961,8 @@ int crypto_aead_read(crypto_aead_ctx *ctx, u8 *plain_text, const u8 mac[16],
 }
 
 void crypto_aead_lock(u8 *cipher_text, u8 mac[16], const u8 key[32],
-                      const u8  nonce[24], const u8 *ad, size_t ad_size,
-                      const u8 *plain_text, size_t text_size)
+		      const u8  nonce[24], const u8 *ad, size_t ad_size,
+		      const u8 *plain_text, size_t text_size)
 {
 	crypto_aead_ctx ctx;
 	crypto_aead_init_x(&ctx, key, nonce);
@@ -2972,8 +2972,8 @@ void crypto_aead_lock(u8 *cipher_text, u8 mac[16], const u8 key[32],
 }
 
 int crypto_aead_unlock(u8 *plain_text, const u8  mac[16], const u8 key[32],
-                       const u8 nonce[24], const u8 *ad, size_t ad_size,
-                       const u8 *cipher_text, size_t text_size)
+		       const u8 nonce[24], const u8 *ad, size_t ad_size,
+		       const u8 *cipher_text, size_t text_size)
 {
 	crypto_aead_ctx ctx;
 	crypto_aead_init_x(&ctx, key, nonce);

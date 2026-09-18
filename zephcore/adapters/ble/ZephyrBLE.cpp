@@ -1463,7 +1463,7 @@ void zephcore_ble_set_enabled(bool enable)
 }
 bool zephcore_ble_is_enabled(void)
 {
-    return ble_enabled;
+	return ble_enabled;
 }
 
 bool zephcore_ble_is_active(void)

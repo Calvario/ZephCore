@@ -73,9 +73,9 @@ extern "C" {
  */
 typedef struct lr20xx_patch_version_e
 {
-    bool    is_pram_loaded;  //!< True if the PRAM is loaded, false otherwise
-    uint8_t pram_type;       //!< Type of the loaded PRAM, if lr20xx_patch_version_e::is_pram_loaded is true
-    uint8_t pram_version;    //!< Version of the loaded PRAM, if lr20xx_patch_version_e::is_pram_loaded is true
+	bool    is_pram_loaded;  //!< True if the PRAM is loaded, false otherwise
+	uint8_t pram_type;       //!< Type of the loaded PRAM, if lr20xx_patch_version_e::is_pram_loaded is true
+	uint8_t pram_version;    //!< Version of the loaded PRAM, if lr20xx_patch_version_e::is_pram_loaded is true
 } lr20xx_patch_version_t;
 
 /*

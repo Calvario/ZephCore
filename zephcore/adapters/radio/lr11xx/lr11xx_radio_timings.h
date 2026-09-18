@@ -74,7 +74,7 @@ extern "C" {
  * @returns Delay in microsecond
  */
 uint32_t lr11xx_radio_timings_get_delay_between_last_bit_sent_and_rx_done_in_us(
-    const lr11xx_radio_mod_params_lora_t* mod_params );
+	const lr11xx_radio_mod_params_lora_t* mod_params );
 
 /**
  * @brief Get the time between the last bit sent and the Tx done event
@@ -84,7 +84,7 @@ uint32_t lr11xx_radio_timings_get_delay_between_last_bit_sent_and_rx_done_in_us(
  * @returns Delay in microsecond
  */
 uint32_t lr11xx_radio_timings_get_delay_between_last_bit_sent_and_tx_done_in_us(
-    const lr11xx_radio_ramp_time_t ramp_time );
+	const lr11xx_radio_ramp_time_t ramp_time );
 
 #ifdef __cplusplus
 }
