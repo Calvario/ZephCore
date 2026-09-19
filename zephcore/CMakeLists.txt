@@ -489,6 +489,13 @@ endif()
 #        looking excellent on a current meter.
 #   ttgo_lora32 -> SX127x; the DIO1 wake flag lives in the sx126x half of
 #        patches/zephyr/0003, so nothing marks the pin as a wake source.
+#   heltec_wifi_lora32_v4_r8 -> absent for a different reason: its wiring does
+#        qualify (DIO1=GPIO14, NSS=GPIO8, RESET=GPIO12 on &spi2, button on
+#        gpio0 0), so every criterion stated here and in pm_esp32.conf is met.
+#        It is out because CONFIG_PM has never been validated on the board.
+#        Without the anchoring below it would be swept in by substring match
+#        rather than by decision. Add it once someone has run pm_esp32.conf's
+#        three checks on hardware.
 #
 # CONSOLE, and why it does NOT gate this list. A native USB Serial/JTAG console
 # cannot survive light sleep: the peripheral drops off the bus and the HAL has
@@ -507,11 +514,20 @@ endif()
 # re-arms the window. These boards are in the field deliberately to get light
 # sleep exercised; drop them from the regex to take it away.
 #
-# The regex lists v43 explicitly. "heltec_wifi_lora32_v4" already substring-
-# matches it (CMake MATCHES is unanchored), which made V4.3's inclusion look
-# accidental; spelling it out makes the intent reviewable.
+# Anchored, and every member spelled out. CMake MATCHES is a substring search,
+# so the bare alternation matched any BOARD merely *containing* one of these
+# names at any offset: "heltec_wifi_lora32_v4" also matches
+# "heltec_wifi_lora32_v4_r8", so that board would get CONFIG_PM=y without
+# anyone deciding it should. The leading "^" is what stops mid-string matches
+# and is not made redundant by the tail.
+#
+# BOARD carries its qualifiers (heltec_wifi_lora32_v4/esp32s3/procpu), and may
+# carry a revision as heltec_wifi_lora32_v3@1/esp32s3/procpu, so the tail
+# accepts "@", "/" or end-of-string rather than "$" alone. No board here
+# declares a revision today; without "@" one that later did would drop out of
+# this list silently.
 if(ZEPHCORE_PLATFORM_CONF MATCHES "esp32_common" AND EXTRA_CONF_FILE MATCHES "repeater"
-   AND BOARD MATCHES "heltec_wifi_lora32_v3|heltec_wifi_lora32_v4|heltec_wifi_lora32_v43|heltec_wireless_tracker")
+   AND BOARD MATCHES "^(heltec_wifi_lora32_v3|heltec_wifi_lora32_v4|heltec_wifi_lora32_v43|heltec_wireless_tracker|heltec_wireless_tracker_v2)(@|/|$)")
     set(ZEPHCORE_PM_CONF "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/pm_esp32.conf")
     if(EXISTS ${ZEPHCORE_PM_CONF})
         list(APPEND ZEPHCORE_CONF_FILES ${ZEPHCORE_PM_CONF})
