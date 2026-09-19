@@ -1,0 +1,189 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * Heltec WiFi LoRa 32 V4-R8 — ZephCore overlay
+ *
+ * The DTS already defines: SX1262 (lora0), SSD1306 OLED, button, LED, PWM,
+ * vext_enable, fem_power, I2C0, SPI2, BLE, WiFi.
+ * This overlay adds ZephCore-specific integration on top.
+ *
+ * LoRa SPI2:  SCLK=9, MOSI=10, MISO=11, NSS=8
+ * LoRa ctrl:  DIO1=14, BUSY=13, RESET=12
+ * FEM:        POWER=7, KCT8103L CSD=2, CTX=5
+ * Display I2C0: SDA=17, SCL=18, RST=21
+ * Battery ADC: GPIO1 = ADC1_CH0 (&adc0), no enable pin (ADC_Ctrl removed on R8)
+ * Vext:       GPIO40 (active-LOW, powers OLED and sensors)
+ * Button:     GPIO0
+ * LED:        GPIO46
+ * GPS UART1:  TX=GPIO38, RX=GPIO39, 9600 baud (Quectel L76K)
+ * GPS ctrl:   VGNSS_Ctrl GPIO42 (active-LOW); no reset line on R8
+ */
+
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+
+/ {
+	chosen {
+		/* Native USB serial for ZephCore console/CLI */
+		zephyr,console = &usb_serial;
+		zephyr,shell-uart = &usb_serial;
+	};
+
+	/* Battery ADC — ZephCore reads via zephyr,user { io-channels }.
+	 * GPIO1 = ADC unit 1 = node &adc0 (label is 0-indexed, unit is 1-indexed);
+	 * the old &adc1 was unit 2 = GPIO11 = SX1262 MISO — always read 0.
+	 * Multiplier = 1100 * divider_ratio. The 1100 is NOT the classic-ESP32
+	 * ADC reference: Zephyr's adc_esp32 driver calibrates the hardware raw
+	 * through adc_cali_raw_to_voltage() and then re-projects the result onto
+	 * a fixed 1100 mV / 4095 scale before the application sees it
+	 * (adc_esp32.c: acq_raw = acq_mv * ((1 << res) - 1) / meas_ref_internal,
+	 * with meas_ref_internal hardcoded to 1100 and no devicetree property to
+	 * change it). So 1100 is exactly right here whatever the SoC's true 0 dB
+	 * span is, and every other ESP32 board in this tree uses the same form.
+	 *
+	 * The ratio is what 5720 got wrong: it used 5.2, while this 390K/100K
+	 * divider is (390+100)/100 = 4.90. meshnology_w12 states the same 4.90
+	 * for the same network from its schematic (R50/R51) and lands on 5390.
+	 * 5720 therefore reads about 6% high.
+	 *
+	 * Plausibility check, computed rather than observed through this driver:
+	 * a separate ESP-IDF reader on this board measured 868.4 mV at the
+	 * divider output against a cell metered at 4.18 V. Projecting that pin
+	 * voltage onto the 1100 mV / 4095 scale above gives a raw of 3233, from
+	 * which 5390 would yield 4254 mV, 1.8% high -- the same offset that
+	 * reader itself showed against the meter, i.e. resistor tolerance rather
+	 * than a modelling error. Every number after "868.4 mV" is arithmetic, so
+	 * this supports 5390 without being a measurement of it.
+	 *
+	 * Note 5.2 is not arithmetic from these resistors at all; it comes from
+	 * MeshCore's empirical Arduino multiplier, where analogReadMilliVolts()
+	 * returns true millivolts and the constant therefore absorbs the loaded
+	 * ratio. Settling 4.90 against an effective loaded value needs
+	 * getBattMilliVolts() itself read against a metered cell, which has not
+	 * been done -- and that is the reading this comment does NOT have. */
+	zephyr,user {
+		io-channels = <&adc0 0>;
+		vbat-mv-multiplier = <5390>;
+	};
+
+	/* No vbat-enable regulator.
+	 *
+	 * V4/V4.3 gate the divider with ADC_Ctrl on GPIO37, but GPIO33-37 are the
+	 * octal-PSRAM pads and this part is an ESP32-S3R8, so that pin is gone --
+	 * the vendor pinmap lists ADC_Ctrl as "removed" on V4-R8. The divider is
+	 * therefore permanently connected and ZephyrBoard reads it directly; its
+	 * vbat_enable lookup is DT_NODE_EXISTS-guarded and degrades to NULL.
+	 */
+
+	/* GPS enable — VGNSS_Ctrl on GPIO42, active-LOW.
+	 *
+	 * V4/V4.3 put VGNSS_Ctrl on GPIO34 and a separate GNSS_RST on GPIO42. The
+	 * R8 has neither pin available in that arrangement: GPIO33-37 are consumed
+	 * by the octal PSRAM, so VGNSS_Ctrl was moved onto GPIO42 and the reset line
+	 * was dropped. Matches the vendor pinmap and Arduino MeshCore
+	 * variants/heltec_v4_r8 (PIN_GPS_EN=42, PIN_GPS_EN_ACTIVE=LOW, and no
+	 * PIN_GPS_RESET at all).
+	 *
+	 * With no gps-reset alias this board stays off the manager's
+	 * HAS_T1000_GPS_CONTROL sequence and uses the plain enable path, which is
+	 * what the hardware supports.
+	 */
+	gps_en: gps-enable {
+		compatible = "gpio-leds";
+		gps_enable_pin: gps_enable {
+			gpios = <&gpio1 10 GPIO_ACTIVE_LOW>;  /* GPIO42 = gpio1 pin 10 */
+			label = "GPS Enable";
+		};
+	};
+
+	aliases {
+		gps-enable = &gps_enable_pin;
+	};
+
+	/* Button chain — same mapping as RAK4631 / WisMesh Pocket (rak4631/board.overlay). */
+	user_btn_longpress {
+		compatible = "zephyr,input-longpress";
+		input = <&buttons>;
+		input-codes = <INPUT_KEY_0>;
+		short-codes = <INPUT_KEY_A>;
+		long-codes = <INPUT_KEY_ENTER>;
+		long-delay-ms = <1000>;
+	};
+
+	page_btn_multitap {
+		compatible = "zephcore,input-multi-tap";
+		input-codes = <INPUT_KEY_A>;
+		tap-codes = <INPUT_KEY_1 INPUT_KEY_LEFT>;
+		tap-delay-ms = <400>;
+	};
+};
+
+/* Enable native USB serial for console/CLI */
+&usb_serial {
+	status = "okay";
+};
+
+/* Patch LoRa radio: add pull-down on DIO1 and enable RX boosted mode.
+ * DTS defines antenna-enable, dio2-tx-enable, TCXO and lna-bypass-gpios.
+ * Deliberately NOT tx-enable-gpios: binding CTX that way is what gated CSD in
+ * 1.17.2 and cost ~69 dB of receive path (see the DTS note on lna-bypass). */
+&lora0 {
+	dio1-gpios = <&gpio0 14 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+	rx-boosted;
+};
+
+/* GPS on UART1 — optional external NMEA module on the pin header, wired to the
+ * same pins Arduino MeshCore uses for this board. Its macro names read the
+ * other way round (PIN_GPS_RX=38, PIN_GPS_TX=39), but it calls
+ * Serial1.setPins(PIN_GPS_TX, PIN_GPS_RX) and Arduino-ESP32's signature is
+ * setPins(rxPin, txPin) -- rx first -- so the wiring is MCU TX=38, RX=39.
+ * Proven on hardware: the module answers its version query (URANUS5) only
+ * with the pins this way round. Do not "fix" this back to the macro names.
+ * Upstream leaves uart1 disabled and gives it no pinctrl, so both are set here.
+ * GPIO38/39 are otherwise unclaimed on the V4-R8; the console stays on usb_serial
+ * (or uart0/GPIO43-44 for companion USB builds).  9600 baud matches Arduino's
+ * default for this variant.
+ *
+ * The node is unconditional, like the V3's gnss node for its optional module:
+ * with nothing fitted the driver simply never sees a fix. */
+&pinctrl {
+	uart1_default: uart1_default {
+		group1 {
+			pinmux = <UART1_TX_GPIO38>;
+			output-high;
+		};
+
+		group2 {
+			pinmux = <UART1_RX_GPIO39>;
+			bias-pull-up;
+		};
+	};
+};
+
+&uart1 {
+	status = "okay";
+	current-speed = <9600>;
+	pinctrl-0 = <&uart1_default>;
+	pinctrl-names = "default";
+
+	gnss: gnss-nmea-generic {
+		compatible = "gnss-nmea-generic";
+	};
+};
+
+/* I2C sensors — auto-detected at runtime */
+&i2c0 {
+	#include "../../common/sensors-i2c.dtsi"
+};
+
+/*
+ * Flash partitions live in partitions.overlay (this dir) so the identical map
+ * is fed to both the app and the MCUboot image — see that file and
+ * sysbuild/CMakeLists.txt.
+ */
+
+/* LittleFS auto-mount — standard /lfs mount point */
+#include "../../common/filesystem.dtsi"
+/* USB CDC-ACM — companion USB transport, auto-enabled for companion builds via
+ * boards/common/esp32s3_usb.conf (see the auto-include block in CMakeLists.txt).
+ * The chosen console above is usb_serial, i.e. the same D+/D- pins, so the conf's
+ * paired overlay moves the console to uart0/GPIO43-44 for those builds. */
+#include "../../common/esp32s3_usb_otg.dtsi"

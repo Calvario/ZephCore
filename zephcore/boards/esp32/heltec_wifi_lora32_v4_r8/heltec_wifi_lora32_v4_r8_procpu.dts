@@ -1,0 +1,315 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * Heltec WiFi LoRa 32 V4-R8 — ZephCore procpu DTS
+ *
+ * Hardware:
+ *   MCU:    ESP32-S3R8 (16 MB flash, 8 MB octal PSRAM)
+ *   Radio:  SX1262 on SPI2, KCT8103L external PA/FEM
+ *   OLED:   SSD1306 128x64 on I2C0
+ *   Button: GPIO0
+ *   LED:    GPIO46 (PWM via LEDC0)
+ *   Vext:   GPIO40 active-LOW PMOS rail switch (powers OLED and sensors)
+ *   BatADC: GPIO1 = ADC1_CH0 (&adc0), no enable pin (ADC_Ctrl removed on R8)
+ *
+ * V4-R8: ESP32-S3R8 (8 MB octal PSRAM). Octal PSRAM claims GPIO33-37, which is
+ * why Vext moved 36->40, the LED 35->46, VGNSS_Ctrl 34->42, and ADC_Ctrl and
+ * GNSS_RST were dropped. FEM is KCT8103L as on V4.3.
+ *
+ * V4.3 vs V4.2 difference — FEM chip changed:
+ *   V4.2: GC1109 PA  — TX_EN on GPIO46 (CPS)
+ *   V4.3: KCT8103L PA — CTX  on GPIO5  (HIGH=TX, LOW=RX/LNA)
+ *   Detection: GPIO2 default pull differs (GC1109: pull-down, KCT8103L: pull-up)
+ *   (See MeshCore PR#1867, Heltec schematic HTIT-WB32LAF_V4.3)
+ *
+ * Pins the PSRAM reshuffle does not move. Origin is noted per line, because
+ * this board takes its FEM from V4.3 and not every line here exists on V4.2:
+ *   GPIO7  = VFEM_Ctrl LDO power (active-HIGH, always-on)  — V4.2 onward
+ *   GPIO2  = FEM CSD (chip enable, active-HIGH)            — V4.2 onward
+ *   GPIO5  = KCT8103L CTX (TX/RX select: HIGH=TX, LOW=RX/LNA) — V4.3 onward.
+ *            V4.2 has NO CTX: its GC1109 is driven by TX_EN on GPIO46. Do not
+ *            carry this line back to heltec_wifi_lora32_v4.
+ *
+ * LoRa SPI2:  SCLK=9, MOSI=10, MISO=11, NSS=8
+ * LoRa ctrl:  DIO1=14, BUSY=13, RESET=12
+ * FEM:        POWER=7, CSD=2, CTX=5
+ * Display I2C0: SDA=17, SCL=18, RST=21
+ */
+
+/dts-v1/;
+
+#include <espressif/esp32s3/esp32s3.dtsi>
+#include "heltec_wifi_lora32_v4_r8-pinctrl.dtsi"
+#include <zephyr/dt-bindings/pwm/pwm.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <zephyr/dt-bindings/lora/sx126x.h>
+#include <zephyr/dt-bindings/adc/adc.h>
+#include <zephyr/dt-bindings/gpio/espressif-esp32-gpio.h>
+#include <espressif/partitions_0x0_amp_16M.dtsi>
+
+/* Module flash/PSRAM, declared by the board since Zephyr 4.5 removed the
+ * per-module dtsi (esp32s3_wroom_n16r8.dtsi). The R8 is the 8 MB octal part,
+ * which is what distinguishes it from the V4/V4.3 S3R2 at 2 MB quad. */
+&flash0 {
+	reg = <0x0 DT_SIZE_M(16)>;
+	ranges = <0x0 0x0 DT_SIZE_M(16)>;
+};
+
+&psram0 {
+	size = <DT_SIZE_M(8)>;
+};
+
+/ {
+	model = "Heltec WiFi LoRa 32 V4-R8 PROCPU";
+	compatible = "heltec,wifi-lora32-v4-r8";
+
+	aliases {
+		led0 = &led0;
+		pwm-0 = &ledc0;
+		pwm-led0 = &pwm_led_white;
+		uart-0 = &uart0;
+		i2c-0 = &i2c0;
+		lora0 = &lora0;
+		sw0 = &button0;
+		watchdog0 = &wdt0;
+	};
+
+	leds {
+		compatible = "gpio-leds";
+		led0: led {
+			gpios = <&gpio1 14 GPIO_ACTIVE_HIGH>;  /* GPIO46 = gpio1 pin 14 */
+			label = "White LED";
+		};
+	};
+
+	pwmleds {
+		compatible = "pwm-leds";
+		pwm_led_white: pwm_led_gpio46 {
+			label = "White PWM LED";
+			pwms = <&ledc0 0 PWM_MSEC(10) PWM_POLARITY_NORMAL>;
+		};
+	};
+
+	buttons: buttons {
+		compatible = "gpio-keys";
+		button0: button_0 {
+			gpios = <&gpio0 0 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "USER Key";
+			zephyr,code = <INPUT_KEY_0>;
+		};
+	};
+
+	/* No 'vbatt' voltage-divider node: ZephCore reads the battery via
+	 * zephyr,user { io-channels } (see board.overlay), and a voltage-divider
+	 * on &adc1 ch0 would target GPIO11 = the SX1262 MISO. See &adc0 below. */
+
+	/* Vext rail switch — PMOS, ACTIVE LOW (GPIO40 low = rail ON).
+	 * Powers the OLED (incl. its I2C pull-ups) and the expansion header.
+	 *
+	 * Same rail circuit as V4.2/V4.3, moved from GPIO36 to GPIO40 by the
+	 * octal-PSRAM pin reshuffle (GPIO33-37 are the PSRAM pads on an S3R8).
+	 *
+	 * Arduino MeshCore drives this revision the same way, and unlike the plain
+	 * V4 it actually asserts the pin: variants/heltec_v4_r8 sets PIN_VEXT_EN=40
+	 * with PIN_VEXT_EN_ACTIVE=LOW, and its target.cpp constructs the display
+	 * with &board.periph_power, so RefCountedDigitalPin::claim() drives the pin
+	 * to the active level. (The plain V4 passes NULL there, so its pin only ever
+	 * sits at the !active level begin() set -- which is why its ACTIVE=HIGH
+	 * constant never shows up as a difference.)
+	 *
+	 * Confirmed on hardware here: with this regulator holding GPIO40 low, the
+	 * SSD1306 acknowledges at 0x3c, which it cannot do on an unpowered rail.
+	 *
+	 * regulator-boot-on + always-on: the rail comes up at regulator init,
+	 * well before the SSD1306 driver init. */
+	vext_enable: vext-enable {
+		compatible = "regulator-fixed";
+		regulator-name = "vext";
+		enable-gpios = <&gpio1 8 GPIO_ACTIVE_LOW>;  /* GPIO40 = gpio1 pin 8 */
+		regulator-boot-on;
+		regulator-always-on;
+	};
+
+	/* No adc_ctrl power-domain node: ADC_Ctrl is removed on the R8 and GPIO37
+	 * (gpio1 pin 5) is an octal-PSRAM pad, which must not be driven at all.
+	 * There is no vbat-enable regulator either -- the divider is permanently
+	 * connected, so ZephyrBoard's regulator lookup degrades to NULL by
+	 * design. See board.overlay's battery-ADC block. */
+
+	/* FEM LDO power supply — GPIO7 powers the KCT8103L LDO.
+	 * Must be HIGH before any radio operation. Keep always-on. */
+	fem_power: fem-power {
+		compatible = "regulator-fixed";
+		regulator-name = "fem-power";
+		enable-gpios = <&gpio0 7 GPIO_ACTIVE_HIGH>;  /* VFEM_Ctrl = GPIO7 */
+		regulator-boot-on;
+		regulator-always-on;
+	};
+
+	chosen {
+		zephyr,sram = &sram1;
+		zephyr,console = &uart0;
+		zephyr,shell-uart = &uart0;
+		zephyr,flash = &flash0;
+		zephyr,code-partition = &slot0_partition;
+		zephyr,bt-hci = &esp32_bt_hci;
+		zephyr,display = &ssd1306_128x64;
+	};
+};
+
+/* Battery ADC on adc0 (ADC unit 1 -> GPIO1 = ADC1_CH0). The node *labelled*
+ * adc0 is unit 1; the node labelled adc1 is unit 2 (= GPIO11 = SX1262 MISO).
+ * The channel@0 config is required — without it adc_channel_setup_dt() fails and
+ * getBattMilliVolts() returns 0 before ever performing a conversion. ADC_GAIN_1
+ * (0 dB) with ADC_REF_INTERNAL; the 390K/100K divider output for a 3.0-4.2 V
+ * cell sits well inside range.
+ *
+ * The SoC's true 0 dB span does not enter the battery maths: Zephyr's
+ * adc_esp32 driver calibrates the hardware raw and then re-projects it onto a
+ * fixed 1100 mV / 4095 scale before the application sees it, so the value
+ * board.overlay's vbat-mv-multiplier scales is already on that scale whatever
+ * the silicon does. That file owns the number and states its derivation. */
+&adc0 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel@0 {
+		reg = <0>;
+		zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>;
+	};
+};
+
+/* ADC unit 2 (label adc1) is unused; keep it disabled so nothing can claim
+ * GPIO11 (SX1262 MISO) as an ADC pad. */
+&adc1 {
+	status = "disabled";
+};
+
+&uart0 {
+	status = "okay";
+	current-speed = <115200>;
+	pinctrl-0 = <&uart0_default>;
+	pinctrl-names = "default";
+};
+
+&gpio0 {
+	status = "okay";
+};
+
+&gpio1 {
+	status = "okay";
+};
+
+&ledc0 {
+	pinctrl-0 = <&ledc0_default>;
+	pinctrl-names = "default";
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel0@0 {
+		reg = <0x0>;
+		timer = <0>;
+	};
+};
+
+&i2c0 {
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_FAST>;
+	pinctrl-0 = <&i2c0_default>;
+	pinctrl-names = "default";
+
+	ssd1306_128x64: display-controller@3c {
+		compatible = "solomon,ssd1306";
+		reg = <0x3c>;
+		width = <128>;
+		height = <64>;
+		segment-offset = <0>;
+		page-offset = <0>;
+		display-offset = <0>;
+		multiplex-ratio = <63>;
+		segment-remap;
+		com-invdir;
+		inversion-on;
+		prechargep = <0x22>;
+		reset-gpios = <&gpio0 21 GPIO_ACTIVE_LOW>;   /* RST_OLED = GPIO21 */
+		vin-supply = <&vext_enable>;
+	};
+};
+
+&spi2 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+	pinctrl-0 = <&spim2_default>;
+	pinctrl-names = "default";
+
+	cs-gpios = <&gpio0 8 GPIO_ACTIVE_LOW>;  /* NSS = GPIO8 */
+
+	lora0: modem@0 {
+		compatible = "semtech,sx1262";
+		reg = <0>;
+		reset-gpios   = <&gpio0 12 (GPIO_OPEN_DRAIN | GPIO_ACTIVE_LOW)>;  /* RESET = GPIO12 */
+		busy-gpios    = <&gpio0 13 GPIO_ACTIVE_HIGH>;                      /* BUSY  = GPIO13 */
+		dio1-gpios    = <&gpio0 14 GPIO_ACTIVE_HIGH>;                      /* DIO1  = GPIO14 */
+
+		/* External PA/FEM control (KCT8103L, V4.3):
+		 *   GPIO2 = CSD (chip enable): driven HIGH during radio, LOW in sleep
+		 *   GPIO5 = CTX (receive-path select): LOW = through the LNA,
+		 *           HIGH = bypass.  Held HIGH during TX, where the branch
+		 *           is inert because DIO2/CPS has selected the TX path.
+		 * V4.3 CHANGE: CTX moved from GPIO46 (GC1109 CPS) to GPIO5 (KCT8103L CTX).
+		 * CTX is lna-bypass-gpios, NOT tx-enable-gpios: it enables nothing,
+		 * and binding it as a TX enable is what made `set radio.fem.rxgain
+		 * off` gate CSD instead in 1.17.2, shutting the FEM down and taking
+		 * the receive path with it (~69 dB, measured). */
+		/*
+		 * ESP32_GPIO_SLEEP_HOLD_EN on both: light sleep powers down
+		 * RTC_PERIPH (see boards/common/pm_esp32.overlay for the full
+		 * chain), and GPIO2/GPIO5 are RTC-capable pads (0-21), so their
+		 * state is not retained across a sleep unless explicitly held.
+		 * These two lines are the FEM's entire control surface — CSD low
+		 * disables the PA and the LNA with it, CTX high bypasses the LNA —
+		 * so losing them means transmitting through a bypassed PA, tens of
+		 * dB down, with RX sensitivity gone too, while the node otherwise
+		 * looks healthy and keeps relaying.
+		 * The flag is ignored when CONFIG_PM=n, so this is inert on
+		 * builds that never light-sleep.
+		 */
+		antenna-enable-gpios = <&gpio0 2 (GPIO_ACTIVE_HIGH |
+						 ESP32_GPIO_SLEEP_HOLD_EN)>;   /* KCT8103L CSD = GPIO2 */
+		lna-bypass-gpios     = <&gpio0 5 (GPIO_ACTIVE_HIGH |
+						 ESP32_GPIO_SLEEP_HOLD_EN)>;   /* KCT8103L CTX = GPIO5 */
+
+		/* DIO2 drives the SX1262 RF switch output, which on a KCT8103L
+		 * board is the part's CPS pin — the TX/RX path select. MeshCore's
+		 * heltec_v4 target defines CSD=2 and CTX=5 for the KCT8103L, no
+		 * CPS GPIO, and SX126X_DIO2_AS_RF_SWITCH=true; same on t096 and
+		 * tracker_v2. Note the V4.2 GC1109 inverts these two pin names —
+		 * there CPS is GPIO46 (an MCU pin, see heltec_wifi_lora32_v4) and
+		 * DIO2 drives the pin that part calls CTX. On the KCT8103L, DIO2
+		 * doing the path select is what leaves CTX free to mean nothing
+		 * but LNA-or-bypass. */
+		dio2-tx-enable;
+
+		/* TCXO 1.8V via DIO3 — same as V4.2 */
+		dio3-tcxo-voltage = <SX126X_DIO3_TCXO_1V8>;
+		tcxo-power-startup-delay-ms = <5>;
+
+		spi-max-frequency = <4000000>;
+	};
+};
+
+&timer0 { status = "okay"; };
+&timer1 { status = "okay"; };
+&timer2 { status = "okay"; };
+&timer3 { status = "okay"; };
+
+&wdt0 { status = "okay"; };
+&trng0 { status = "okay"; };
+
+&esp32_bt_hci { status = "okay"; };
+&wifi { status = "okay"; };
