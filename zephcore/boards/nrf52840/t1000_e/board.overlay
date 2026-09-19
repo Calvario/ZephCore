@@ -58,11 +58,13 @@
 	/* GPS RESETB (active-LOW reset) - P1.14
 	 * Must be pulled HIGH (INPUT_PULLUP) for normal operation.
 	 * Without pull-up, this pin floats LOW and holds the AG3335
-	 * in permanent reset — zero UART output! */
+	 * in permanent reset — zero UART output!
+	 * Declared active-LOW so the manager's logical ACTIVE/INACTIVE match
+	 * the electrical meaning (ACTIVE = held in reset). */
 	gps_resetb: gps-resetb {
 		compatible = "gpio-leds";
 		gps_resetb_pin: gps_resetb {
-			gpios = <&gpio1 14 GPIO_ACTIVE_HIGH>;
+			gpios = <&gpio1 14 GPIO_ACTIVE_LOW>;
 			label = "GPS RESETB";
 		};
 	};

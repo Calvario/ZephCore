@@ -1092,7 +1092,8 @@ static const struct gpio_dt_spec gps_rtcint_gpio = GPIO_DT_SPEC_GET(DT_ALIAS(gps
 #define HAS_GPS_RTCINT 0
 #endif
 
-/* GPS RESETB (active-LOW reset) — must be INPUT_PULLUP for normal operation.
+/* GPS RESETB (active-LOW reset, declared GPIO_ACTIVE_LOW) — must be
+ * INPUT_PULLUP for normal operation; the pull-up is a physical setting.
  * Without the pull-up, this pin floats LOW and holds the AG3335 in permanent
  * reset, preventing any UART output. */
 #if DT_NODE_EXISTS(DT_ALIAS(gps_resetb))
@@ -1264,9 +1265,10 @@ static void gps_power_control(bool on, bool keep_vrtc = false)
 		}
 
 #if HAS_GPS_RESETB
-		/* Assert RESETB when GPS is off (Arduino sleep_gps/stop_gps) */
+		/* Assert RESETB when GPS is off (Arduino sleep_gps/stop_gps).
+		 * The alias is declared GPIO_ACTIVE_LOW, so this drives it LOW. */
 		if (gpio_is_ready_dt(&gps_resetb_gpio)) {
-			gpio_pin_configure_dt(&gps_resetb_gpio, GPIO_OUTPUT_INACTIVE);
+			gpio_pin_configure_dt(&gps_resetb_gpio, GPIO_OUTPUT_ACTIVE);
 		}
 #endif
 
@@ -1289,9 +1291,10 @@ static void gps_power_control(bool on, bool keep_vrtc = false)
 #endif
 }
 
-/* Put every GPS control line this board declares into its de-asserted state
- * for System OFF -- the power enable, and where present VRTC, reset, sleep,
- * rtcint and resetb -- not the power enable alone.
+/* Put every GPS control line this board declares into its System OFF state:
+ * the power enable, and where present VRTC, sleep and rtcint, de-asserted;
+ * reset and resetb asserted, holding the module in reset while its supply is
+ * gated -- the same levels gps_power_control(false) leaves them at.
  * Uses gpio_pin_configure_dt() so pins are properly set even if
  * gps_power_control() was never called (GPIO not yet configured). */
 void gps_power_off_for_shutdown(void)
@@ -1315,8 +1318,10 @@ void gps_power_off_for_shutdown(void)
 	}
 #endif
 #if HAS_GPS_RESET
+	/* ACTIVE, matching the power-off path: reset stays asserted across
+	 * System OFF, as Arduino stop_gps() leaves it. */
 	if (gpio_is_ready_dt(&gps_reset_gpio)) {
-		gpio_pin_configure_dt(&gps_reset_gpio, GPIO_OUTPUT_INACTIVE);
+		gpio_pin_configure_dt(&gps_reset_gpio, GPIO_OUTPUT_ACTIVE);
 	}
 #endif
 #if HAS_GPS_SLEEP
@@ -1331,7 +1336,7 @@ void gps_power_off_for_shutdown(void)
 #endif
 #if HAS_GPS_RESETB
 	if (gpio_is_ready_dt(&gps_resetb_gpio)) {
-		gpio_pin_configure_dt(&gps_resetb_gpio, GPIO_OUTPUT_INACTIVE);
+		gpio_pin_configure_dt(&gps_resetb_gpio, GPIO_OUTPUT_ACTIVE);
 	}
 #endif
 }
@@ -1746,7 +1751,7 @@ static void gps_dump_gpio_states(void)
 	GPS_LOG_PIN("GPS_RTC_INT", gps_rtcint_gpio);
 #endif
 #if HAS_GPS_RESETB
-	GPS_LOG_PIN("GPS_RESETB", gps_resetb_gpio);   /* INPUT_PULLUP, expect 1 */
+	GPS_LOG_PIN("GPS_RESETB", gps_resetb_gpio);   /* INPUT_PULLUP, expect 0 (logical, de-asserted) */
 #endif
 
 #undef GPS_LOG_PIN
