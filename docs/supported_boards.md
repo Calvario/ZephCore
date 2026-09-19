@@ -55,7 +55,7 @@ station_g2/esp32s3/procpu
 heltec_wifi_lora32_v3/esp32s3/procpu
 heltec_wifi_lora32_v4/esp32s3/procpu
 heltec_wifi_lora32_v43/esp32s3/procpu
-heltec_wifi_lora32_v4_r8/esp32s3/procpu   # source-only, no published firmware
+heltec_wifi_lora32_v4_r8/esp32s3/procpu
 heltec_wireless_tracker/esp32s3/procpu
 heltec_wireless_tracker_v2/esp32s3/procpu
 thinknode_m9/esp32s3/procpu
@@ -67,38 +67,24 @@ ttgo_lora32/esp32/procpu   # source-only, no published firmware
 >
 > Heltec V3 console/shell use `uart0` (UART serial) in ZephCore.
 >
-> **Heltec WiFi LoRa 32 V4-R8** (`heltec_wifi_lora32_v4_r8/esp32s3/procpu`): a third board in the
-> V4 family, distinct from both `heltec_wifi_lora32_v4` (the V4.2) and `heltec_wifi_lora32_v43`
-> (the V4.3). The "R8" is the SoC part — **ESP32-S3R8 with 8 MB octal PSRAM**, where V4 and V4.3
-> are both S3R2 with 2 MB quad.
->
-> Octal PSRAM consumes GPIO33–37, and that one fact explains every pin move on the revision:
+> **Heltec WiFi LoRa 32 V4-R8** (`heltec_wifi_lora32_v4_r8/esp32s3/procpu`): ESP32-S3R8 with
+> **8 MB octal PSRAM** (V4 and V4.3 are S3R2, 2 MB quad) and the V4.3's KCT8103L FEM. Octal PSRAM
+> takes GPIO33-37, which moves every control pin that lived there:
 >
 > | Function | V4 (V4.2) | V4.3 | **V4-R8** |
 > |---|---|---|---|
 > | PSRAM | 2 MB quad | 2 MB quad | **8 MB octal** |
-> | FEM | GC1109 | KCT8103L | KCT8103L |
-> | PA control | TX_EN GPIO46 | CTX GPIO5 | **CTX GPIO5** |
+> | FEM / PA control | GC1109, TX_EN GPIO46 | KCT8103L, CTX GPIO5 | **KCT8103L, CTX GPIO5** |
 > | Vext_Ctrl | GPIO36 | GPIO36 | **GPIO40** |
 > | VGNSS_Ctrl | GPIO34 | GPIO34 | **GPIO42** |
 > | LED | GPIO35 | GPIO35 | **GPIO46** |
 > | GNSS_RST | GPIO42 | GPIO42 | **removed** |
 > | ADC_Ctrl | GPIO37 | GPIO37 | **removed** |
 >
-> `PA_CTX` on GPIO5 is new relative to **V4**, which has no CTX at all — its GC1109 is driven by
-> TX_EN on GPIO46 — and identical to **V4.3**. Note GPIO46 changes meaning across the family: FEM
-> TX_EN on V4, the LED on V4-R8. CTX is bound as `lna-bypass-gpios`, not `tx-enable-gpios`,
-> because it selects the receive path rather than enabling anything.
->
-> Verified against the vendor pinmap at <https://heltec.org/project/wifi-lora-32-v4/>.
->
-> **Do not flash `heltec_wifi_lora32_v4` or `heltec_wifi_lora32_v43` to a V4-R8.** Those boards
-> declare `&psram0 { size = <DT_SIZE_M(2)>; }`, so PSRAM comes up as 2 MB quad on an 8 MB octal
-> part, and
-> they drive GPIO35/36/37 as ordinary outputs — GPIO33-37 are the octal-PSRAM pads on an S3R8.
-> PSRAM is therefore both misconfigured and pin-contended. On top of that Vext is driven on GPIO36
-> instead of GPIO40, so the rail feeding the OLED and sensors never switches, and GPIO37 is driven
-> as an ADC enable this revision does not have.
+> **Do not flash `heltec_wifi_lora32_v4` or `heltec_wifi_lora32_v43` firmware to a V4-R8**: it
+> configures the PSRAM as 2 MB quad and drives GPIO35-37, which are PSRAM pads on this part, and
+> the OLED/sensor rail never switches on. The Mesh America catalog lists it under the Heltec v4
+> tile as the "R8" rows.
 >
 > **Heltec Wireless Tracker** (`heltec_wireless_tracker/esp32s3/procpu`): V1.1
 > ESP32-S3-FN8 companion with SX1262, ST7735R 160x80 TFT, and UC6580 GPS.

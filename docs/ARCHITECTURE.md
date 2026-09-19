@@ -1012,6 +1012,7 @@ Build strings and flash methods: `boards/supported_boards.md` and `boards/exampl
 | Station G2 | ESP32-S3 | SX1262+PA | UART GNSS | OLED (SH1106) | 16MB flash, 8MB PSRAM |
 | Heltec V3 | ESP32-S3 | SX1262 | - | OLED (SSD1306) | Console on `uart0` |
 | Heltec V4.2 / V4.3 | ESP32-S3 | SX1262+PA (GC1109 / KCT8103L) | - | OLED (SSD1306) | 16MB flash, 2MB PSRAM |
+| Heltec V4-R8 | ESP32-S3R8 | SX1262+PA (KCT8103L) | L76K (optional) | OLED (SSD1306) | 16MB flash, 8MB octal PSRAM |
 | Heltec Wireless Tracker | ESP32-S3 | SX1262 | UC6580 | TFT 160x80 (ST7735R) | - |
 | LilyGo T-Beam v1.2 | ESP32 (PICO-D4) | SX1262 | Yes | - | AXP2101 PMU; contacts capped at 160 |
 | TTGO LoRa32 | ESP32 (PICO-D4) | **SX1276** (loramac-node) | - | - | SX127x reference board |

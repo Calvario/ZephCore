@@ -194,6 +194,11 @@ BOARDS = [
     dict(stem="station_g2-esp32s3-procpu",         kind="esp32", device="UnitEng Station G2"),
     dict(stem="heltec_wifi_lora32_v3-esp32s3-procpu", kind="esp32", device="Heltec v3"),
     dict(stem="heltec_wifi_lora32_v4-esp32s3-procpu", kind="esp32", device="Heltec v4"),
+    # MeshCore folds the R8 (ESP32-S3R8, 8 MB octal PSRAM) into its "Heltec v4"
+    # tile as "[R8] ..." role rows rather than giving it a device of its own, so
+    # it folds here too, told apart by the subTitle.
+    dict(stem="heltec_wifi_lora32_v4_r8-esp32s3-procpu", kind="esp32", device="Heltec v4",
+         subtitle="R8"),
     dict(stem="heltec_wireless_tracker-esp32s3-procpu",    kind="esp32", device="Heltec Wireless Tracker"),
     dict(stem="heltec_wireless_tracker_v2-esp32s3-procpu", kind="esp32", device="Heltec Wireless Tracker v2"),
     # MeshCore splits this board by radio -- "(SX126x)" and "(SX127x)" are two
