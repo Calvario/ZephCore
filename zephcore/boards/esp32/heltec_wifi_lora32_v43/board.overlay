@@ -14,7 +14,7 @@
  * Vext:       GPIO36 (active-HIGH, powers OLED)
  * Button:     GPIO0
  * LED:        GPIO35
- * GPS UART1:  TX=GPIO39, RX=GPIO38, 9600 baud (optional external module)
+ * GPS UART1:  TX=GPIO38, RX=GPIO39, 9600 baud (optional external module)
  * GPS ctrl:   enable GPIO34 (active-LOW), reset GPIO42 (active-LOW)
  */
 
@@ -120,8 +120,13 @@
 };
 
 /* GPS on UART1 — optional external NMEA module on the pin header, wired to the
- * same pins Arduino MeshCore uses for this board (PIN_GPS_RX=38, PIN_GPS_TX=39;
- * Arduino names them from the MCU's point of view, so RX=38 is the MCU input).
+ * same pins Arduino MeshCore uses for this board. Its macro names read the
+ * other way round (PIN_GPS_RX=38, PIN_GPS_TX=39), but it calls
+ * Serial1.setPins(PIN_GPS_TX, PIN_GPS_RX) and Arduino-ESP32's signature is
+ * setPins(rxPin, txPin) -- rx first -- so the wiring is MCU TX=38, RX=39.
+ * Same as heltec_wifi_lora32_v4_r8, where it was proven on hardware (the
+ * module only answers with the pins this way round). These pins used to
+ * follow the macro names, which swapped TX and RX.
  * Upstream leaves uart1 disabled and gives it no pinctrl, so both are set here.
  * GPIO38/39 are otherwise unclaimed on the V4; the console stays on usb_serial
  * (or uart0/GPIO43-44 for companion USB builds).  9600 baud matches Arduino's
@@ -132,12 +137,12 @@
 &pinctrl {
 	uart1_default: uart1_default {
 		group1 {
-			pinmux = <UART1_TX_GPIO39>;
+			pinmux = <UART1_TX_GPIO38>;
 			output-high;
 		};
 
 		group2 {
-			pinmux = <UART1_RX_GPIO38>;
+			pinmux = <UART1_RX_GPIO39>;
 			bias-pull-up;
 		};
 	};
