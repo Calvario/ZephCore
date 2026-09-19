@@ -24,6 +24,7 @@ LOG_MODULE_REGISTER(zephcore_main, CONFIG_ZEPHCORE_MAIN_LOG_LEVEL);
 #include <adapters/clock/ZephyrRTCDiscover.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/drivers/hwinfo.h>
+#include <helpers/boot_info.h>
 #include <zephyr/sys/reboot.h>
 #include <ZephyrSensorManager.h>
 #include <helpers/time_sync.h>
@@ -1386,36 +1387,70 @@ int main(void)
 	LOG_INF("=== ZephCore starting ===");
 
 	/* Log reset reason so we can diagnose random reboots */
-	char boot_cause_msg[96];  /* fits "Restarted:" + all six cause labels */
+	/* "Restarted:" (10) + every label (126) + shutdown reason (29) + NUL.
+	 * Worst case this function can produce; vcontactNotify() truncates to 63
+	 * on the RTC-less path, so this is not an end-to-end guarantee. */
+	char boot_cause_msg[176];
 	boot_cause_msg[0] = '\0';
+	/* Every label the renderer can emit, space-prefixed: 126 + NUL. Declared
+	 * out here, rather than in the block that fills it, so its lifetime does
+	 * not depend on when the logging subsystem copies a %s argument. It does
+	 * copy eagerly today, on every packaging path, but that is an internal
+	 * detail and a log frontend would not. */
+	char boot_cause_labels[128];
 	{
 		uint32_t cause;
-		if (hwinfo_get_reset_cause(&cause) == 0) {
-			LOG_INF("Reset cause: 0x%08x%s%s%s%s%s%s", cause,
-				(cause & RESET_PIN)       ? " PIN"       : "",
-				(cause & RESET_SOFTWARE)  ? " SOFTWARE"  : "",
-				(cause & RESET_BROWNOUT)  ? " BROWNOUT"  : "",
-				(cause & RESET_POR)       ? " POR"       : "",
-				(cause & RESET_WATCHDOG)  ? " WATCHDOG"  : "",
-				(cause & RESET_CPU_LOCKUP)? " LOCKUP"    : "");
-			hwinfo_clear_reset_cause();
-			/* Every known cause becomes a v-contact message once the mesh
+		/* Captured at POST_KERNEL by helpers/boot_info.c, which also did the
+		 * clearing this block used to do. Reading the captured copy rather
+		 * than the register is what lets a later diagnostic or CLI report
+		 * name the same cause -- the register is already cleared by now. */
+		if (zephcore_boot_reset_cause(&cause)) {
+			/* One renderer, shared with every other reader. A hand-rolled
+			 * list here would drift from it, and the one it replaced had
+			 * already drifted: it knew six bits of the seventeen the
+			 * renderer labels, so a SECURITY or CLOCK reset logged as bare
+			 * hex and raised no notice at all. The trade is
+			 * that the notice loses the plain-English hints the local copy
+			 * carried: it now reads "PIN" and "POR" rather than
+			 * "PIN(reset button)" and "POR(power-on)". */
+			(void)zephcore_boot_reset_cause_str(boot_cause_labels,
+							    sizeof(boot_cause_labels));
+
+			LOG_INF("Reset cause: 0x%08x%s", cause, boot_cause_labels);
+
+			/* Every labelled cause becomes a v-contact message once the mesh
 			 * is up (queued below, after RTC restore + prefs load) — the
 			 * message rides the offline queue only, so the "noise" of a
 			 * routine power-on costs nothing over the air and doubles as
 			 * a power-integrity breadcrumb (dead battery, loose contact).
 			 * A deliberate CLI/app reboot shows as SOFTWARE, doubling as
-			 * a "reboot completed" confirmation. */
-			if (cause & (RESET_PIN | RESET_SOFTWARE | RESET_BROWNOUT |
-				     RESET_POR | RESET_WATCHDOG | RESET_CPU_LOCKUP)) {
+			 * a "reboot completed" confirmation.
+			 *
+			 * zephcore_boot_reset_cause_labelled() is 0 when the cause is
+			 * 0 or carries only bits this build has no label for, which is
+			 * the same "nothing worth saying" the old explicit bit test
+			 * meant.
+			 *
+			 * A debugger-initiated reset is the developer's own doing and
+			 * is not worth a chat message on its own. A quiet cause still
+			 * renders in the log line, and in the notice when some other
+			 * cause raised one, so nothing is hidden -- this decides only
+			 * whether to speak unprompted.
+			 *
+			 * A wake from a low-power shutdown is one the user asked
+			 * for: the button power-off persists no reason, so announcing
+			 * the wake would put an unexplained "Restarted: LOWPOWER" in
+			 * the chat after every power cycle. The low-battery shutdown
+			 * does persist a reason, and it is folded in further below.
+			 *
+			 * Costs one case on STM32: hwinfo_stm32.c folds LPWRRSTF, an
+			 * illegal low-power entry, onto the same bit as routine wakes,
+			 * so that fault raises no notice. Still logged by boot_info.c. */
+			const uint32_t quiet = RESET_LOW_POWER_WAKE | RESET_DEBUG;
+
+			if ((zephcore_boot_reset_cause_labelled() & ~quiet) != 0) {
 				snprintf(boot_cause_msg, sizeof(boot_cause_msg),
-					 "Restarted:%s%s%s%s%s%s",
-					 (cause & RESET_PIN)        ? " PIN(reset button)" : "",
-					 (cause & RESET_SOFTWARE)   ? " SOFTWARE" : "",
-					 (cause & RESET_BROWNOUT)   ? " BROWNOUT" : "",
-					 (cause & RESET_POR)        ? " POR(power-on)" : "",
-					 (cause & RESET_WATCHDOG)   ? " WATCHDOG" : "",
-					 (cause & RESET_CPU_LOCKUP) ? " LOCKUP"   : "");
+					 "Restarted:%s", boot_cause_labels);
 			}
 		}
 	}
@@ -1428,8 +1463,9 @@ int main(void)
 	/* Fold a persisted shutdown reason into the boot notice.  Written just
 	 * before a previous low-battery System OFF when no app was connected to
 	 * receive it live (the offline queue doesn't survive power-off).  The
-	 * hardware reset cause on this boot is just POR, so without this the
-	 * reason would be lost. */
+	 * hardware cause on this boot does not say "low battery" -- on nRF52840
+	 * a System OFF wake reports LOW_POWER_WAKE, which is quiet above -- so
+	 * without this the reason would be lost. */
 	{
 		uint8_t sdr = data_store.takeShutdownReason();
 		if (sdr == UI_SHUTDOWN_LOW_BATTERY) {
