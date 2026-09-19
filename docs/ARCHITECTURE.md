@@ -608,8 +608,12 @@ contact named `v<node_name>` that exists only toward the connected BLE/USB app.
 Chatting with it runs the same text CLI as the USB serial sideband; the reply
 comes back as normal chat messages. The firmware also uses it to emit
 unsolicited notices: a one-shot low-battery alert and a restart-reason message
-(all causes: PIN/SOFTWARE/BROWNOUT/POR/WATCHDOG/LOCKUP — offline-queue only,
-so routine power-on "noise" costs nothing over the air).
+(every cause `zephcore_boot_reset_cause_str()` can label, which is more than
+the six the companion used to hard-code — offline-queue only, so routine
+power-on "noise" costs nothing over the air). Two causes are silent when they
+are the only ones raised: a debugger reset, and a wake from a low-power
+shutdown, which would otherwise announce itself after every power cycle. Both
+still appear in the boot log.
 
 **Identity**: seed = `SHA256("zc-vcontact" || self_prv_key || counter)`,
 pubkey = that seed's Ed25519 public point — stable per node, unique per device.
@@ -1227,8 +1231,16 @@ node enabled on any board — the `wdt` nodes visible in board `.dts` files are
 inherited SoC definitions, and the `RTCWDT` references in the TTGO board configs
 concern the ESP32 ROM bootloader's own watchdog, not something ZephCore arms.
 The only consumer of the concept is the boot breadcrumb in `main_companion.cpp`,
-which reads `RESET_WATCHDOG` out of `hwinfo_get_reset_cause()` and reports it in
-the "Restarted:" v-contact message (see [6.2.1](#621-v-contact-loopback-admin-contact)).
+which reports `RESET_WATCHDOG` in the "Restarted:" v-contact message (see
+[6.2.1](#621-v-contact-loopback-admin-contact)). It reads the cause from
+`zephcore_boot_reset_cause()` rather than from `hwinfo_get_reset_cause()`
+directly: `helpers/boot_info.c` captures the register once at POST_KERNEL on
+every role, logs it, and clears it where the platform implements a clear, so
+no later reader can consume it. nRF implements `hwinfo_clear_reset_cause()`;
+ESP32 does not, so the weak stub returns `-ENOSYS` and nothing is cleared
+there. That is harmless on ESP32, whose cause comes from `esp_reset_reason()`
+and does not accumulate across boots, but the capture is what readers should
+rely on rather than the register.
 
 Everything below is software: bounded stall detection in the layer that owns the
 state machine. Each entry names what it recovers, because several are
