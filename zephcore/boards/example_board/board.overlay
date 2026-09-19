@@ -332,6 +332,12 @@
  * │ 0xED000 - 0x100000 (76KB)   UF2 bootloader (reserved)             │
  * └─────────────────────────────────────────────────────────────────────┘
  *
+ * NOTE (Zephyr main, since 2026-09-19): every partition node in the examples
+ * below also needs  compatible = "zephyr,mapped-partition";  (omitted from
+ * each one for brevity).  Without it, code that opens the partition fails to
+ * compile with "..._PARTITION_ID undeclared" — see any
+ * boards/esp32/<board>/partitions.overlay for the full form.
+ *
  * /delete-node/ &boot_partition;
  * /delete-node/ &slot0_partition;
  * /delete-node/ &slot1_partition;

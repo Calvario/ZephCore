@@ -37,6 +37,7 @@
 &flash0 {
 	partitions {
 		lfs_partition: partition@100000 {
+			compatible = "zephyr,mapped-partition";
 			label = "lfs";
 			reg = <0x00100000 0x00080000>; /* 512 KB */
 		};

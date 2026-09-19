@@ -417,10 +417,12 @@ if(ZEPHCORE_PLATFORM_CONF AND EXISTS ${ZEPHCORE_PLATFORM_CONF})
     list(APPEND ZEPHCORE_CONF_FILES ${ZEPHCORE_PLATFORM_CONF})
     zephcore_auto_pair_overlay("${ZEPHCORE_PLATFORM_CONF}")
 endif()
-# ESP32-S3 only: overrides esp32_common.conf, stays below board.conf.  Every S3
-# board target carries the /esp32s3/ qualifier (see esp32s3_common.conf).
-if(BOARD MATCHES "/esp32s3/")
-    list(APPEND ZEPHCORE_CONF_FILES "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/esp32s3_common.conf")
+# ESP32-S3 and ESP32-C3 (shared BLE controller): overrides esp32_common.conf,
+# stays below board.conf.  Every S3 board target carries the /esp32s3/
+# qualifier; the C3 boards are single-SoC and are named without one
+# (xiao_esp32c3), so match the chip in the name (see esp32c3s3_common.conf).
+if(BOARD MATCHES "/esp32s3/" OR BOARD MATCHES "esp32c3")
+    list(APPEND ZEPHCORE_CONF_FILES "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/esp32c3s3_common.conf")
 endif()
 if(ZEPHCORE_BOARD_CONF AND EXISTS ${ZEPHCORE_BOARD_CONF})
     list(APPEND ZEPHCORE_CONF_FILES ${ZEPHCORE_BOARD_CONF})
