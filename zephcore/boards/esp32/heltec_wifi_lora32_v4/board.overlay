@@ -71,10 +71,11 @@
 	 * Declaring gps-reset moves this board onto the manager's
 	 * HAS_T1000_GPS_CONTROL power sequence (EN -> reset -> release).  That is
 	 * safe without a VRTC pin — every VRTC/SLEEP step in that path is behind
-	 * its own #if.  Note the power-ON pulse uses the raw GPIO_OUTPUT_HIGH flag,
-	 * so on an active-LOW line it de-asserts rather than pulsing; the useful
-	 * half is power-OFF, which asserts reset (logical 1) and holds the module
-	 * down while its supply is gated. */
+	 * its own #if.  That sequence now drives every line logically, so the
+	 * power-ON pulse asserts on this active-LOW reset instead of de-asserting
+	 * it; before that fix the pulse was a no-op here and only the power-OFF
+	 * half, which asserts reset and holds the module down while its supply is
+	 * gated, did anything. */
 	gps_rst: gps-reset {
 		compatible = "gpio-leds";
 		gps_reset_pin: gps_reset {
