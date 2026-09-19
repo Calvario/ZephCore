@@ -45,7 +45,7 @@ env:
   # "false" is the normal state. It is easy to leave this on "true" and then
   # silently keep shipping nothing to the configurator, so check it when cutting
   # a release rather than assuming.
-  prerelease: "false"
+  prerelease: "true"
 
 jobs:
   # Populates the west-modules cache once so the five build jobs do not each pay
