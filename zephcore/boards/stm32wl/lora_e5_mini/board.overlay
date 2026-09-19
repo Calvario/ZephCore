@@ -51,11 +51,13 @@
 &flash0 {
 	partitions {
 		slot0_partition: partition@0 {
+			compatible = "zephyr,mapped-partition";
 			label = "image-0";
 			reg = <0x00000000 0x00038000>;
 		};
 
 		lfs_partition: partition@38000 {
+			compatible = "zephyr,mapped-partition";
 			label = "lfs";
 			reg = <0x00038000 0x00008000>;
 		};

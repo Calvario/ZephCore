@@ -12,6 +12,7 @@ build-*/
 
 # Zephyr SDK and toolchain (large, downloaded separately)
 /bootloader/
+/doc/
 /modules/
 /tools/
 /zephyr/

@@ -643,6 +643,7 @@ static void lr20xx_get_pa_cfg_for_power(int8_t power_dbm, uint32_t freq_hz,
 
 static lr20xx_status_t lr20xx_calibrate_front_end(void *ctx, uint32_t freq_hz);
 static bool lr20xx_dc_suspend(struct lr20xx_data *data);
+static bool lr20xx_dc_rx_in_flight(struct lr20xx_data *data);
 static void lr20xx_dc_resume(struct lr20xx_data *data, bool was_armed);
 
 /* ── Firmware Patch RAM (PRAM) ──────────────────────────────────────── */
@@ -1255,6 +1256,12 @@ void lr20xx_recalibrate(const struct device *dev)
 		return;
 	}
 
+	if (lr20xx_dc_rx_in_flight(data)) {
+		LOG_DBG("recalibrate: reception in flight, deferring");
+		k_mutex_unlock(&data->spi_mutex);
+		return;
+	}
+
 	/* Own the cycle across the sequence: it opens with SetSleep, which is
 	 * fatal to a chip already in its own sleep phase, and the recalibration
 	 * leaves the radio in standby regardless. */
@@ -1280,6 +1287,11 @@ int16_t lr20xx_get_chip_temp_c(const struct device *dev)
 		return INT16_MIN;
 	}
 	if (k_mutex_lock(&data->spi_mutex, K_NO_WAIT) != 0) {
+		return INT16_MIN;
+	}
+
+	if (lr20xx_dc_rx_in_flight(data)) {
+		k_mutex_unlock(&data->spi_mutex);
 		return INT16_MIN;
 	}
 
@@ -1421,6 +1433,53 @@ static void lr20xx_dc_resume(struct lr20xx_data *data, bool was_armed)
 	lr20xx_reset_rx_busy_signals(data);
 	lr20xx_apply_rx_duty_cycle(data);
 	data->in_rx_mode = true;
+}
+
+static uint32_t lr20xx_preamble_grace_ms(struct lr20xx_data *data);
+
+/* Is a duty-cycled reception already under way?  Ask before lr20xx_dc_suspend().
+ *
+ * Port of lr11xx_dc_rx_in_flight() -- same fault, same fix.  dc_suspend()
+ * stands the chip down unconditionally, which ends a reception in progress,
+ * and with the cycle armed lr20xx_is_receiving() answers from the header latch
+ * only, so the preamble phase is invisible to every discretionary stand-down
+ * (noise-floor sampler, RSSI read, recalibration, temperature read).  On the
+ * LR1110 that lost ~1 packet in 40 at an 800 ms cadence (T1000-E bench,
+ * 2026-09-19); each miss raised no IRQ at all and coincided with a sampler
+ * burst that read the packet itself.
+ *
+ * Non-destructive status read (get_status, not get_and_clear).  In the sleep
+ * phase the access wakes the chip through the HAL exactly as the caller's
+ * SetStandby is about to, and the caller then terminates and re-arms the cycle
+ * as before.  With a preamble latched the chip is in Rx, where bus access is
+ * routine.  A preamble older than the SF-aware grace with no header is stale
+ * and does not block the caller; dc_resume() clears it.
+ *
+ * Caller holds data->spi_mutex. */
+static bool lr20xx_dc_rx_in_flight(struct lr20xx_data *data)
+{
+	lr20xx_system_irq_mask_t irq = 0;
+
+	if (!data->rx_duty_cycle_enabled || !data->in_rx_mode) {
+		return false;
+	}
+	if (lr20xx_system_get_status(&data->hal_ctx, NULL, NULL, &irq) != LR20XX_STATUS_OK) {
+		return false;
+	}
+	if (irq & LR20XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID) {
+		return true;
+	}
+	if (irq & LR20XX_SYSTEM_IRQ_PREAMBLE_DETECTED) {
+		uint32_t now = k_uptime_get_32();
+		uint32_t seen = data->preamble_seen_at_ms;
+
+		if (seen == 0) {
+			data->preamble_seen_at_ms = (now == 0) ? 1U : now;
+			return true;
+		}
+		return (now - seen) < lr20xx_preamble_grace_ms(data);
+	}
+	return false;
 }
 
 /* GPIO-only "can the host talk to this chip right now" check, no SPI.
@@ -2154,7 +2213,7 @@ static int lr20xx_hw_init(struct lr20xx_data *data,
 /* ── Driver API: config ─────────────────────────────────────────────── */
 
 static int lr20xx_lora_config(const struct device *dev,
-			      struct lora_modem_config *config)
+			      const struct lora_modem_config *config)
 {
 	struct lr20xx_data *data = dev->data;
 
@@ -2717,6 +2776,10 @@ int16_t lr20xx_get_rssi_inst(const struct device *dev)
 	if (k_mutex_lock(&data->spi_mutex, K_NO_WAIT) != 0) {
 		return -128;
 	}
+	if (lr20xx_dc_rx_in_flight(data)) {
+		k_mutex_unlock(&data->spi_mutex);
+		return -128;
+	}
 
 	bool armed = lr20xx_dc_suspend(data);
 
@@ -2826,6 +2889,12 @@ int lr20xx_get_rssi_burst(const struct device *dev, int16_t *out, int n,
 	 * they stay independent. */
 	if (k_mutex_lock(&data->spi_mutex, K_NO_WAIT) != 0) {
 		return 0;
+	}
+	/* A packet already on its way in: same verdict as a preamble landing
+	 * inside the window -- the caller abandons the burst and retries. */
+	if (lr20xx_dc_rx_in_flight(data)) {
+		k_mutex_unlock(&data->spi_mutex);
+		return -EBUSY;
 	}
 
 	bool armed = lr20xx_dc_suspend(data);
@@ -3800,8 +3869,8 @@ static int lr20xx_lora_init(const struct device *dev)
 
 	k_work_queue_start(&data->dio1_wq, lr20xx_dio1_wq_stack,
 			   K_THREAD_STACK_SIZEOF(lr20xx_dio1_wq_stack),
-			   K_PRIO_COOP(7), NULL);
-	k_thread_name_set(&data->dio1_wq.thread, "lr20xx_dio1");
+			   K_PRIO_COOP(7),
+			   &(const struct k_work_queue_config){ .name = "lr20xx_dio1" });
 
 	if (!spi_is_ready_dt(&cfg->bus)) {
 		LOG_ERR("SPI bus not ready");
@@ -3846,13 +3915,13 @@ static DEVICE_API(lora, lr20xx_lora_api) = {
 	.recv_async      = lr20xx_lora_recv_async,
 	.cad             = lr20xx_lora_cad,
 	.cad_async       = lr20xx_lora_cad_async,
-	.recv_duty_cycle = lr20xx_lora_recv_duty_cycle,
+	.recv_duty_cycle_async = lr20xx_lora_recv_duty_cycle,
 };
 
 #define LR20XX_INIT(n)                                                       \
 	static const struct lr20xx_config lr20xx_config_##n = {              \
 		.bus = SPI_DT_SPEC_INST_GET(n,                               \
-			SPI_WORD_SET(8) | SPI_OP_MODE_MASTER |               \
+			SPI_WORD_SET(8) | SPI_OP_MODE_CONTROLLER |           \
 			SPI_TRANSFER_MSB),                                   \
 		.reset = GPIO_DT_SPEC_INST_GET(n, reset_gpios),              \
 		.busy  = GPIO_DT_SPEC_INST_GET(n, busy_gpios),              \

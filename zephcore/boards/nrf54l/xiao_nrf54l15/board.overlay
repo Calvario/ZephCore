@@ -50,6 +50,19 @@
 	};
 };
 
+/* Zephyr main (4.5) split the nRF clock driver per clock; each one the
+ * application uses must be enabled or it is not built (the BT controller fails
+ * to compile without lfclk). Upstream's xiao_nrf54l15 DTS enables only &clock,
+ * so we add the same pair as upstream's nrf54l15dk. LFCLK keeps the binding's
+ * default source, the XIAO's own crystal (see "Clocks" above). */
+&xo {
+	status = "okay";
+};
+
+&lfclk {
+	status = "okay";
+};
+
 /* Disable I2C22 — default pins P1.10/P1.11 (D4/D5) conflict with NSS/RXEN */
 &i2c22 {
 	status = "disabled";

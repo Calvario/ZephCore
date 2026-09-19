@@ -231,6 +231,18 @@
 	status = "okay";
 };
 
+/* Zephyr main (4.5) split the nRF clock driver per clock; each one the
+ * application uses must be enabled or it is not built (the BT controller fails
+ * to compile without lfclk). Same set as upstream's nrf54l15dk. LFCLK keeps the
+ * binding's default source, the crystal (&lfxo below). */
+&xo {
+	status = "okay";
+};
+
+&lfclk {
+	status = "okay";
+};
+
 /* Console: P1.09 TX / P1.08 RX -> SAMD11 CMSIS-DAP bridge -> USB CDC */
 &uart20 {
 	status = "okay";

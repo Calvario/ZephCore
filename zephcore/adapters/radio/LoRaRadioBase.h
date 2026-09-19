@@ -511,7 +511,7 @@ protected:
 	uint8_t _override_sf;
 	uint8_t _override_cr;
 
-	/* ISR RX callback — passed to lora_recv_async() / lora_recv_duty_cycle() */
+	/* ISR RX callback — passed to lora_recv_async() / lora_recv_duty_cycle_async() */
 	static void rxCallbackStatic(const struct device *dev, uint8_t *data,
 				     uint16_t size, int16_t rssi, int8_t snr,
 				     void *user_data);

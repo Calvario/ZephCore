@@ -18,7 +18,7 @@
 
 /dts-v1/;
 
-#include <espressif/esp32s3/esp32s3_wroom_n4r2.dtsi>
+#include <espressif/esp32s3/esp32s3.dtsi>
 #include "lilygo_t3s3-pinctrl.dtsi"
 /*
  * Base flash map: the *default* 4M table, not the _amp_ variant.
@@ -87,4 +87,15 @@
 
 &wifi {
 	status = "okay";
+};
+
+/* Module flash/PSRAM, declared by the board since Zephyr 4.5 removed the
+ * per-module dtsi (esp32s3_wroom_n4r2.dtsi). */
+&flash0 {
+	reg = <0x0 DT_SIZE_M(4)>;
+	ranges = <0x0 0x0 DT_SIZE_M(4)>;
+};
+
+&psram0 {
+	size = <DT_SIZE_M(2)>;
 };

@@ -176,7 +176,12 @@ static void cli_uart_isr(const struct device *dev, void *user_data)
 {
 	ARG_UNUSED(user_data);
 
-	while (uart_irq_update(dev) && uart_irq_is_pending(dev)) {
+	for (;;) {
+		uart_irq_update(dev);
+		if (uart_irq_is_pending(dev) <= 0) {
+			break;
+		}
+
 		if (uart_irq_rx_ready(dev)) {
 			uint8_t buf[64];
 			int recv_len = uart_fifo_read(dev, buf, sizeof(buf));

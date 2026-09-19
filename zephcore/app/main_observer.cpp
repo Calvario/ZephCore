@@ -86,7 +86,12 @@ static void cli_println(const char *s)
 static void cli_uart_isr(const struct device *dev, void *user_data)
 {
 	ARG_UNUSED(user_data);
-	while (uart_irq_update(dev) && uart_irq_is_pending(dev)) {
+	for (;;) {
+		uart_irq_update(dev);
+		if (uart_irq_is_pending(dev) <= 0) {
+			break;
+		}
+
 		if (uart_irq_rx_ready(dev)) {
 			uint8_t buf[64];
 			int n = uart_fifo_read(dev, buf, sizeof(buf));
@@ -276,6 +281,8 @@ static NodePrefs s_radio_prefs;
 
 #if IS_ENABLED(CONFIG_ZEPHCORE_RADIO_LR1110)
 static mesh::LR1110Radio lora_radio(lora_dev, s_board, &s_radio_prefs);
+#elif IS_ENABLED(CONFIG_ZEPHCORE_RADIO_LR2021)
+static mesh::LR2021Radio lora_radio(lora_dev, s_board, &s_radio_prefs);
 #elif IS_ENABLED(CONFIG_ZEPHCORE_RADIO_SX127X)
 static mesh::SX127xRadio lora_radio(lora_dev, s_board, &s_radio_prefs);
 #else

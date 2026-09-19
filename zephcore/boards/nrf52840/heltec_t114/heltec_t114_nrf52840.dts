@@ -7,6 +7,7 @@
  */
 
 /dts-v1/;
+#include <zephyr/dt-bindings/display/panel.h>
 #include <nordic/nrf52840_qiaa.dtsi>
 #include <zephyr/dt-bindings/lora/sx126x.h>
 #include <zephyr/dt-bindings/adc/nrf-saadc.h>
@@ -157,7 +158,7 @@
 			y-offset = <53>;
 			/* MADCTL=0x60: MX|MV, RGB order (landscape, derived from MeshCore landscapeScreen()) */
 			mdac = <0x60>;
-			colmod = <0x55>;
+			pixel-format = <PANEL_PIXEL_FORMAT_RGB_565>;
 			vcom = <0x20>;
 			gctrl = <0x35>;
 			vrhs = <0x0b>;

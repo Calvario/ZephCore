@@ -1,11 +1,149 @@
 /*
- * Wio Tracker L1 overlay for ZephCore.
- * SoftDevice + UF2 bootloader layout.
- * Console: USB CDC ACM.
- * Battery: AIN7 = P0.31, voltage divider 2:1.
+ * Wio Tracker L1 overlay for ZephCore, on top of upstream Zephyr's
+ * boards/seeed/wio_tracker_l1 (in-tree since Zephyr 4.5; we carried a full
+ * custom board of the same name before that, and the two cannot coexist).
+ *
+ * Everything below reproduces the devicetree of that custom board, so an
+ * update does not move anything a deployed node depends on.  The ones that
+ * are not cosmetic:
+ *
+ *   - Flash layout: our SoftDevice v7 map (nrf52_partitions_sdv7.dtsi).
+ *     Upstream's uf2_sdv7 map puts storage at 0xEC000; our /lfs volume
+ *     (identity, prefs, contacts) lives at 0xD4000 and must not move.
+ *   - LoRa on SPIM2, not SPIM3: see the &spi2 note.
+ *   - Grove I2C (&i2c1): SDA=P1.12, SCL=P1.11.  Upstream has them swapped.
+ *   - QSPI P25Q16H in single-bit mode at 16 MHz with a 50 ms DPD exit,
+ *     matching Arduino.  Upstream runs it quad at 104 MHz.
+ *   - OLED bus needs zephyr,concat-buf-size or the SH1106 ACKs init and never
+ *     renders (nordic,nrf-twim).
+ *   - GPS on the luatos,air530z driver (PCAS/CASIC command set) with P1.09
+ *     as its standby pin, not gnss-nmea-generic.
+ *   - Battery: our on-demand regulator on P0.04 + zephyr,user io-channels.
+ *     Upstream's voltage-divider node also drives P0.04, so it must go.
+ *   - UICR: nfct-pins-as-gpios, and no gpio-as-nreset (the UF2 bootloader
+ *     owns PSELRESET).
+ *
+ * Console: USB CDC ACM (upstream's board_cdc_acm_uart).
  */
 
-/* GPS standby control — P1.09 = the L76K's WAKEUP pin (schematic net
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+
+/* ---- Nodes replaced wholesale ---------------------------------------- */
+
+/delete-node/ &{/buttons};
+/delete-node/ &{/trackball};
+/delete-node/ &vbatt;
+/delete-node/ &buzzer;
+/delete-node/ &gnss;
+/delete-node/ &lora;
+/delete-node/ &p25q16h;
+
+&flash0 {
+	/delete-node/ partitions;
+};
+
+/ {
+	chosen {
+		zephyr,display = &sh1106;
+	};
+
+	buttons: buttons {
+		compatible = "gpio-keys";
+
+		user_button: button_0 {
+			gpios = <&gpio0 8 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			zephyr,code = <INPUT_KEY_0>;
+			label = "User Button";
+		};
+
+		joystick_up: button_1 {
+			gpios = <&gpio1 4 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			zephyr,code = <INPUT_KEY_UP>;
+			label = "Joystick Up";
+		};
+
+		joystick_down: button_2 {
+			gpios = <&gpio0 12 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			zephyr,code = <INPUT_KEY_DOWN>;
+			label = "Joystick Down";
+		};
+
+		joystick_left: button_3 {
+			gpios = <&gpio0 11 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			zephyr,code = <INPUT_KEY_LEFT>;
+			label = "Joystick Left";
+		};
+
+		joystick_right: button_4 {
+			gpios = <&gpio1 3 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			zephyr,code = <INPUT_KEY_RIGHT>;
+			label = "Joystick Right";
+		};
+
+		joystick_press: button_5 {
+			gpios = <&gpio1 5 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			zephyr,code = <INPUT_KEY_ENTER>;
+			label = "Joystick Press";
+		};
+	};
+
+	/* Input filter: user button long-press detection (1000ms) */
+	user_btn_longpress {
+		compatible = "zephyr,input-longpress";
+		input = <&buttons>;
+		input-codes = <INPUT_KEY_0>;
+		short-codes = <INPUT_KEY_A>;
+		long-codes = <INPUT_KEY_POWER>;
+		long-delay-ms = <1000>;
+	};
+
+	/* Input filter: user button multi-tap detection
+	 * 1 tap  (400ms wait) -> KEY_1 = page next on OLED
+	 * 2 taps (400ms wait) -> KEY_B = LED heartbeat toggle
+	 * 3 taps (400ms wait) -> KEY_D = buzzer mute toggle
+	 * 4 taps (400ms wait) -> KEY_C = GPS on/off
+	 * 5 taps (immediate)  -> KEY_E = flood advert */
+	user_btn_multitap {
+		compatible = "zephcore,input-multi-tap";
+		/* No 'input' phandle -- listen to ALL devices.
+		 * KEY_A is emitted by the longpress pseudo-device,
+		 * not by &buttons, so we must not filter by device. */
+		input-codes = <INPUT_KEY_A>;
+		tap-codes = <INPUT_KEY_1 INPUT_KEY_B INPUT_KEY_D INPUT_KEY_C INPUT_KEY_E>;
+		tap-delay-ms = <400>;
+	};
+
+	/* Battery voltage enable and ADC - on-demand only to save power */
+	vbat_enable: vbat-enable {
+		compatible = "regulator-fixed";
+		regulator-name = "vbat-enable";
+		enable-gpios = <&gpio0 4 GPIO_ACTIVE_HIGH>;
+		/* NOT regulator-boot-on - enabled on-demand in ZephyrBoard.cpp */
+	};
+
+	/* Battery ADC channel reference for ZephyrBoard */
+	zephyr,user {
+		io-channels = <&adc 7>;
+		vbat-mv-multiplier = <7236>;  /* 2:1 divider, 3.6V ref; +0.5% for nRF SAADC gain error */
+	};
+
+	/* Buzzer on PWM0 channel 0 (P1.00) - no enable pin needed */
+	pwmbuzzer {
+		compatible = "pwm-leds";
+		buzzer: buzzer {
+			pwms = <&pwm0 0 PWM_MSEC(20) PWM_POLARITY_NORMAL>;
+		};
+	};
+
+	aliases {
+		/delete-property/ buzzer0;
+		/delete-property/ gnss;
+		sw0 = &user_button;
+		buzzer = &buzzer;
+	};
+};
+
+/* GPS standby control -- P1.09 = the L76K's WAKEUP pin (schematic net
  * GNSS_WAKEUP). This is NOT a supply switch: per the L76K hardware design the
  * pin only enters/exits Standby, where the RF is off but the core and I/O
  * domain stay powered. VCC is never removed, so ephemeris/almanac/RTC are
@@ -28,6 +166,191 @@
 		gps-enable = &gps_enable_pin;
 	};
 };
+
+/* ---- Pin control ------------------------------------------------------ */
+
+&pinctrl {
+	/* SPI2 (SPIM2) for LoRa SX1262: SCK=P0.30, MOSI=P0.28, MISO=P0.03 */
+	spi2_default: spi2_default {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 30)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 28)>,
+				<NRF_PSEL(SPIM_MISO, 0, 3)>;
+		};
+	};
+
+	spi2_sleep: spi2_sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 30)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 28)>,
+				<NRF_PSEL(SPIM_MISO, 0, 3)>;
+			low-power-enable;
+		};
+	};
+};
+
+/* Grove I2C: SDA=P1.12 (D18), SCL=P1.11 (D17), the physical Grove pinout
+ * (Arduino Wire1 / Meshtastic).  Upstream has the two swapped. */
+&i2c1_default {
+	group1 {
+		psels = <NRF_PSEL(TWIM_SDA, 1, 12)>,
+			<NRF_PSEL(TWIM_SCL, 1, 11)>;
+	};
+};
+
+&i2c1_sleep {
+	group1 {
+		psels = <NRF_PSEL(TWIM_SDA, 1, 12)>,
+			<NRF_PSEL(TWIM_SCL, 1, 11)>;
+	};
+};
+
+/* GPS UART: pull-up on both lines, as before. */
+&uart0_default {
+	/delete-node/ group2;
+
+	group1 {
+		psels = <NRF_PSEL(UART_TX, 0, 27)>,
+			<NRF_PSEL(UART_RX, 0, 26)>;
+		bias-pull-up;
+	};
+};
+
+/* QSPI sleep: CSN in the same group as the data lines, no pull-up. */
+&qspi_sleep {
+	/delete-node/ group2;
+
+	group1 {
+		psels = <NRF_PSEL(QSPI_SCK, 0, 21)>,
+			<NRF_PSEL(QSPI_IO0, 0, 20)>,
+			<NRF_PSEL(QSPI_IO1, 0, 24)>,
+			<NRF_PSEL(QSPI_IO2, 0, 22)>,
+			<NRF_PSEL(QSPI_IO3, 0, 23)>,
+			<NRF_PSEL(QSPI_CSN, 0, 25)>;
+	};
+};
+
+/* ---- Peripherals ------------------------------------------------------ */
+
+&uicr {
+	/delete-property/ gpio-as-nreset;
+	nfct-pins-as-gpios;
+};
+
+&adc {
+	/* Battery voltage on P0.31 (AIN7) */
+	channel@7 {
+		/delete-property/ zephyr,vref-mv;
+		zephyr,acquisition-time = <ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 10)>;
+	};
+};
+
+/* Quectel L76KB GNSS on UART0 - 9600 baud (PCAS/CASIC protocol)
+ * Uses Zephyr luatos,air530z driver (same PCAS command set for
+ * constellation config via PCAS04, fix rate via PCAS02, etc.)
+ * on-off-gpios = P1.09, the module's WAKEUP/standby pin (see the
+ * gps-enable note above) -- driver drives it high for Continuous, low for
+ * Standby. */
+&uart0 {
+	gnss: gnss {
+		compatible = "luatos,air530z";
+		on-off-gpios = <&gpio1 9 GPIO_ACTIVE_HIGH>;
+	};
+};
+
+/* I2C0 for onboard OLED display only.
+ * External environment/power sensors live on the Grove bus (&i2c1). */
+&i2c0 {
+	clock-frequency = <I2C_BITRATE_FAST>;
+	/* SH1106 sends 1 cmd + 128 data = 129 bytes per page write.
+	 * nRF TWIM needs an internal buffer >= this size. */
+	zephyr,concat-buf-size = <256>;
+	zephyr,flash-buf-max-size = <256>;
+};
+
+sh1106: &oled {
+};
+
+/* I2C1 for Grove connector -- external environment/power sensors.
+ * Auto-detected at runtime; absent sensors fail device_is_ready() and
+ * are skipped harmlessly by ZephyrEnvSensors. */
+&i2c1 {
+	clock-frequency = <I2C_BITRATE_FAST>;
+
+	/* All supported environment & power sensors -- auto-detected at runtime */
+	#include "../../common/sensors-i2c.dtsi"
+};
+
+/* SPIM3 is where upstream puts the radio; it is unused here. */
+&spi3 {
+	status = "disabled";
+};
+
+/* SPI2 (SPIM2) for LoRa SX1262.
+ * Must NOT use SPIM0 (shares instance 0 with I2C0/OLED) or SPIM1 (shares
+ * instance 1 with TWIM1, which drives the Grove I2C bus &i2c1). SPIM2 is a
+ * dedicated SPI-only instance, so the radio and both I2C buses coexist. */
+&spi2 {
+	compatible = "nordic,nrf-spim";
+	status = "okay";
+	cs-gpios = <&gpio1 14 GPIO_ACTIVE_LOW>;
+	pinctrl-0 = <&spi2_default>;
+	pinctrl-1 = <&spi2_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	lora: lora@0 {
+		compatible = "semtech,sx1262";
+		reg = <0>;
+		reset-gpios = <&gpio1 7 GPIO_ACTIVE_LOW>;
+		busy-gpios = <&gpio1 10 GPIO_ACTIVE_HIGH>;
+		dio1-gpios = <&gpio0 7 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+		/* RXEN on P1.08, DIO2 as RF switch for TX */
+		rx-enable-gpios = <&gpio1 8 GPIO_ACTIVE_HIGH>;
+		dio2-tx-enable;
+		dio3-tcxo-voltage = <SX126X_DIO3_TCXO_1V8>;
+		tcxo-power-startup-delay-ms = <5>;
+		spi-max-frequency = <8000000>;
+		rx-boosted;
+	};
+};
+
+/* QSPI Flash - P25Q16H 2MB - single-bit mode at 16MHz (matches Arduino) */
+&qspi {
+	qspi_flash: qspi_flash@0 {
+		compatible = "nordic,qspi-nor";
+		reg = <0>;
+		writeoc = "pp";           /* Single-bit page program (universal) */
+		readoc = "fastread";      /* Single-bit fast read (universal) */
+		sck-frequency = <16000000>; /* 16 MHz (matches Arduino) */
+		jedec-id = [85 60 15];    /* P25Q16H */
+		sfdp-bfp = [
+			e5 20 f1 ff  ff ff ff 01  44 eb 08 6b  08 3b 04 bb
+			ee ff ff ff  ff ff 00 ff  ff ff 00 ff  0c 20 0f 52
+			10 d8 00 ff
+		];
+		size = <16777216>;        /* 2MB = 16Mbit */
+		has-dpd;
+		t-enter-dpd = <3000>;
+		t-exit-dpd = <50000>;     /* 50ms for reliable wakeup */
+		/* quad-enable not needed for single-bit mode */
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			/* Full 2MB for LittleFS storage */
+			qspi_storage_partition: partition@0 {
+				label = "qspi_storage";
+				reg = <0x00000000 0x00200000>;
+			};
+		};
+	};
+};
+
+/* Arduino MeshCore compatible partition layout (SoftDevice v7) */
+#include "../../common/nrf52_partitions_sdv7.dtsi"
+#include "../../common/nrf52_wakeup.dtsi"
 
 /* Internal LFS mounted manually by ZephyrDataStore (block_size=128, custom erase) */
 /* External QSPI /ext auto-mounted via DTS (standard 4KB blocks) */

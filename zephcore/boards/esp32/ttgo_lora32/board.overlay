@@ -30,7 +30,6 @@
  * but we leave them to avoid changing the partition map.
  */
 /delete-node/ &storage_partition;
-/delete-node/ &scratch_partition;
 
 / {
 	chosen {
@@ -42,12 +41,14 @@
 	partitions {
 		/* LittleFS 192KB for DataStore (identity, prefs, creds) */
 		lfs_partition: partition@3b0000 {
+			compatible = "zephyr,mapped-partition";
 			label = "lfs";
 			reg = <0x3B0000 0x30000>;
 		};
 		/* BLE bond store — 16KB NVS, isolated from /lfs (see esp32_common.conf).
 		 * Placed in the unused scratch region just above lfs (lfs unchanged). */
 		storage_partition: partition@3e0000 {
+			compatible = "zephyr,mapped-partition";
 			label = "storage";
 			reg = <0x3E0000 0x4000>;
 		};

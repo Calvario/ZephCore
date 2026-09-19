@@ -417,6 +417,11 @@ if(ZEPHCORE_PLATFORM_CONF AND EXISTS ${ZEPHCORE_PLATFORM_CONF})
     list(APPEND ZEPHCORE_CONF_FILES ${ZEPHCORE_PLATFORM_CONF})
     zephcore_auto_pair_overlay("${ZEPHCORE_PLATFORM_CONF}")
 endif()
+# ESP32-S3 only: overrides esp32_common.conf, stays below board.conf.  Every S3
+# board target carries the /esp32s3/ qualifier (see esp32s3_common.conf).
+if(BOARD MATCHES "/esp32s3/")
+    list(APPEND ZEPHCORE_CONF_FILES "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/esp32s3_common.conf")
+endif()
 if(ZEPHCORE_BOARD_CONF AND EXISTS ${ZEPHCORE_BOARD_CONF})
     list(APPEND ZEPHCORE_CONF_FILES ${ZEPHCORE_BOARD_CONF})
     zephcore_auto_pair_overlay("${ZEPHCORE_BOARD_CONF}")
@@ -440,7 +445,8 @@ endif()
 # PLL/peripherals/RAM powered), so CPU frequency is a first-order term in a
 # battery node's draw — unlike nRF52, which already idles at microamps.  Pull
 # every ESP32 build down to 80 MHz, matching what Arduino MeshCore ships.
-# Needs patches/modules/hal-espressif/0002 (upstream omits 80 from its DT map).
+# hal_espressif derives ESP_DEFAULT_CPU_FREQ_MHZ from cpu@0 directly, so 80
+# needs no module patch (our 0002 carried that until the Zephyr-main bump).
 #
 # Observers are the exception and keep the SoC default (240 MHz on S3/classic,
 # 160 MHz on C3/C6): they run a full WiFi + TLS + MQTT stack and are mains- or
@@ -748,7 +754,7 @@ else()
 endif()
 
 # ========== I2C keypad (boards whose only input is a keyboard) ==========
-if(CONFIG_INPUT)
+if(CONFIG_INPUT AND CONFIG_DT_HAS_ZEPHCORE_STC8H_KEYPAD_ENABLED)
   target_sources_ifdef(CONFIG_ZEPHCORE_UI_DISPLAY app PRIVATE
     helpers/input/stc8h_keypad.c)
 endif()

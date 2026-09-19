@@ -12,7 +12,7 @@
 
 /dts-v1/;
 
-#include <espressif/esp32c6/esp32c6_wroom_n4.dtsi>
+#include <espressif/esp32c6/esp32c6.dtsi>
 #include "lilygo_tlora_c6-pinctrl.dtsi"
 #include <zephyr/dt-bindings/input/input-event-codes.h>
 #include <espressif/partitions_0x0_default.dtsi>
@@ -76,4 +76,11 @@
 
 &esp32_bt_hci {
 	status = "okay";
+};
+
+/* Module flash/PSRAM, declared by the board since Zephyr 4.5 removed the
+ * per-module dtsi (esp32c6_wroom_n4.dtsi). */
+&flash0 {
+	reg = <0x0 DT_SIZE_M(4)>;
+	ranges = <0x0 0x0 DT_SIZE_M(4)>;
 };

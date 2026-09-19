@@ -1040,7 +1040,7 @@ static int lr11xx_hw_init(struct lr11xx_data *data,
 /* ── Driver API: config ─────────────────────────────────────────────── */
 
 static int lr11xx_lora_config(const struct device *dev,
-			      struct lora_modem_config *config)
+			      const struct lora_modem_config *config)
 {
 	struct lr11xx_data *data = dev->data;
 	const struct lr11xx_config *cfg = dev->config;
@@ -1429,6 +1429,56 @@ static void lr11xx_dc_resume(struct lr11xx_data *data, bool was_armed)
 	data->in_rx_mode = true;
 }
 
+static uint32_t lr11xx_preamble_grace_ms(struct lr11xx_data *data);
+
+/* Is a duty-cycled reception already under way?  Ask before lr11xx_dc_suspend().
+ *
+ * dc_suspend() stands the chip down unconditionally, which ends any reception
+ * in progress, and with the cycle armed lr11xx_is_receiving() cannot see the
+ * preamble phase at all: it answers from the header latch only, because a bus
+ * access in the sleep phase kills the cycle.  So every discretionary stand-down
+ * -- the noise-floor sampler above all -- could land between preamble detect
+ * and header, and lost that packet without a trace (T1000-E bench, 2026-09-19:
+ * each missed packet raised no IRQ at all, and coincided with a sampler burst
+ * whose RSSI read the packet itself, ~30 dB over the floor).
+ *
+ * Reading the IRQ register here is safe in both phases.  In the sleep phase
+ * the NSS edge wakes the chip, but the caller is about to terminate and re-arm
+ * the cycle anyway -- the same sanctioned termination dc_suspend() documents.
+ * With a preamble latched the chip is in Rx (StopTimerOnPreamble holds it
+ * there), where bus access is routine.  PREAMBLE_DETECTED is not DIO1-routed but
+ * does latch in the register.  A preamble older than the SF-aware grace with no
+ * header is treated as stale (foreign sync word / false detect), exactly as the
+ * continuous-RX poll in lr11xx_is_receiving() does, so it cannot starve the
+ * callers: they proceed, and dc_resume() clears it.
+ *
+ * Caller holds data->spi_mutex. */
+static bool lr11xx_dc_rx_in_flight(struct lr11xx_data *data)
+{
+	lr11xx_system_irq_mask_t irq = 0;
+
+	if (!data->rx_duty_cycle_enabled || !data->in_rx_mode) {
+		return false;
+	}
+	if (lr11xx_system_get_irq_status(&data->hal_ctx, &irq) != LR11XX_STATUS_OK) {
+		return false;
+	}
+	if (irq & LR11XX_SYSTEM_IRQ_SYNC_WORD_HEADER_VALID) {
+		return true;
+	}
+	if (irq & LR11XX_SYSTEM_IRQ_PREAMBLE_DETECTED) {
+		uint32_t now = k_uptime_get_32();
+		uint32_t seen = data->preamble_seen_at_ms;
+
+		if (seen == 0) {
+			data->preamble_seen_at_ms = (now == 0) ? 1U : now;
+			return true;
+		}
+		return (now - seen) < lr11xx_preamble_grace_ms(data);
+	}
+	return false;
+}
+
 /* Front-end settle to wait after entering Rx before the first GetRssiInst.
  *
  * DS Table 13-82 puts the RSSI averaging window at ~936 us*kHz / BW and the
@@ -1478,6 +1528,10 @@ int16_t lr11xx_get_rssi_inst(const struct device *dev)
 	/* Non-blocking: a contended bus means the sampler simply retries.  -128
 	 * is the sentinel LoRaRadioBase::triggerNoiseFloorCalibrate expects. */
 	if (k_mutex_lock(&data->spi_mutex, K_NO_WAIT) != 0) {
+		return -128;
+	}
+	if (lr11xx_dc_rx_in_flight(data)) {
+		k_mutex_unlock(&data->spi_mutex);
 		return -128;
 	}
 
@@ -1620,6 +1674,12 @@ int lr11xx_get_rssi_burst(const struct device *dev, int16_t *out, int n,
 	 * they stay independent. */
 	if (k_mutex_lock(&data->spi_mutex, K_NO_WAIT) != 0) {
 		return 0;
+	}
+	/* A packet already on its way in: same verdict as a preamble landing
+	 * inside the window -- the caller abandons the burst and retries. */
+	if (lr11xx_dc_rx_in_flight(data)) {
+		k_mutex_unlock(&data->spi_mutex);
+		return -EBUSY;
 	}
 
 	bool armed = lr11xx_dc_suspend(data);
@@ -1967,6 +2027,11 @@ void lr11xx_recalibrate(const struct device *dev)
 		LOG_DBG("recalibrate: mutex busy, deferring");
 		return;
 	}
+	if (lr11xx_dc_rx_in_flight(data)) {
+		LOG_DBG("recalibrate: reception in flight, deferring");
+		k_mutex_unlock(&data->spi_mutex);
+		return;
+	}
 
 	/* Own the cycle across the whole sequence.  This opens with SetSleep,
 	 * which is fatal to a chip already in its own sleep phase, and the
@@ -1994,6 +2059,10 @@ int16_t lr11xx_get_chip_temp_c(const struct device *dev)
 		return INT16_MIN;
 	}
 	if (k_mutex_lock(&data->spi_mutex, K_NO_WAIT) != 0) {
+		return INT16_MIN;
+	}
+	if (lr11xx_dc_rx_in_flight(data)) {
+		k_mutex_unlock(&data->spi_mutex);
 		return INT16_MIN;
 	}
 
@@ -2584,16 +2653,16 @@ static int lr11xx_lora_init(const struct device *dev)
 	/* Start dedicated DIO1 work queue at high priority */
 	k_work_queue_start(&data->dio1_wq, lr11xx_dio1_wq_stack,
 			   K_THREAD_STACK_SIZEOF(lr11xx_dio1_wq_stack),
-			   K_PRIO_COOP(7), NULL);
-	k_thread_name_set(&data->dio1_wq.thread, "lr11xx_dio1");
+			   K_PRIO_COOP(7),
+			   &(const struct k_work_queue_config){ .name = "lr11xx_dio1" });
 
 	/* Wedge-recovery watchdog on its own queue (see handler).  Same priority
 	 * as DIO1 so it never preempts RX; its confirm poll yields every 2 ms. */
 	k_work_init_delayable(&data->wedge_work, lr11xx_wedge_watchdog_handler);
 	k_work_queue_start(&data->wedge_wq, lr11xx_wedge_wq_stack,
 			   K_THREAD_STACK_SIZEOF(lr11xx_wedge_wq_stack),
-			   K_PRIO_COOP(7), NULL);
-	k_thread_name_set(&data->wedge_wq.thread, "lr11xx_wedge");
+			   K_PRIO_COOP(7),
+			   &(const struct k_work_queue_config){ .name = "lr11xx_wedge" });
 	data->last_dio1_ms = k_uptime_get_32();
 	k_work_schedule_for_queue(&data->wedge_wq, &data->wedge_work,
 				  K_MSEC(LR11XX_WEDGE_CHECK_MS));
@@ -2657,13 +2726,13 @@ static DEVICE_API(lora, lr11xx_lora_api) = {
 	 * (over-sleep + no header budget), not a chip defect — now sized by
 	 * the shared adapter math.  Default-off via prefs; HW-verify on a
 	 * live LR1110 before trusting in production. */
-	.recv_duty_cycle = lr11xx_lora_recv_duty_cycle,
+	.recv_duty_cycle_async = lr11xx_lora_recv_duty_cycle,
 };
 
 #define LR11XX_INIT(n)                                                     \
 	static const struct lr11xx_config lr11xx_config_##n = {            \
 		.bus = SPI_DT_SPEC_INST_GET(n,                             \
-			SPI_WORD_SET(8) | SPI_OP_MODE_MASTER |             \
+			SPI_WORD_SET(8) | SPI_OP_MODE_CONTROLLER |         \
 			SPI_TRANSFER_MSB),                                 \
 		.reset = GPIO_DT_SPEC_INST_GET(n, reset_gpios),            \
 		.busy  = GPIO_DT_SPEC_INST_GET(n, busy_gpios),            \

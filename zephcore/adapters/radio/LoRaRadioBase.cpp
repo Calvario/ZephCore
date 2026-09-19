@@ -699,7 +699,7 @@ void LoRaRadioBase::startReceive()
 							   (rx_us + sleep_us + trans_us)));
 				}
 
-				ret = lora_recv_duty_cycle(_dev,
+				ret = lora_recv_duty_cycle_async(_dev,
 							   K_USEC(rx_us),
 							   K_USEC(sleep_us),
 							   rxCallbackStatic, this);
@@ -722,7 +722,7 @@ void LoRaRadioBase::startReceive()
 					 * way and report it. */
 					LOG_DBG("rxduty: busy (TX in progress) — continuous RX");
 				} else if (ret != -ENOSYS) {
-					LOG_ERR("lora_recv_duty_cycle failed: %d", ret);
+					LOG_ERR("lora_recv_duty_cycle_async failed: %d", ret);
 				}
 				/* Fall through to continuous RX */
 			} else if (_dc_last_rx_us != UINT32_MAX) {

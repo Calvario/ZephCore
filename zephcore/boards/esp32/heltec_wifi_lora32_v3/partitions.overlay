@@ -20,7 +20,6 @@
 /delete-node/ &slot0_lpcore_partition;
 /delete-node/ &slot1_lpcore_partition;
 /delete-node/ &storage_partition;
-/delete-node/ &scratch_partition;
 /delete-node/ &coredump_partition;
 /delete-node/ &slot0_partition;
 /delete-node/ &slot1_partition;
@@ -35,22 +34,26 @@
 	partitions {
 		/* App slots — equal size (swap-mode compatible), slot0 at 0x10000. */
 		slot0_partition: partition@10000 {
+			compatible = "zephyr,mapped-partition";
 			label = "image-0";
 			reg = <0x10000 0x3C6000>;
 		};
 		slot1_partition: partition@3d6000 {
+			compatible = "zephyr,mapped-partition";
 			label = "image-1";
 			reg = <0x3D6000 0x3C6000>;
 		};
 		/* BLE bond store — 16KB NVS, isolated from /lfs (see esp32_common.conf).
 		 * Offset unchanged so existing bonds survive the reflash. */
 		storage_partition: partition@79c000 {
+			compatible = "zephyr,mapped-partition";
 			label = "storage";
 			reg = <0x79C000 0x4000>;
 		};
 		/* LittleFS 384KB for DataStore (identity, prefs, contacts).
 		 * Offset unchanged so existing identity/prefs/contacts survive. */
 		lfs_partition: partition@7a0000 {
+			compatible = "zephyr,mapped-partition";
 			label = "lfs";
 			reg = <0x7A0000 0x60000>;
 		};

@@ -24,7 +24,7 @@
 
 /dts-v1/;
 
-#include <espressif/esp32s3/esp32s3_fn8.dtsi>
+#include <espressif/esp32s3/esp32s3.dtsi>
 #include <espressif/partitions_0x0_amp_8M.dtsi>
 #include <zephyr/dt-bindings/adc/adc.h>
 #include <zephyr/dt-bindings/input/input-event-codes.h>
@@ -310,3 +310,10 @@
 &wifi { status = "okay"; };
 &usb_serial { status = "okay"; };
 &st7735r_160x80 { status = "okay"; };
+
+/* Module flash/PSRAM, declared by the board since Zephyr 4.5 removed the
+ * per-module dtsi (esp32s3_fn8.dtsi). */
+&flash0 {
+	reg = <0x0 DT_SIZE_M(8)>;
+	ranges = <0x0 0x0 DT_SIZE_M(8)>;
+};

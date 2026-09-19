@@ -101,6 +101,22 @@
 	status = "okay";
 };
 
+/* Zephyr main (4.5) split the nRF clock driver per clock; each one the
+ * application uses must be enabled here or it is not built (the BT controller
+ * fails to compile without lfclk). Same set as upstream's nrf54l15dk. */
+&xo {
+	status = "okay";
+};
+
+/* Calibrated RC, not a crystal: see the LFXO comment block below. 250 ppm is
+ * the nRF54L15 calibrated-RC figure (DS v1.0 §11.2.2) and Zephyr's default for
+ * RC outside nRF52. */
+&lfclk {
+	status = "okay";
+	k32src = "rc";
+	k32src-accuracy-ppm = <250>;
+};
+
 &uart20 {
 	status = "okay";
 	current-speed = <115200>;
@@ -202,16 +218,17 @@
  * nothing there at all. Configuring LFXO with no crystal present means LFCLK
  * never becomes ready and the node hangs at boot instead of failing visibly.
  *
- * So the board runs the calibrated LFRC instead (K32SRC_RC in board.conf),
+ * So the board runs the calibrated LFRC instead (k32src = "rc" on &lfclk above),
  * which is what MinewSemi's own shipped firmware does. Cost is clock accuracy:
  * ±250 ppm calibrated versus ±50 ppm for a crystal (nRF54L15 DS v1.0 §11.2.2).
  * That is fine for BLE and for mesh timing, but it is the reason a node here
  * drifts faster than a crystal-equipped board — relevant if MeshTimeSync is
  * ever tuned against this hardware.
  *
- * To use the crystal on a carrier that definitely has one, delete
- * CONFIG_CLOCK_CONTROL_NRF_K32SRC_RC / add K32SRC_XTAL in board.conf and
- * enable &lfxo here with the right load capacitance.
+ * To use the crystal on a carrier that definitely has one, set k32src = "xtal"
+ * (and drop the accuracy override) on &lfclk above, remove
+ * K32SRC_RC_CALIBRATION from board.conf, and enable &lfxo here with the right
+ * load capacitance.
  */
 
 &radio {

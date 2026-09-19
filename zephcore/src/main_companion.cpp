@@ -415,10 +415,12 @@ static void process_companion_rx(void)
 		uint16_t len;
 		uint8_t buf[MAX_FRAME_SIZE];
 	} f;
+	bool handled = false;
 
 	/* Process all queued frames */
 	while (k_msgq_num_used_get(&pending_reply) == 0 &&
 	       k_msgq_get(zephcore_ble_get_recv_queue(), &f, K_NO_WAIT) == 0) {
+		handled = true;
 #ifdef ZEPHCORE_LORA
 		/* An in-flight contact dump deliberately survives commands parsed
 		 * here — it is only cancelled by CMD_APP_START (new session) or by
@@ -431,6 +433,7 @@ static void process_companion_rx(void)
 		}
 #endif
 	}
+	ARG_UNUSED(handled);
 
 #if ZEPHCORE_USB_STACK
 	/* Over USB, write_frame is synchronous and never kicks the BLE
@@ -438,8 +441,17 @@ static void process_companion_rx(void)
 	 * sync, which only emits PACKET_CONTACT_START in the command handler and
 	 * relies on continueContactIteration() for the rest). Kick the pump here so
 	 * any iteration started by the command(s) just handled actually proceeds;
-	 * the USB branch of tx_drain fires on_tx_idle and the loop self-sustains. */
-	if (zephcore_ble_get_active_iface() == ZEPHCORE_IFACE_USB) {
+	 * the USB branch of tx_drain fires on_tx_idle and the loop self-sustains.
+	 *
+	 * Only after a frame was actually handled.  The USB tx_drain fires
+	 * on_tx_idle whenever the (BLE) send queue is empty, which over USB is
+	 * always, and on_tx_idle posts MESH_EVENT_CONTACT_ITER -- one of the
+	 * events that calls this function.  An unconditional kick therefore closed
+	 * a loop through the system workqueue that never let the main thread
+	 * block: 100% CPU for as long as USB was the active interface, starving
+	 * every preemptible thread below main, including the LoRa TX-wait thread
+	 * (every transmit then ran into its 5 s watchdog). */
+	if (handled && zephcore_ble_get_active_iface() == ZEPHCORE_IFACE_USB) {
 		zephcore_ble_kick_tx();
 	}
 #endif

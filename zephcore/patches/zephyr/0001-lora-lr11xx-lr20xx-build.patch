@@ -15,13 +15,14 @@ zephcore_apply_patches() reset these two files, and 0003 re-supplied the lines
 patches apply first time.
 
 diff --git a/drivers/lora/CMakeLists.txt b/drivers/lora/CMakeLists.txt
-index 9cd035fcf2b..18d04ec099a 100644
+index fecfe8ea8bb..0fbeadcc404 100644
 --- a/drivers/lora/CMakeLists.txt
 +++ b/drivers/lora/CMakeLists.txt
-@@ -1,7 +1,11 @@
+@@ -1,8 +1,12 @@
  # SPDX-License-Identifier: Apache-2.0
 +# ZephCore patch: adds lr11xx driver subdirectory.
  
+ zephyr_sources(lora_common.c)
  zephyr_sources_ifdef(CONFIG_LORA_SHELL shell.c)
  
 +add_subdirectory_ifdef(CONFIG_LORA_LR11XX lr11xx)
@@ -31,7 +32,7 @@ index 9cd035fcf2b..18d04ec099a 100644
  add_subdirectory_ifdef(CONFIG_LORA_MODULE_BACKEND_LORAMAC_NODE loramac-node)
  add_subdirectory_ifdef(CONFIG_LORA_MODULE_BACKEND_LORA_BASICS_MODEM lora-basics-modem)
 diff --git a/drivers/lora/Kconfig b/drivers/lora/Kconfig
-index 657bdb9ce28..f8513b37044 100644
+index e31c08c1371..d53979fabd1 100644
 --- a/drivers/lora/Kconfig
 +++ b/drivers/lora/Kconfig
 @@ -5,6 +5,7 @@
@@ -42,7 +43,7 @@ index 657bdb9ce28..f8513b37044 100644
  
  menuconfig LORA
  	bool "LoRa drivers"
-@@ -60,6 +61,8 @@ config LORA_INIT_PRIORITY
+@@ -79,6 +80,8 @@ config LORA_INIT_PRIORITY
  
  rsource "Kconfig.sx12xx"
  rsource "Kconfig.rylrxxx"

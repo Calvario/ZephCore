@@ -22,9 +22,14 @@
 
 /dts-v1/;
 
-#include <espressif/esp32s3/esp32s3_wroom_n16r8.dtsi>
+#include <espressif/esp32s3/esp32s3.dtsi>
 #include "thinknode_m9-pinctrl.dtsi"
 #include <espressif/partitions_0x0_default_16M.dtsi>
+/* In the base DTS (not only board.overlay) so the sysbuild MCUboot image, which
+ * sees this file but not board.overlay, also gets a zephyr,console: MCUboot is
+ * built with UART_CONSOLE=y (sysbuild/mcuboot.conf) and Zephyr 4.5's
+ * uart_console.c no longer builds without the chosen node. */
+#include "../../common/esp32s3_console_uart0.dtsi"
 
 / {
 	model = "Elecrow ThinkNode M9";
@@ -172,4 +177,15 @@
 
 &wifi {
 	status = "okay";
+};
+
+/* Module flash/PSRAM, declared by the board since Zephyr 4.5 removed the
+ * per-module dtsi (esp32s3_wroom_n16r8.dtsi). */
+&flash0 {
+	reg = <0x0 DT_SIZE_M(16)>;
+	ranges = <0x0 0x0 DT_SIZE_M(16)>;
+};
+
+&psram0 {
+	size = <DT_SIZE_M(8)>;
 };

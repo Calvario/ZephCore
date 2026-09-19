@@ -2,13 +2,14 @@
 #
 # DT-driven PSRAM auto-enable for ESP32 boards.
 #
-# Upstream Zephyr's esp32*_wroom_n*r*.dtsi files override psram0 size when
-# the chip variant has PSRAM stuffed (R-suffix in the Espressif part number).
-# We auto-enable PSRAM whenever the DTS size is non-zero — the upstream
+# Each ESP32 board DTS sets &psram0 { size = ...; } when its module has PSRAM
+# stuffed (R-suffix in the Espressif part number); since Zephyr 4.5 the board
+# declares it, the per-module esp32*_wroom_n*r*.dtsi files are gone.  We
+# auto-enable PSRAM whenever the DTS size is non-zero — the upstream
 # Kconfig.spiram then auto-reads ESP_SPIRAM_SIZE from the same DT property.
 #
-# Boards without PSRAM include a non-R-suffix dtsi (e.g. esp32s3_wroom_n8),
-# which leaves psram0 at size = 0 — auto-detect leaves PSRAM off for them.
+# Boards without PSRAM leave psram0 at the SoC dtsi's size = 0 — auto-detect
+# leaves PSRAM off for them.
 # ESP32-C3 and ESP32-C6 are outside Kconfig.spiram's SOC gate entirely, so
 # this symbol doesn't exist on those builds — no effect.
 #

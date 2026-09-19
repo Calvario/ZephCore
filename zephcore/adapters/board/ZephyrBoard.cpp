@@ -459,6 +459,16 @@ void ZephyrBoard::rebootToBootloader()
 	/* Clean USB disconnect before the soft reset — same reason as reboot(). */
 	usb_serial_jtag_ll_phy_enable_pad(false);
 	k_msleep(100);
+#ifdef ESP32_FORCE_DOWNLOAD_BOOT
+	/* ...but put the pad back before resetting into the ROM.  The pad-enable
+	 * bit survives a software reset, and unlike the app the ROM download mode
+	 * never re-enables it, so leaving it off keeps USB-Serial-JTAG off the bus:
+	 * the host sees the port die and only a power cycle brings it back.  That
+	 * was `start dfu` on every S3 build whose console is USJ (repeater,
+	 * observer, room server, debug).  The 100 ms low above still gives the
+	 * host its disconnect; the ROM then enumerates as 303a:1001. */
+	usb_serial_jtag_ll_phy_enable_pad(true);
+#endif
 #endif
 #ifdef ESP32_FORCE_DOWNLOAD_BOOT
 	/* Hand the internal USB PHY back to USB-Serial-JTAG, so the ROM download

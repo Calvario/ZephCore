@@ -21,6 +21,7 @@
  * sensor bus.
  */
 
+#include <zephyr/dt-bindings/display/panel.h>
 #include <zephyr/dt-bindings/pwm/pwm.h>
 
 / {
@@ -107,7 +108,7 @@
 			 * st7789v driver defaults to inversion ON (no `inversion-off`
 			 * prop here) — matched. */
 			mdac = <0xA0>;
-			colmod = <0x55>;
+			pixel-format = <PANEL_PIXEL_FORMAT_RGB_565>;
 			vcom = <0x20>;
 			gctrl = <0x35>;
 			vrhs = <0x0b>;

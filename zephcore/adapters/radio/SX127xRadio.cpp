@@ -48,7 +48,7 @@ void SX127xRadio::begin()
 
 bool SX127xRadio::hwConfigure(const struct lora_modem_config &cfg)
 {
-	int ret = lora_config(_dev, const_cast<struct lora_modem_config *>(&cfg));
+	int ret = lora_config(_dev, &cfg);
 	if (ret < 0) {
 		LOG_ERR("lora_config failed: %d", ret);
 		return false;

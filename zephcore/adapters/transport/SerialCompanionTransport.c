@@ -140,7 +140,12 @@ static void uart_isr(const struct device *dev, void *user_data)
 {
 	ARG_UNUSED(user_data);
 
-	while (uart_irq_update(dev) && uart_irq_is_pending(dev)) {
+	for (;;) {
+		uart_irq_update(dev);
+		if (uart_irq_is_pending(dev) <= 0) {
+			break;
+		}
+
 		if (uart_irq_rx_ready(dev)) {
 			uint8_t buf[64];
 			int n = uart_fifo_read(dev, buf, sizeof(buf));
@@ -200,11 +205,14 @@ static void uart_isr(const struct device *dev, void *user_data)
 			uint8_t *out;
 			bool empty;
 			k_spinlock_key_t key = k_spin_lock(&tx_lock);
-			uint32_t claimed = ring_buf_get_claim(&tx_ring, &out, 64);
+			uint32_t claimed = MIN(ring_buf_get_ptr(&tx_ring, &out, 0), 64U);
 
 			if (claimed > 0) {
 				int sent = uart_fifo_fill(dev, out, claimed);
-				ring_buf_get_finish(&tx_ring, sent > 0 ? sent : 0);
+
+				if (sent > 0) {
+					ring_buf_consume(&tx_ring, sent);
+				}
 			}
 			empty = ring_buf_is_empty(&tx_ring);
 			if (empty) {

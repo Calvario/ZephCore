@@ -81,13 +81,18 @@
 &flash0 {
 	partitions {
 		/* Application — expanded to use slot1 space */
+		/* zephyr,mapped-partition: the upstream partitions node no longer
+		 * has a fixed-partitions compatible, so each child carries its own
+		 * (Zephyr 4.5), or no PARTITION_ID is generated for it. */
 		slot0_partition: partition@c000 {
+			compatible = "zephyr,mapped-partition";
 			label = "image-0";
 			reg = <0x0C000 0x150000>;  /* 1344KB */
 		};
 
 		/* LittleFS 144KB for DataStore + file-based BLE settings */
 		lfs_partition: partition@15c000 {
+			compatible = "zephyr,mapped-partition";
 			label = "lfs";
 			reg = <0x15C000 0x24000>;
 		};

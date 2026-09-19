@@ -9,12 +9,12 @@
  * 80 MHz for the same reason (ESP32_CPU_FREQ=80 in variants/heltec_v3,
  * heltec_v4, heltec_tracker, rak3112, xiao_c3, ...).
  *
- * 80 requires patches/modules/hal-espressif/0002: upstream's DT-to-Kconfig map
- * lists only the per-SoC defaults (96/120/160/240) and omits 80, so without it
- * the build fails with "'CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ' undeclared".  Do NOT
- * reach for 96 to dodge that -- it is an ESP32-H2 frequency, rejected by
- * rtc_clk_cpu_freq_mhz_to_config() on every SoC we build, and it fails at BOOT
- * rather than at build time.
+ * hal_espressif computes CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ as this property / 1e6
+ * straight from /cpus/cpu@0, so 80 needs no module patch.  (Older pins used a
+ * fixed 96/120/160/240 map that omitted 80; we carried hal-espressif 0002 for
+ * it until the Zephyr-main bump.)  Do NOT use 96 -- it is an ESP32-H2
+ * frequency, rejected by rtc_clk_cpu_freq_mhz_to_config() on every SoC we
+ * build, and it fails at BOOT rather than at build time.
  *
  * The mesh workload is event-driven and nowhere near CPU-bound: wake on a
  * packet, run some AES and LittleFS, go back to idle. Airtime dominates every

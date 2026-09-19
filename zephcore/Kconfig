@@ -765,6 +765,23 @@ config ZEPHCORE_LORA_DC_MARGIN_PCT
 	  the loss is signal-strength-independent, so RSSI will look fine and
 	  only a PDR comparison against rxduty 0 will show it.
 
+config ZEPHCORE_MEM_STATS
+	bool "CLI: report thread stack and heap high-water marks"
+	select INIT_STACKS
+	select THREAD_STACK_INFO
+	select THREAD_MONITOR
+	select THREAD_NAME
+	select SYS_HEAP_RUNTIME_STATS
+	help
+	  Adds `get mem <n>` to the CLI (all roles).  Each call returns one line:
+	  n = 0.. walks the threads (name, stack size, peak bytes used), then the
+	  k_heaps (address, size, current and peak allocation), then "end".
+
+	  For sizing stacks and heaps against measured use, e.g. after a Zephyr
+	  bump.  Stack watermarks need INIT_STACKS (stacks painted at thread
+	  creation), which costs boot time, so leave this off in releases.
+	  Resolve heap addresses to symbols with nm on zephyr.elf.
+
 config ZEPHCORE_LORA_RETENTION_DEBUG
 	bool "SX126x: verify the warm-start retention list on air"
 	depends on ZEPHCORE_RADIO_NATIVE
@@ -1114,6 +1131,8 @@ config ZEPHCORE_EASTER_EGG_DOOM
 
 config ZEPHCORE_UI_JOYSTICK
 	bool
+	# In-tree Zephyr board (no board Kconfig of ours to select from)
+	default y if BOARD_WIO_TRACKER_L1
 	help
 	  Set by board-level Kconfig when the hardware has a 5-way joystick or
 	  D-pad. Not user-selectable; set by the board configuration.

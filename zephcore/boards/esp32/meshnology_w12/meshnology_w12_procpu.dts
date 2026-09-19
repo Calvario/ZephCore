@@ -27,7 +27,7 @@
 
 /dts-v1/;
 
-#include <espressif/esp32s3/esp32s3_wroom_n16r8.dtsi>
+#include <espressif/esp32s3/esp32s3.dtsi>
 #include "meshnology_w12-pinctrl.dtsi"
 #include <espressif/partitions_0x0_default_16M.dtsi>
 #include <zephyr/dt-bindings/input/input-event-codes.h>
@@ -339,3 +339,14 @@
 
 &esp32_bt_hci { status = "okay"; };
 &wifi { status = "okay"; };
+
+/* Module flash/PSRAM, declared by the board since Zephyr 4.5 removed the
+ * per-module dtsi (esp32s3_wroom_n16r8.dtsi). */
+&flash0 {
+	reg = <0x0 DT_SIZE_M(16)>;
+	ranges = <0x0 0x0 DT_SIZE_M(16)>;
+};
+
+&psram0 {
+	size = <DT_SIZE_M(8)>;
+};

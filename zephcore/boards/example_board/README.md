@@ -122,7 +122,7 @@ SX127x boards require these `board.conf` overrides (the `zephcore_common.conf` d
 CONFIG_LORA_MODULE_BACKEND_NATIVE=n
 CONFIG_LORA_MODULE_BACKEND_LORAMAC_NODE=y
 CONFIG_ZEPHCORE_RADIO_SX127X=y
-CONFIG_ZEPHCORE_LORA_RX_DUTY_CYCLE=n   # lora_recv_duty_cycle not implemented for SX127x
+CONFIG_ZEPHCORE_LORA_RX_DUTY_CYCLE=n   # lora_recv_duty_cycle_async not implemented for SX127x
 CONFIG_ZEPHCORE_DEFAULT_TX_POWER_DBM=17 # PA_BOOST max without external PA
 ```
 

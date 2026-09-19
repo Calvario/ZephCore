@@ -167,6 +167,62 @@ static int cliOnOff(const char* arg, int def_val) {
 	return -1;
 }
 
+#if IS_ENABLED(CONFIG_ZEPHCORE_MEM_STATS)
+#include <zephyr/sys/iterable_sections.h>
+
+struct mem_stats_walk {
+	int want;
+	int idx;
+	char *reply;
+};
+
+static void memStatsThread(const struct k_thread *t, void *u)
+{
+	struct mem_stats_walk *w = (struct mem_stats_walk *)u;
+	size_t unused = 0;
+
+	if (w->idx++ != w->want) {
+		return;
+	}
+	const char *name = k_thread_name_get((k_tid_t)t);
+	size_t size = t->stack_info.size;
+
+	if (k_thread_stack_space_get(t, &unused) != 0) {
+		unused = 0;
+	}
+	snprintf(w->reply, CLI_REPLY_SIZE, "t %d %s prio=%d size=%u peak=%u free=%u", w->want,
+		 (name && name[0]) ? name : "?", t->base.prio, (unsigned)size,
+		 (unsigned)(size - unused), (unsigned)unused);
+}
+
+/* `get mem <n>`: one line per call -- threads first, then every k_heap. */
+static void memStatsLine(int n, char *reply)
+{
+	struct mem_stats_walk w = { n, 0, reply };
+
+	reply[0] = '\0';
+	k_thread_foreach(memStatsThread, &w);
+	if (reply[0] != '\0') {
+		return;
+	}
+	int h = w.idx;
+
+	STRUCT_SECTION_FOREACH(k_heap, heap) {
+		if (h++ != n) {
+			continue;
+		}
+		struct sys_memory_stats st;
+
+		sys_heap_runtime_stats_get(&heap->heap, &st);
+		snprintf(reply, CLI_REPLY_SIZE, "h %d %p size=%u alloc=%u peak=%u", n, (void *)heap,
+			 (unsigned)(st.allocated_bytes + st.free_bytes),
+			 (unsigned)st.allocated_bytes, (unsigned)st.max_allocated_bytes);
+		return;
+	}
+	snprintf(reply, CLI_REPLY_SIZE, "end");
+}
+#endif /* CONFIG_ZEPHCORE_MEM_STATS */
+
 static bool isValidName(const char* n) {
 	while (*n) {
 		if (*n == '[' || *n == ']' || *n == '\\' || *n == ':' ||
@@ -634,6 +690,10 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
 			uint32_t s = gps_get_poll_interval_sec();  // now-effective value
 			if (s == 0) strcpy(reply, "> always on (0)");
 			else snprintf(reply, CLI_REPLY_SIZE, "> %u", (unsigned)s);
+#if IS_ENABLED(CONFIG_ZEPHCORE_MEM_STATS)
+		} else if (memcmp(config, "mem", 3) == 0) {
+			memStatsLine(atoi(&config[3]), reply);
+#endif
 		} else if (memcmp(config, "dc.restarts", 11) == 0) {
 			snprintf(reply, CLI_REPLY_SIZE, "> %u",
 				 (uint32_t)_callbacks->getDutyCycleTimeoutRestarts());

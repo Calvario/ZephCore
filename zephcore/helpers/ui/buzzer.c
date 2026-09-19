@@ -404,8 +404,8 @@ int buzzer_init(void)
 	k_work_queue_init(&buzzer_wq);
 	k_work_queue_start(&buzzer_wq, buzzer_wq_stack,
 			   K_THREAD_STACK_SIZEOF(buzzer_wq_stack),
-			   BUZZER_WQ_PRIORITY, NULL);
-	k_thread_name_set(&buzzer_wq.thread, "buzzer_wq");
+			   BUZZER_WQ_PRIORITY,
+			   &(const struct k_work_queue_config){ .name = "buzzer_wq" });
 
 	k_work_init_delayable(&ctx.note_work, note_work_handler);
 	k_work_init_delayable(&ctx.safety_work, safety_work_handler);
