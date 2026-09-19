@@ -24,12 +24,13 @@ extern "C" {
 bool zephcore_boot_reset_cause(uint32_t *out);
 
 /*
- * Render as space-prefixed labels, e.g. " PIN SOFTWARE". Returns characters
- * written, excluding the NUL; 0 means nothing to render. Writes nothing when
- * buf is NULL or cap is 0, otherwise always NUL-terminates, truncating at the
- * first label that does not fit.
+ * Render as space-prefixed labels, e.g. " PIN SOFTWARE", or with hints set,
+ * " PIN(reset button) SOFTWARE". Returns characters written, excluding the
+ * NUL; 0 means nothing to render. Writes nothing when buf is NULL or cap is 0,
+ * otherwise always NUL-terminates, truncating at the first label that does not
+ * fit. 127 bytes hold every label without hints, 239 with.
  */
-int zephcore_boot_reset_cause_str(char *buf, size_t cap);
+int zephcore_boot_reset_cause_str(char *buf, size_t cap, bool hints);
 
 /*
  * The part of the cause the renderer would name. Use this rather than the raw

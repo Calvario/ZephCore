@@ -608,12 +608,12 @@ contact named `v<node_name>` that exists only toward the connected BLE/USB app.
 Chatting with it runs the same text CLI as the USB serial sideband; the reply
 comes back as normal chat messages. The firmware also uses it to emit
 unsolicited notices: a one-shot low-battery alert and a restart-reason message
-(every cause `zephcore_boot_reset_cause_str()` can label, which is more than
-the six the companion used to hard-code — offline-queue only, so routine
-power-on "noise" costs nothing over the air). Two causes are silent when they
-are the only ones raised: a debugger reset, and a wake from a low-power
-shutdown, which would otherwise announce itself after every power cycle. Both
-still appear in the boot log.
+(every cause `zephcore_boot_reset_cause_str()` can label — offline-queue only,
+so routine power-on "noise" costs nothing over the air). Two causes are silent
+when they are the only ones raised: a debugger reset, and a low-power wake
+(button or GPIO wake from System OFF), which would otherwise announce itself
+after every power cycle. A VBUS wake from System OFF on nRF52840 reports `POR`
+and is not silent. All of them still appear in the boot log.
 
 **Identity**: seed = `SHA256("zc-vcontact" || self_prv_key || counter)`,
 pubkey = that seed's Ed25519 public point — stable per node, unique per device.
@@ -1235,8 +1235,9 @@ which reports `RESET_WATCHDOG` in the "Restarted:" v-contact message (see
 [6.2.1](#621-v-contact-loopback-admin-contact)). It reads the cause from
 `zephcore_boot_reset_cause()` rather than from `hwinfo_get_reset_cause()`
 directly: `helpers/boot_info.c` captures the register once at POST_KERNEL on
-every role, logs it, and clears it where the platform implements a clear, so
-no later reader can consume it. nRF implements `hwinfo_clear_reset_cause()`;
+every role, logs it with its labels, and clears it where the platform
+implements a clear, so a later reader sees the same cause instead of a
+cleared register. nRF implements `hwinfo_clear_reset_cause()`;
 ESP32 does not, so the weak stub returns `-ENOSYS` and nothing is cleared
 there. That is harmless on ESP32, whose cause comes from `esp_reset_reason()`
 and does not accumulate across boots, but the capture is what readers should

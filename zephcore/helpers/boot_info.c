@@ -30,9 +30,12 @@ static int boot_info_init(void)
 	s_reset_cause = cause;
 	s_reset_cause_valid = true;
 
-	/* Logged here, not only in the role that renders it: the clear below
-	 * would otherwise lose the cause on roles that never read it. */
-	LOG_INF("Boot reset cause: 0x%08x", cause);
+	/* Logged here for every role: the clear below would otherwise lose the
+	 * cause on roles that never read it. */
+	char labels[128];
+
+	(void)zephcore_boot_reset_cause_str(labels, sizeof(labels), false);
+	LOG_INF("Reset cause: 0x%08x%s", cause, labels);
 
 	/* Not reported again next boot. -ENOSYS where unimplemented (ESP32). */
 	(void)hwinfo_clear_reset_cause();
@@ -55,31 +58,35 @@ bool zephcore_boot_reset_cause(uint32_t *out)
 /*
  * One row per RESET_* bit in <zephyr/drivers/hwinfo.h>. A bit with no row is
  * rendered as nothing and is invisible to zephcore_boot_reset_cause_labelled().
+ * hint is the plain-English suffix for the user-facing notice, NULL where
+ * the label already says it or no honest one fits. SOFTWARE has none: it is
+ * a reboot command, a firmware update and a fatal-error reboot alike.
  */
 static const struct {
 	uint32_t bit;
 	const char *label;
+	const char *hint;
 } s_labels[] = {
-	{ RESET_PIN,            "PIN" },
+	{ RESET_PIN,            "PIN",         "(reset button)" },
 	{ RESET_SOFTWARE,       "SOFTWARE" },
-	{ RESET_BROWNOUT,       "BROWNOUT" },
-	{ RESET_POR,            "POR" },
-	{ RESET_WATCHDOG,       "WATCHDOG" },
-	{ RESET_DEBUG,          "DEBUG" },
+	{ RESET_BROWNOUT,       "BROWNOUT",    "(low voltage)" },
+	{ RESET_POR,            "POR",         "(power-on)" },
+	{ RESET_WATCHDOG,       "WATCHDOG",    "(hang)" },
+	{ RESET_DEBUG,          "DEBUG",       "(debugger)" },
 	{ RESET_SECURITY,       "SECURITY" },
-	{ RESET_LOW_POWER_WAKE, "LOWPOWER" },
-	{ RESET_CPU_LOCKUP,     "LOCKUP" },
-	{ RESET_PARITY,         "PARITY" },
-	{ RESET_PLL,            "PLL" },
+	{ RESET_LOW_POWER_WAKE, "LOWPOWER",    "(wake from off)" },
+	{ RESET_CPU_LOCKUP,     "LOCKUP",      "(crash)" },
+	{ RESET_PARITY,         "PARITY",      "(memory error)" },
+	{ RESET_PLL,            "PLL",         "(clock fault)" },
 	{ RESET_CLOCK,          "CLOCK" },
 	{ RESET_HARDWARE,       "HARDWARE" },
 	{ RESET_USER,           "USER" },
-	{ RESET_TEMPERATURE,    "TEMPERATURE" },
+	{ RESET_TEMPERATURE,    "TEMPERATURE", "(overheat)" },
 	{ RESET_BOOTLOADER,     "BOOTLOADER" },
 	{ RESET_FLASH,          "FLASH" },
 };
 
-int zephcore_boot_reset_cause_str(char *buf, size_t cap)
+int zephcore_boot_reset_cause_str(char *buf, size_t cap, bool hints)
 {
 	if (buf == NULL || cap == 0) {
 		return 0;
@@ -98,7 +105,8 @@ int zephcore_boot_reset_cause_str(char *buf, size_t cap)
 			continue;
 		}
 
-		int w = snprintf(buf + n, cap - n, " %s", s_labels[i].label);
+		const char *hint = (hints && s_labels[i].hint) ? s_labels[i].hint : "";
+		int w = snprintf(buf + n, cap - n, " %s%s", s_labels[i].label, hint);
 
 		if (w < 0 || (size_t)w >= cap - n) {
 			/* Stop rather than emit half a label. */

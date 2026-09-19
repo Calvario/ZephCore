@@ -523,7 +523,7 @@ private:
 	static const uint8_t VCONTACT_DEDUP_SLOTS = 16;
 	uint32_t _vcontact_recent_ts[VCONTACT_DEDUP_SLOTS];
 	uint8_t _vcontact_recent_head;
-	char _vcontact_pending[2][64];   /* notices buffered while the clock is invalid */
+	char _vcontact_pending[2][128];   /* notices buffered while the clock is invalid */
 	uint8_t _vcontact_pending_count;
 	/* Suppress a v-contact notice's MSG_WAITING push during the app's initial
 	 * sync. Sent before/mid sync (e.g. the reboot-cause notice flushed at
