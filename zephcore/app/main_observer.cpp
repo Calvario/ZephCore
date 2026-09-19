@@ -39,7 +39,7 @@ LOG_MODULE_REGISTER(zephcore_observer_main, CONFIG_ZEPHCORE_MAIN_LOG_LEVEL);
 #include <ZephyrWiFiStation.h>
 #include <ZephyrMQTTPublisher.h>
 #include "observer_creds.h"
-#include <helpers/led_gate.h>
+#include <helpers/boot_prefs.h>
 
 /* ========== LED (optional) ========== */
 
@@ -387,13 +387,7 @@ int main(void)
 	/* Apply the persisted LED master switch. The observer has no CLI of its own
 	 * to change it, but a unit reflashed from a repeater build keeps the setting
 	 * — and it still drives lora-tx-led on TX-capable boards. */
-	{
-		bool leds_off = prefs->leds_disabled != 0;
-		zephcore_leds_set_disabled(leds_off);
-		zephcore_leds_set_radio_mode(prefs->leds_radio_mode);
-		zephcore_leds_set_hb_mode(prefs->leds_hb_mode);
-		LOG_INF("LEDs: %s (from prefs)", leds_off ? "disabled" : "enabled");
-	}
+	apply_boot_prefs(prefs, false);
 
 	/* Initialize USB serial for CLI */
 #if ZEPHCORE_USB_STACK && DT_HAS_COMPAT_STATUS_OKAY(zephyr_cdc_acm_uart)

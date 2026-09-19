@@ -22,7 +22,7 @@ LOG_MODULE_REGISTER(zephcore_repeater_main, CONFIG_ZEPHCORE_MAIN_LOG_LEVEL);
 #include <zephyr/drivers/hwinfo.h>
 #include <zephyr/sys/reboot.h>
 #include "oled_power.h"
-#include "led_gate.h"
+#include "boot_prefs.h"
 
 /* BLE controller assert handler — BT is compiled even for repeater (via zephcore_common.conf) */
 #if IS_ENABLED(CONFIG_BT_CTLR_ASSERT_HANDLER)
@@ -700,8 +700,8 @@ int main(void)
 		}
 	}
 
-	/* GPS callbacks only.  The duty interval and the mode switch that starts
-	 * acquisition are applied after loadPrefs() below — see the block there. */
+	/* GPS callbacks only.  Duty interval and repeater mode are applied by
+	 * apply_boot_prefs() after loadPrefs() below. */
 	if (gps_is_available()) {
 		gps_set_fix_callback(gps_fix_callback);
 		gps_set_event_callback(gps_event_callback);
@@ -760,48 +760,9 @@ int main(void)
 	data_store.loadPrefs(*repeater_mesh.getNodePrefs());
 	lora_radio.setPrefs(repeater_mesh.getNodePrefs());
 
-	/* Set GPS to repeater mode: power off now, wake every duty interval for
-	 * time sync only.  This prevents GPS from draining power on boards that
-	 * have it (e.g., Wio Tracker).
-	 *
-	 * MUST come after loadPrefs(), for the same reason as the LED switch
-	 * below -- but note loadPrefs() is not a pure read here.  It is also the
-	 * only place this role's GPS default is established: initNodePrefs()
-	 * sets gps_interval=300 (the companion value), and the 48 h default is
-	 * applied and PERSISTED by loadPrefs()'s first-boot path.
-	 *
-	 * This block used to sit ~55 lines earlier, where getNodePrefs() still
-	 * held that 300.  So the GPS manager was armed from the companion default
-	 * on every boot and nothing re-applied the real value afterwards:
-	 *   - a stock repeater woke its GPS every 5 min instead of every 48 h;
-	 *   - any operator value, notably "set gps duty 0" (always-on), was
-	 *     stored and read back correctly but never reached the hardware.
-	 * Same failure shape as the radio-frequency and LED ordering bugs in this
-	 * file.  main_companion.cpp has always had this order right. */
-	if (gps_is_available()) {
-		gps_set_poll_interval_sec(repeater_mesh.getNodePrefs()->gps_interval);
-		gps_set_repeater_mode(true);
-	}
-
-	/* Apply the persisted LED master switch ("set leds on|off").  MUST come
-	 * after loadPrefs(): this used to sit just after ui_init(), ~45 lines
-	 * earlier, where getNodePrefs() still held the initNodePrefs() default of
-	 * leds_disabled=0.  A node with "off" persisted therefore opened the gate on
-	 * every boot and never closed it again -- `get leds` read the (correct) RAM
-	 * prefs and said "off" while the LEDs kept blinking, until the user issued
-	 * `set leds off` a second time to drive the gate directly.  The other two
-	 * ordering constraints still hold here: ui_init() has already run, so the
-	 * heartbeat cycle exists to be stopped, and repeater_mesh.begin() ->
-	 * Dispatcher::begin() -> Radio::begin() is still below, so the first
-	 * transmit honours it. */
-	{
-		const NodePrefs *lp = repeater_mesh.getNodePrefs();
-		bool leds_off = lp->leds_disabled != 0;
-		zephcore_leds_set_disabled(leds_off);
-		zephcore_leds_set_radio_mode(lp->leds_radio_mode);
-		zephcore_leds_set_hb_mode(lp->leds_hb_mode);
-		LOG_INF("LEDs: %s (from prefs)", leds_off ? "disabled" : "enabled");
-	}
+	/* LED gate and GPS duty from prefs.  After loadPrefs() and ui_init(),
+	 * before begin() -- see boot_prefs.h. */
+	apply_boot_prefs(repeater_mesh.getNodePrefs(), true);
 
 	/* Start mesh with data store - loads ACL, regions */
 	repeater_mesh.begin(&data_store);
