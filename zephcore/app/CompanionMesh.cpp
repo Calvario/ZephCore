@@ -219,6 +219,9 @@ CompanionMesh::CompanionMesh(mesh::Radio &radio, mesh::MillisecondClock &ms, mes
 	memset(_vcontact_pending, 0, sizeof(_vcontact_pending));
 	_vcontact_pending_count = 0;
 	_vcontact_hold_msgwait = false;
+	_vcontact_hold_expiry = 0;
+	_last_msgwait_ms = 0;
+	_last_sync_req_ms = 0;
 	_vcontact_app_hidden = false;
 	_vcontact_confirm_ack = 0;
 	_vcontact_confirm_work.self = this;
@@ -602,6 +605,95 @@ void CompanionMesh::confirmOfflineMessage()
 	_offline_queue_count--;
 }
 
+/* How long CMD_APP_START may suppress v-contact notice prompts.
+ *
+ * This deadline is also the worst-case freeze a mid-session CMD_APP_START can
+ * impose, because the app is under no obligation to follow one with the
+ * message sync that clears the latch — so it must be short enough that nobody
+ * notices, not merely short enough to recover eventually.
+ *
+ * It only has to cover the handoff between CMD_APP_START and the
+ * CMD_GET_CONTACTS that normally follows it, which is where a prompt could
+ * make the app fetch a message from a contact it has not been told about yet.
+ * The dump itself is gated directly by _contact_iter_active below, for however
+ * long it takes, and once the dump is done a prompt is harmless. Measured on
+ * hardware, a full 350-contact initial sync runs APP_START to
+ * PACKET_NO_MORE_MSGS in ~2.9 s, so the handoff is a small fraction of that.
+ *
+ * History, because the sizing is the whole bug: 60 s produced the ~54 s
+ * "v-contact is frozen" reports. 10 s only looked fixed — hardware logs showed
+ * the user's own settings-screen-to-message time landing at 10.5-11.7 s, so
+ * the latch was expiring inline microseconds before the prompt and the feature
+ * was winning a race by half a second. Do not raise this to "be safe"; raising
+ * it re-creates the bug, and the thing it guards does not need the time. */
+#define VCONTACT_HOLD_MAX_MS 3000
+
+bool CompanionMesh::vcontactMsgWaitHeld()
+{
+	/* A live contact dump is the concrete hazard the hold exists for: a
+	 * MSG_WAITING mid-dump makes the app interleave message-sync into the
+	 * contact stream, which trips the "reset iterator on any other command"
+	 * guard and truncates the sync. Checked directly rather than inferred from
+	 * the latch, so the deadline below can be short without ever exposing a
+	 * slow dump. */
+	if (_contact_iter_active) {
+		return true;
+	}
+	if (!_vcontact_hold_msgwait) {
+		return false;
+	}
+	if (_vcontact_hold_expiry && _ms->getMillis() >= _vcontact_hold_expiry) {
+		LOG_WRN("vcontact: msgwait hold expired without a completed sync");
+		_vcontact_hold_msgwait = false;
+		_vcontact_hold_expiry = 0;
+		return false;
+	}
+	return true;
+}
+
+void CompanionMesh::pushMsgWaiting()
+{
+	_last_msgwait_ms = _ms->getMillis();
+	LOG_INF("msgwait: prompting app, %d queued", _offline_queue_count);
+	sendPush(PUSH_CODE_MSG_WAITING);
+}
+
+/* Re-prompt cadence.
+ *
+ * Observed on hardware: the app ignores the first MSG_WAITING after a settings
+ * write (the GPS toggle) but honours a later identical one, so the reply is
+ * recovered rather than lost — it just arrives one cadence late. At the
+ * original 15 s that was a ~20 s wait with the 5 s housekeeping granularity on
+ * top, which reads as broken even though nothing is. The prompt is a 1-byte
+ * idempotent frame, so the cost of asking again sooner is nil, and the 5 s tick
+ * puts the real floor here anyway: 4 s means the first re-prompt lands on the
+ * first tick at least 4 s after the original, i.e. 4-5 s. */
+#define MSGWAIT_REPROMPT_MS 4000
+
+void CompanionMesh::msgWaitingWatchdog()
+{
+	if (_offline_queue_count == 0) {
+		return;
+	}
+	/* Inside the initial-sync window or a live contact dump — the sync itself
+	 * will drain the queue, and prompting now would truncate it. Both cases
+	 * live in vcontactMsgWaitHeld(); the dump has its own stall watchdog and
+	 * _last_sync_req_ms covers an active message drain, so nothing is stranded
+	 * by waiting here. */
+	if (vcontactMsgWaitHeld()) {
+		return;
+	}
+	int64_t now = _ms->getMillis();
+	int64_t last = (_last_sync_req_ms > _last_msgwait_ms) ? _last_sync_req_ms
+							      : _last_msgwait_ms;
+	if (now - last < MSGWAIT_REPROMPT_MS) {
+		return;
+	}
+	LOG_WRN("msgwait watchdog: %d queued, app quiet for %ds, re-prompting",
+		_offline_queue_count, (int)((now - last) / 1000));
+	pushMsgWaiting();
+}
+
 bool CompanionMesh::continueContactIteration()
 {
 	if (!_contact_iter_active) return false;
@@ -835,7 +927,7 @@ void CompanionMesh::onMessageRecv(const ContactInfo &contact, mesh::Packet *pkt,
 
 	markConnectionActive(contact);
 	queueContactMessage(contact, pkt, TXT_TYPE_PLAIN, sender_timestamp, nullptr, 0, text);
-	sendPush(PUSH_CODE_MSG_WAITING);
+	pushMsgWaiting();
 #if ZEPHCORE_HAS_UI_TASK
 	notify_contact_msg_ui(contact, pkt, text, _offline_queue_count);
 #endif
@@ -1003,8 +1095,12 @@ void CompanionMesh::vcontactQueueText(const char *text)
 	 * prompting for messages from a contact the app just dropped is noise. The
 	 * messages stay in the offline queue and drain on the next connect, when
 	 * the contact is back. */
-	if (!_vcontact_hold_msgwait && !_vcontact_app_hidden) {
-		sendPush(PUSH_CODE_MSG_WAITING);
+	if (!vcontactMsgWaitHeld() && !_vcontact_app_hidden) {
+		pushMsgWaiting();
+	} else {
+		LOG_INF("msgwait: suppressed (hold=%d hidden=%d), %d queued",
+			(int)_vcontact_hold_msgwait, (int)_vcontact_app_hidden,
+			_offline_queue_count);
 	}
 }
 
@@ -1444,7 +1540,7 @@ void CompanionMesh::queueLocalSentContactMessage(const ContactInfo &contact,
 
 	LOG_DBG("queueLocalSentContactMessage: frame_len=%d delivered=%d", i, (int)delivered);
 	queueOfflineMessage(frame, i);
-	sendPush(PUSH_CODE_MSG_WAITING);
+	pushMsgWaiting();
 }
 
 void CompanionMesh::queueLocalSentChannelMessage(uint8_t channel_idx,
@@ -1490,7 +1586,7 @@ void CompanionMesh::queueLocalSentChannelMessage(uint8_t channel_idx,
 	LOG_DBG("queueLocalSentChannelMessage: frame_len=%d channel_idx=%d heard=%d",
 		i, channel_idx, (int)heard_repeat);
 	queueOfflineMessage(frame, i);
-	sendPush(PUSH_CODE_MSG_WAITING);
+	pushMsgWaiting();
 }
 
 void CompanionMesh::onCommandDataRecv(const ContactInfo &contact, mesh::Packet *pkt,
@@ -1501,7 +1597,7 @@ void CompanionMesh::onCommandDataRecv(const ContactInfo &contact, mesh::Packet *
 
 	markConnectionActive(contact);
 	queueContactMessage(contact, pkt, TXT_TYPE_CLI_DATA, sender_timestamp, nullptr, 0, text);
-	sendPush(PUSH_CODE_MSG_WAITING);
+	pushMsgWaiting();
 	{
 		struct ui_joystick_cli_data cli = { text };
 		ui_notify_joystick_event(UI_JOYSTICK_CLI_RESPONSE, contact.id.pub_key, &cli);
@@ -1518,7 +1614,7 @@ void CompanionMesh::onSignedMessageRecv(const ContactInfo &contact, mesh::Packet
 	markContactsDirty();
 	// sender_prefix is 4 bytes
 	queueContactMessage(contact, pkt, TXT_TYPE_SIGNED_PLAIN, sender_timestamp, sender_prefix, 4, text);
-	sendPush(PUSH_CODE_MSG_WAITING);
+	pushMsgWaiting();
 #if ZEPHCORE_HAS_UI_TASK
 	notify_contact_msg_ui(contact, pkt, text, _offline_queue_count);
 #endif
@@ -1588,7 +1684,7 @@ void CompanionMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh
 
 	LOG_DBG("onChannelMessageRecv: frame_len=%d channel_idx=%d", i, channel_idx);
 	queueOfflineMessage(frame, i);
-	sendPush(PUSH_CODE_MSG_WAITING);
+	pushMsgWaiting();
 #if ZEPHCORE_HAS_UI_TASK
 	{
 		ChannelDetails ch;
@@ -1633,7 +1729,7 @@ void CompanionMesh::onChannelDataRecv(const mesh::GroupChannel &channel, mesh::P
 	LOG_DBG("onChannelDataRecv: frame_len=%d channel_idx=%d data_type=%d",
 		i, channel_idx, (int)data_type);
 	queueOfflineMessage(frame, i);
-	sendPush(PUSH_CODE_MSG_WAITING);
+	pushMsgWaiting();
 }
 
 int CompanionMesh::appendSelfTelemetry(uint8_t *reply, uint8_t permissions)
@@ -2264,6 +2360,7 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 			sendPacketError(ERR_ILLEGAL_ARG);
 			return true;
 		}
+		LOG_INF("CMD_APP_START: session reset, %d queued", _offline_queue_count);
 		// Reset per-session state for a fresh app session. BLE/USB also run
 		// this cleanup on disconnect, but the serial transport has no
 		// disconnect event, so APP_START is its authoritative session-reset
@@ -2282,8 +2379,11 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 		k_work_cancel_delayable(&_vcontact_confirm_work.work);
 
 		/* New session: suppress v-contact notice MSG_WAITING until the initial
-		 * sync (contacts + messages) completes at PACKET_NO_MORE_MSGS. */
+		 * sync (contacts + messages) completes at PACKET_NO_MORE_MSGS, or the
+		 * deadline expires — see _vcontact_hold_expiry for why the latch needs
+		 * a second exit. */
 		_vcontact_hold_msgwait = true;
+		_vcontact_hold_expiry = _ms->getMillis() + VCONTACT_HOLD_MAX_MS;
 		/* An app-side delete only hides the v-contact for the session it
 		 * happened in — this is that session boundary, so it comes back. */
 		_vcontact_app_hidden = false;
@@ -2755,6 +2855,11 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 		LOG_DBG("CMD_SYNC_NEXT_MESSAGE: queue_count=%d pending=%d",
 			_offline_queue_count, _sync_pending);
 
+		/* The app is draining — hold the watchdog off for another window. */
+		_last_sync_req_ms = _ms->getMillis();
+		LOG_INF("msgwait: app asked for next msg, %d queued",
+			_offline_queue_count);
+
 		/* Phone asking for next = implicit ACK for the previously-peeked message */
 		if (_sync_pending) {
 			confirmOfflineMessage();
@@ -2788,8 +2893,9 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 			 * the window was just drained by this message-sync; if one raced in
 			 * after the last peek, prompt for it now. */
 			_vcontact_hold_msgwait = false;
+			_vcontact_hold_expiry = 0;
 			if (_offline_queue_count > 0) {
-				sendPush(PUSH_CODE_MSG_WAITING);
+				pushMsgWaiting();
 			}
 		}
 		return true;

@@ -371,20 +371,26 @@ static void retry_pending_reply(void)
  * Push notification callback - sends push frames to BLE.
  * Push frames have format: [push_code] [data...]
  */
+/* True when a binary companion client is actually listening.
+ *
+ * A USB companion session is "connected" too, but zephcore_ble_is_connected()
+ * only reports the BLE link — without the USB check, pushes (new messages,
+ * etc.) are silently dropped on a USB-attached client.  A text-CLI session is
+ * not a binary companion, so V3 frames must not go to it. */
+static bool companion_transport_up(void)
+{
+	bool up = zephcore_ble_is_connected();
+#if ZEPHCORE_USB_STACK
+	up = up || (zephcore_ble_get_active_iface() == ZEPHCORE_IFACE_USB &&
+		    !zephcore_usb_companion_is_text_session());
+#endif
+	return up;
+}
+
 static void push_callback(uint8_t code, const uint8_t *data, size_t len)
 {
-	/* No point serializing if nobody is listening. A USB companion session
-	 * is "connected" too, but zephcore_ble_is_connected() only reports the BLE
-	 * link — without the USB check, pushes (new messages, etc.) are silently
-	 * dropped on a USB-attached client. */
-	bool transport_up = zephcore_ble_is_connected();
-#if ZEPHCORE_USB_STACK
-	/* A text-CLI session is not a binary companion — don't push V3 frames to it. */
-	transport_up = transport_up ||
-		(zephcore_ble_get_active_iface() == ZEPHCORE_IFACE_USB &&
-		 !zephcore_usb_companion_is_text_session());
-#endif
-	if (!transport_up) return;
+	/* No point serializing if nobody is listening. */
+	if (!companion_transport_up()) return;
 
 	/* Push frame: code byte + optional data */
 	uint8_t push_buf[1 + MAX_FRAME_SIZE - 1];
@@ -597,6 +603,24 @@ static void mesh_event_loop(void)
 				wd_last_iter_idx = idx;
 			} else {
 				wd_last_iter_idx = -1;
+			}
+
+			/* Offline-queue stall watchdog — the queue is drained
+			 * solely by the app answering a single best-effort
+			 * MSG_WAITING push, so one dropped or suppressed prompt
+			 * strands every queued message until the next connect
+			 * (the "v-contact replies only arrive on reconnect"
+			 * failure). Same shape as the contact-dump watchdog
+			 * above: self-throttled, re-prompts only after the app
+			 * has gone quiet.
+			 *
+			 * Gated on a live client: prompting into a dead link
+			 * accomplishes nothing, spams the log every cycle, and
+			 * burns the re-prompt timer so the first prompt after a
+			 * reconnect would be late. A reconnect drains the queue
+			 * through the initial sync anyway. */
+			if (companion_mesh_ptr && companion_transport_up()) {
+				companion_mesh_ptr->msgWaitingWatchdog();
 			}
 
 			/* BLE advertising watchdog — if bt_le_adv_start failed

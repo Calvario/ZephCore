@@ -212,6 +212,23 @@ public:
 	int getContactIterIdx() const { return _contact_iter_idx; }
 
 	/**
+	 * Offline-queue stall watchdog — call from the housekeeping tick.
+	 *
+	 * A queued message reaches the app through exactly one best-effort
+	 * PUSH_CODE_MSG_WAITING, which the app answers with CMD_SYNC_NEXT_MESSAGE.
+	 * Nothing retried that push: if it was dropped (BLE congestion) or
+	 * suppressed (_vcontact_hold_msgwait), or the app simply ignored it because
+	 * it believed a sync was already running, the queue sat untouched until the
+	 * next connect — the app showed a delivered message with no reply, then
+	 * received the whole backlog at once on reconnect. The contact dump and
+	 * advertising both already have a watchdog here; the message queue did not.
+	 *
+	 * MSG_WAITING is one of the three genuinely idempotent push codes (see
+	 * zephcore_ble_send's overflow note), so a duplicate prompt costs nothing.
+	 */
+	void msgWaitingWatchdog();
+
+	/**
 	 * Cancel pending message sync. Un-ACKed message stays in queue.
 	 * Call on BLE disconnect so the message is re-sent on reconnect.
 	 */
@@ -529,8 +546,32 @@ private:
 	 * CMD_SET_DEVICE_TIME) it makes the app interleave message-sync into the
 	 * contact stream, which trips the "reset iterator on any other command"
 	 * guard and truncates the sync. Held from CMD_APP_START until the first
-	 * PACKET_NO_MORE_MSGS (end of the contacts+messages initial sync). */
+	 * PACKET_NO_MORE_MSGS (end of the contacts+messages initial sync).
+	 *
+	 * Bounded by _vcontact_hold_expiry. PACKET_NO_MORE_MSGS used to be the only
+	 * exit, and the app is not obliged to produce it: a session that set the
+	 * latch and then never message-synced to empty kept it forever, so every
+	 * later CLI reply, battery alert and notice queued silently and the user
+	 * saw the backlog only on reconnect. Confirmed on hardware — the app
+	 * re-issues CMD_APP_START when its device-settings screen opens, about 4 s
+	 * before the GPS toggle that appeared to cause it, on a connection already
+	 * hours old and long past its initial sync.
+	 *
+	 * The real hazard (a prompt landing mid contact-dump) is checked directly
+	 * in vcontactMsgWaitHeld(), so this latch is now only the CMD_APP_START ->
+	 * CMD_GET_CONTACTS handoff guard and its deadline is sized accordingly.
+	 * See VCONTACT_HOLD_MAX_MS. */
 	bool _vcontact_hold_msgwait;
+	int64_t _vcontact_hold_expiry;   /* _ms->getMillis() deadline for the latch */
+	/** Read the latch, expiring it first. Use instead of touching the flag. */
+	bool vcontactMsgWaitHeld();
+	/* Offline-queue stall watchdog state, both _ms->getMillis(). The watchdog
+	 * re-prompts only once the later of the two has gone quiet. */
+	int64_t _last_msgwait_ms;   /* last PUSH_CODE_MSG_WAITING we emitted */
+	int64_t _last_sync_req_ms;  /* last CMD_SYNC_NEXT_MESSAGE the app sent */
+	/** Emit PUSH_CODE_MSG_WAITING and stamp the watchdog. Every prompt goes
+	 *  through here so the watchdog cannot fire on top of a live sync. */
+	void pushMsgWaiting();
 	/* App-side delete (CMD_REMOVE_CONTACT for the loopback key) hides the
 	 * v-contact for the rest of the session only — it deliberately does NOT
 	 * touch prefs.v_contact_enabled. The v-contact is an ordinary entry in the
