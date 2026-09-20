@@ -47,6 +47,21 @@ env:
   # a release rather than assuming.
   prerelease: "true"
 
+# Runner image and third-party actions are pinned, not floating.
+#
+# runs-on: every job says ubuntu-24.04 rather than ubuntu-latest. That label
+# flips to Ubuntu 26 on 2026-10-19 and would move the whole cross-compile
+# toolchain under a release pipeline with no commit here to point at. 24.04 is
+# what ubuntu-latest resolves to today, so this pin changes nothing now and
+# makes the move to 26 a deliberate, testable commit later.
+#
+# uses: the two third-party actions are pinned to full commit SHAs with the
+# version in a trailing comment. A floating major tag can be repointed
+# upstream, and action-gh-release runs in a contents: write job holding
+# GITHUB_TOKEN. This is also how the Node 20 runtime warning used to appear and
+# vanish with no change on our side. Bump a pin by editing the SHA and the
+# comment together. First-party actions/* are left on major tags.
+
 jobs:
   # Populates the west-modules cache once so the five build jobs do not each pay
   # for a cold `west update` plus a blob download. Compiles nothing, which is why
@@ -57,7 +72,7 @@ jobs:
   # restore-only, so a tree that a build has patched in place can never be saved
   # back — the cached modules stay pristine-plus-blobs.
   setup-zephyr:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
     - uses: actions/checkout@v6
@@ -87,7 +102,7 @@ jobs:
         key: zephyr-modules-${{ runner.os }}-${{ hashFiles('zephcore/west.yml') }}
 
     - name: Setup Zephyr project
-      uses: zephyrproject-rtos/action-zephyr-setup@v1
+      uses: zephyrproject-rtos/action-zephyr-setup@be8136a8bba01580485d98b7ad2d32477c36a49a # v1.0.15
       with:
         app-path: zephcore
         toolchains: ${{ env.toolchains }}
@@ -106,7 +121,7 @@ jobs:
 
   build-nrf:
     needs: setup-zephyr
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
     - uses: actions/checkout@v6
@@ -139,7 +154,7 @@ jobs:
     # Size knob if hit rates look poor: ccache-max-size (default 512MB).
     # build-nrf compiles ~40 board/role combos and will churn inside that cap.
     - name: Setup Zephyr project
-      uses: zephyrproject-rtos/action-zephyr-setup@v1
+      uses: zephyrproject-rtos/action-zephyr-setup@be8136a8bba01580485d98b7ad2d32477c36a49a # v1.0.15
       with:
         app-path: zephcore
         toolchains: ${{ env.toolchains }}
@@ -177,7 +192,7 @@ jobs:
 
   build-esp32-repeaters:
     needs: setup-zephyr
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
     - uses: actions/checkout@v6
@@ -194,7 +209,7 @@ jobs:
         key: zephyr-modules-${{ runner.os }}-${{ hashFiles('zephcore/west.yml') }}
 
     - name: Setup Zephyr project
-      uses: zephyrproject-rtos/action-zephyr-setup@v1
+      uses: zephyrproject-rtos/action-zephyr-setup@be8136a8bba01580485d98b7ad2d32477c36a49a # v1.0.15
       with:
         app-path: zephcore
         toolchains: ${{ env.toolchains }}
@@ -223,7 +238,7 @@ jobs:
 
   build-linux:
     needs: setup-zephyr
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
     - uses: actions/checkout@v6
@@ -240,7 +255,7 @@ jobs:
         key: zephyr-modules-${{ runner.os }}-${{ hashFiles('zephcore/west.yml') }}
 
     - name: Setup Zephyr project
-      uses: zephyrproject-rtos/action-zephyr-setup@v1
+      uses: zephyrproject-rtos/action-zephyr-setup@be8136a8bba01580485d98b7ad2d32477c36a49a # v1.0.15
       with:
         app-path: zephcore
         toolchains: ${{ env.toolchains }}
@@ -278,7 +293,7 @@ jobs:
   # toolchain that `toolchains` already installs.
   build-swd:
     needs: setup-zephyr
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
     - uses: actions/checkout@v6
@@ -295,7 +310,7 @@ jobs:
         key: zephyr-modules-${{ runner.os }}-${{ hashFiles('zephcore/west.yml') }}
 
     - name: Setup Zephyr project
-      uses: zephyrproject-rtos/action-zephyr-setup@v1
+      uses: zephyrproject-rtos/action-zephyr-setup@be8136a8bba01580485d98b7ad2d32477c36a49a # v1.0.15
       with:
         app-path: zephcore
         toolchains: ${{ env.toolchains }}
@@ -327,7 +342,7 @@ jobs:
 
   build-esp32-companions:
     needs: setup-zephyr
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
     - uses: actions/checkout@v6
@@ -344,7 +359,7 @@ jobs:
         key: zephyr-modules-${{ runner.os }}-${{ hashFiles('zephcore/west.yml') }}
 
     - name: Setup Zephyr project
-      uses: zephyrproject-rtos/action-zephyr-setup@v1
+      uses: zephyrproject-rtos/action-zephyr-setup@be8136a8bba01580485d98b7ad2d32477c36a49a # v1.0.15
       with:
         app-path: zephcore
         toolchains: ${{ env.toolchains }}
@@ -372,7 +387,7 @@ jobs:
   create-release:
     needs: [build-nrf, build-esp32-companions, build-esp32-repeaters, build-linux,
             build-swd]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Needs write to create the release AND to delete/replace an existing one for
     # the same version (see the "replace existing release" step below).
     permissions:
@@ -473,7 +488,7 @@ jobs:
         fi
 
     - name: create release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
@@ -500,7 +515,7 @@ jobs:
   publish-catalog:
     needs: create-release
     if: needs.create-release.outputs.prerelease != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
 
