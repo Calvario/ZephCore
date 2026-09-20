@@ -39,6 +39,21 @@ void ClientACL::load(const char* path, const mesh::LocalIdentity& self_id) {
 
 		if (!success) break;  // EOF
 
+		/* out_path_len is the one byte in this file that steers routing, and
+		 * it is used without a later bounds check: anything that is not
+		 * OUT_PATH_UNKNOWN is taken as a usable path.  A value with the
+		 * reserved hash size 4 (0xC0-0xFE) passes that test, then copyPath()
+		 * rejects the encoding inside sendDirect() and the reply leaves as a
+		 * zero-hop direct -- undeliverable, and never retried, because the
+		 * repeater considers the request answered.  Fall back to "unknown",
+		 * which costs one flooded reply and re-learns the real path. */
+		if (c.out_path_len != OUT_PATH_UNKNOWN &&
+		    !mesh::Packet::isValidPathLen(c.out_path_len)) {
+			LOG_WRN("load: client %d has invalid out_path_len 0x%02x, discarding path",
+				num_clients, c.out_path_len);
+			c.out_path_len = OUT_PATH_UNKNOWN;
+		}
+
 		c.id = mesh::Identity(pub_key);
 		self_id.calcSharedSecret(c.shared_secret, pub_key);  // recalculate in case key changed
 

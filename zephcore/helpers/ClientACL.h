@@ -40,7 +40,13 @@ struct ClientInfo {
 	void clear() {
 		id = mesh::Identity();
 		permissions = 0;
-		out_path_len = 0;
+		/* NOT 0 -- that is a valid path_len meaning "zero-hop direct", so a
+		 * cleared slot would claim a usable route and every reply to that
+		 * client would go out DIRECT with an empty path, reaching only its
+		 * immediate neighbours.  Silent: the sender believes it answered.
+		 * putClient() happens to overwrite this today, so nothing currently
+		 * observes the 0; the correct default belongs here regardless. */
+		out_path_len = OUT_PATH_UNKNOWN;
 		memset(out_path, 0, sizeof(out_path));
 		memset(shared_secret, 0, sizeof(shared_secret));
 		last_timestamp = 0;
