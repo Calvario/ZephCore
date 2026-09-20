@@ -1035,7 +1035,9 @@ RepeaterMesh::RepeaterMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Mil
 	strcpy(_prefs.node_name, "Repeater");
 	_prefs.advert_loc_policy = ADVERT_LOC_PREFS;  // Repeaters always advertise prefs coordinates
 	_prefs.loop_detect = LOOP_DETECT_MODERATE;
-	_prefs.path_hash_mode = 1;
+	/* path_hash_mode = 1 moved into initNodePrefs() -- it is the default for
+	 * every role, and a default listed only at one call site is invisible to
+	 * the others (the companion never got it). */
 #if IS_ENABLED(CONFIG_ZEPHCORE_REPEATER_UPLINK) && IS_ENABLED(CONFIG_MQTT_LIB)
 	memset(&_uplink_creds, 0, sizeof(_uplink_creds));
 	observer_creds_init(&_uplink_creds);

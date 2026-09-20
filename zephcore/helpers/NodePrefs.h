@@ -341,7 +341,11 @@ static inline void sanitizeNodePrefs(NodePrefs* p) {
 	if (p->advert_loc_policy   > ADVERT_LOC_PREFS)     p->advert_loc_policy   = ADVERT_LOC_NONE;
 
 	if (p->loop_detect    > LOOP_DETECT_STRICT) p->loop_detect    = LOOP_DETECT_MINIMAL;
-	if (p->path_hash_mode > 2)                  p->path_hash_mode = 0;
+	/* Fallback must be the initNodePrefs() default (1 = 2-byte hashes). It was
+	 * 0, so a corrupt byte silently dropped the node to 1-byte path hashes --
+	 * a value no role defaults to, and one the CLI would not report as the
+	 * default either. */
+	if (p->path_hash_mode > 2)                  p->path_hash_mode = 1;
 	p->autoadd_max_hops    = clampPref<uint8_t>(p->autoadd_max_hops, 0, 64);
 	p->flood_max           = clampPref<uint8_t>(p->flood_max, 0, 64);
 	p->flood_max_unscoped  = clampPref<uint8_t>(p->flood_max_unscoped, 0, 64);
@@ -414,6 +418,16 @@ static inline void initNodePrefs(NodePrefs* prefs) {
 	prefs->flood_max = 64;            // max hops for flood packets (0 = blocking all!)
 	prefs->flood_max_unscoped = 64;  // un-scoped flood hop limit (defaults to flood_max)
 	prefs->flood_max_advert = 8;     // ADVERT flood hop limit (upstream default)
+	/* 2-byte path hashes (mode + 1 = hash size) for everything this node
+	 * originates.  ZephCore's default, not upstream's -- Arduino MeshCore
+	 * ships 0 (1-byte) for every role, which collides far more often on a
+	 * dense mesh.  It lived only in the RepeaterMesh and RoomServerMesh
+	 * constructors until now, so a fresh companion quietly originated 1-byte
+	 * floods and reported mode 0 to the app, and `set path.hash.mode default`
+	 * wrote 0 even on a repeater that had booted at 1.  Deployed nodes keep
+	 * whatever they stored: path_hash_mode sits at a fixed prefs offset that
+	 * always loads, so this only changes a factory-fresh node. */
+	prefs->path_hash_mode = 1;       // 2-byte path hashes
 	prefs->interference_threshold = 0;
 	prefs->leds_disabled = 0;         // LEDs on
 	prefs->leds_radio_mode = LEDS_RADIO_TX;  // activity LED on transmit, as before

@@ -400,7 +400,6 @@ private:
 
 	/* Advert path table for tracking recently heard nodes */
 	AdvertPath _advert_paths[ADVERT_PATH_TABLE_SIZE];
-	int _next_advert_path_idx;
 
 	/* Signing state */
 	uint8_t *_sign_data;

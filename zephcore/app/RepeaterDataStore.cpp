@@ -193,7 +193,7 @@ bool RepeaterDataStore::loadPrefs(NodePrefs& prefs) {
 		strcpy(prefs.node_name, "Repeater");
 		prefs.advert_loc_policy = ADVERT_LOC_PREFS;
 		prefs.loop_detect = LOOP_DETECT_MODERATE;
-		prefs.path_hash_mode = 1;
+		/* path_hash_mode = 1 comes from initNodePrefs() now. */
 		prefs.gps_interval = CONFIG_ZEPHCORE_REPEATER_GPS_INTERVAL_SEC;  // repeater default (48h)
 		/* Persist defaults so flash always has a prefs file from boot 1.
 		 * Lets later code (e.g. tempradio revert) trust that flash is

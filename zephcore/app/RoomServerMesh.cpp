@@ -781,7 +781,7 @@ RoomServerMesh::RoomServerMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh:
 	initNodePrefs(&_prefs);
 	strcpy(_prefs.node_name, "Room");
 	_prefs.advert_loc_policy = ADVERT_LOC_PREFS;  // advertise prefs coordinates
-	_prefs.path_hash_mode = 1;
+	/* path_hash_mode = 1 moved into initNodePrefs() -- see RepeaterMesh. */
 	_prefs.disable_fwd = 1;  // a room server is an endpoint, never repeats
 
 	/* Room server: circular post buffer + round-robin push state */

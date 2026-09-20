@@ -41,8 +41,22 @@ size_t Packet::writePath(uint8_t *dest, const uint8_t *src, size_t src_len, uint
 
 uint8_t Packet::copyPath(uint8_t *dest, const uint8_t *src, size_t src_len, uint8_t path_len)
 {
-	size_t written = writePath(dest, src, src_len, path_len);
-	return written > 0 ? path_len : 0;
+	/* A zero-hop path copies no bytes, so writePath()'s 0 return is ambiguous
+	 * there: it means both "rejected" and "nothing to copy".  Taking it as a
+	 * rejection discards the hash-size bits (7:6), which are all a zero-hop
+	 * path_len carries -- a directly-heard 2-byte-hash advert (0x40) came out
+	 * as 0x00 and every consumer then read it as 1-byte.  Decode the hop count
+	 * first so the empty case is validated instead of copied.
+	 *
+	 * isValidPathLen() still rejects the reserved hash size 4, so
+	 * OUT_PATH_UNKNOWN (0xFF) and 0xC0 keep returning 0 as before; callers
+	 * that test `copyPath(...) == 0` for a malformed path are unaffected, as
+	 * long as they already special-case a path_len of 0 (which is itself a
+	 * legal zero-hop, 1-byte-hash path and returns 0 either way). */
+	if ((path_len & 0x3F) == 0) {
+		return isValidPathLen(path_len) ? path_len : 0;
+	}
+	return writePath(dest, src, src_len, path_len) > 0 ? path_len : 0;
 }
 
 int Packet::getRawLength() const

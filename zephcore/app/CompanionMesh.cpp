@@ -190,7 +190,6 @@ CompanionMesh::CompanionMesh(mesh::Radio &radio, mesh::MillisecondClock &ms, mes
 	_sync_pending = false;
 	memset(_ack_table, 0, sizeof(_ack_table));
 	memset(_advert_paths, 0, sizeof(_advert_paths));
-	_next_advert_path_idx = 0;
 	_sign_data = nullptr;
 	_sign_data_len = 0;
 	_sign_data_capacity = 0;
@@ -752,14 +751,33 @@ void CompanionMesh::onDiscoveredContact(ContactInfo &contact, bool is_new, uint8
 
 	// Update advert path table
 	if (path && mesh::Packet::isValidPathLen(path_len)) {
-		AdvertPath *ap = &_advert_paths[_next_advert_path_idx];
+		/* Update this node's existing slot if it has one, else take the least
+		 * recently heard (an empty slot has recv_timestamp 0 and wins first).
+		 *
+		 * This used to round-robin into a write cursor with no lookup, so a
+		 * node heard N times occupied N of the slots, evicting other nodes,
+		 * and findAdvertPath() -- which returns the first array match, not the
+		 * newest -- could hand the app a stale path for a node whose route had
+		 * since changed. */
+		AdvertPath *ap = &_advert_paths[0];
+		uint32_t oldest = 0xFFFFFFFF;
+		for (int i = 0; i < ADVERT_PATH_TABLE_SIZE; i++) {
+			if (memcmp(_advert_paths[i].pubkey_prefix, contact.id.pub_key,
+				   sizeof(AdvertPath::pubkey_prefix)) == 0) {
+				ap = &_advert_paths[i];
+				break;
+			}
+			if (_advert_paths[i].recv_timestamp < oldest) {
+				oldest = _advert_paths[i].recv_timestamp;
+				ap = &_advert_paths[i];
+			}
+		}
 		memcpy(ap->pubkey_prefix, contact.id.pub_key, 7);
 		memcpy(ap->name, contact.name, sizeof(ap->name));
 		ap->recv_timestamp = (uint32_t)getRTCClock()->getCurrentTime();
 		/* path source is from inbound advert; upstream parser bounds it within
 		 * the packet payload.  AdvertPath::path is MAX_PATH_SIZE-sized. */
 		ap->path_len = mesh::Packet::copyPath(ap->path, path, MAX_PATH_SIZE, path_len);
-		_next_advert_path_idx = (_next_advert_path_idx + 1) % ADVERT_PATH_TABLE_SIZE;
 	}
 
 	// Send push notification
