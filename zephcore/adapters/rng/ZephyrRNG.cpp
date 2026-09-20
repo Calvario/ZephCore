@@ -272,17 +272,29 @@ static void report_beat(const char *label, const struct beat_stats *st)
  *
  * Uses PSA crypto API (already enabled via PSA_WANT_KEY_TYPE_AES +
  * PSA_WANT_ALG_ECB_NO_PADDING in zephcore_common.conf).
+ *
+ * Every failure path fills `err` with the failing step and the raw
+ * psa_status_t.  Failure here is a panic-reboot loop the user sees as a
+ * dead board (GH #88 on ttgo_tbeam), and the status code is the only
+ * thing that says WHICH step failed — a bare "extraction failed" costs a
+ * round trip to the reporter for a build that prints it.  Sized for the
+ * caller's stack buffer; truncation is harmless.
  */
 static int extract_via_aes_ctr(const uint8_t *pool, size_t pool_len,
-			       uint8_t *out, size_t out_len)
+			       uint8_t *out, size_t out_len,
+			       char *err, size_t err_len)
 {
 	psa_status_t status;
 	uint8_t key[32];
 	size_t key_len = 0;
 
 	/* PSA is idempotent — already initialized via mbedTLS but a defensive
-	 * call here costs nothing if it returns PSA_ERROR_ALREADY_EXISTS. */
-	(void)psa_crypto_init();
+	 * call here costs nothing if it returns PSA_ERROR_ALREADY_EXISTS.
+	 * Status kept (not discarded) purely for the error text: a failed init
+	 * makes every call below return PSA_ERROR_BAD_STATE, and reporting both
+	 * numbers together separates "PSA never came up" from "this one
+	 * operation failed". */
+	psa_status_t init_status = psa_crypto_init();
 
 	/* Extract: SHA-256(pool) → AES key.  Open-coded here (NOT Utils::sha256)
 	 * on purpose: that wrapper returns void and silently zeroes its output on
@@ -294,6 +306,9 @@ static int extract_via_aes_ctr(const uint8_t *pool, size_t pool_len,
 				  key, sizeof(key), &key_len);
 	if (status != PSA_SUCCESS || key_len != sizeof(key)) {
 		Utils::secureZeroize(key, sizeof(key));
+		snprintk(err, err_len,
+			 "AES-CTR extract: sha256 psa=%d len=%u init=%d",
+			 (int)status, (unsigned)key_len, (int)init_status);
 		return -1;
 	}
 
@@ -309,6 +324,9 @@ static int extract_via_aes_ctr(const uint8_t *pool, size_t pool_len,
 	/* Wipe stack-resident AES key — secureZeroize survives -Os DSE. */
 	Utils::secureZeroize(key, sizeof(key));
 	if (status != PSA_SUCCESS) {
+		snprintk(err, err_len,
+			 "AES-CTR extract: import_key psa=%d init=%d",
+			 (int)status, (int)init_status);
 		return -1;
 	}
 
@@ -323,6 +341,10 @@ static int extract_via_aes_ctr(const uint8_t *pool, size_t pool_len,
 					    counter, sizeof(counter),
 					    block, sizeof(block), &block_out);
 		if (status != PSA_SUCCESS || block_out != sizeof(block)) {
+			snprintk(err, err_len,
+				 "AES-CTR extract: cipher psa=%d out=%u at %u init=%d",
+				 (int)status, (unsigned)block_out,
+				 (unsigned)pos, (int)init_status);
 			ret = -1;
 			break;
 		}
@@ -471,8 +493,10 @@ void ZephyrRNG::mixIdentitySeed(uint8_t *out, size_t out_len,
 	 * AES key via SHA-256(pool), then expands to out_len bytes via
 	 * AES-ECB on a 128-bit counter. Per crypto consultant guidance —
 	 * see extract_via_aes_ctr() for full rationale. */
-	if (extract_via_aes_ctr(pool, sizeof(pool), out, out_len) != 0) {
-		Utils::cryptoPanicReboot("AES-CTR seed extraction failed");
+	char extract_err[80] = "AES-CTR seed extraction failed";
+	if (extract_via_aes_ctr(pool, sizeof(pool), out, out_len,
+				extract_err, sizeof(extract_err)) != 0) {
+		Utils::cryptoPanicReboot(extract_err);
 	}
 
 	/* Output sanity check — reject all-zero / all-0xFF (catastrophic
