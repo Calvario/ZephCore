@@ -134,6 +134,18 @@ class CommonCLI {
 	int64_t _reboot_deadline_ms;
 	static void rebootWorkHandler(struct k_work *work);
 
+	/* Bytes the caller already consumed at the head of the reply buffer before
+	 * handing it to us — see setReplyHeaderUsed(). */
+	uint8_t _reply_hdr_used;
+
+	/* Space a handler may write at `reply`, terminator included.  Local USB
+	 * gets the full buffer; a remote reply rides in the caller's packet buffer
+	 * and must also leave room for whatever the caller wrote ahead of us. */
+	size_t replyCap(uint32_t sender_timestamp) const {
+		return (sender_timestamp == 0) ? CLI_REPLY_SIZE
+					       : (CLI_REMOTE_REPLY_SIZE - _reply_hdr_used);
+	}
+
 	mesh::RTCClock* getRTCClock() { return _rtc; }
 	void savePrefs();
 	void scheduleReboot(uint8_t type);
@@ -142,10 +154,17 @@ public:
 	CommonCLI(mesh::MainBoard& board, mesh::RTCClock& rtc, ClientACL& acl,
 		  NodePrefs* prefs, CommonCLICallbacks* callbacks)
 		: _board(&board), _rtc(&rtc), _acl(&acl), _prefs(prefs), _callbacks(callbacks),
-		  _pending_reboot(REBOOT_NONE), _reboot_deadline_ms(0)
+		  _pending_reboot(REBOOT_NONE), _reboot_deadline_ms(0), _reply_hdr_used(0)
 	{
 		k_work_init_delayable(&_reboot_work, rebootWorkHandler);
 	}
+
+	/* Roles that strip the `XX|` request-tag prefix echo those 3 bytes into the
+	 * head of the reply buffer and advance `reply` past them before calling us.
+	 * Their buffer is still only 5 + CLI_REMOTE_REPLY_SIZE, so the self-limiting
+	 * handlers have to subtract what was already written or they overrun it.
+	 * Call this on EVERY dispatch, with 0 when no prefix was stripped. */
+	void setReplyHeaderUsed(uint8_t n) { _reply_hdr_used = n; }
 
 	void handleCommand(uint32_t sender_timestamp, const char* command, char* reply);
 	uint8_t buildAdvertData(uint8_t node_type, uint8_t* app_data);

@@ -1371,11 +1371,17 @@ void RepeaterMesh::handleCommand(uint32_t sender_timestamp, char* command, char*
 
 	while (*command == ' ') command++;
 
+	uint8_t hdr_used = 0;
 	if (strlen(command) > 4 && command[2] == '|') {
 		memcpy(reply, command, 3);
 		reply += 3;
 		command += 3;
+		hdr_used = 3;
 	}
+	/* Tell the shared CLI how much of the caller's buffer is already spent, so
+	 * the self-limiting handlers do not write past temp[5 + CLI_REMOTE_REPLY_SIZE].
+	 * Set unconditionally: a stale value would shrink the next reply. */
+	_cli.setReplyHeaderUsed(hdr_used);
 
 #if IS_ENABLED(CONFIG_ZEPHCORE_REPEATER_UPLINK) && IS_ENABLED(CONFIG_MQTT_LIB)
 	if (handleUplinkCommand(command, reply)) {

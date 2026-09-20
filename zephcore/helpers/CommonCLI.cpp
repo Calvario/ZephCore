@@ -683,9 +683,15 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
 		} else if (memcmp(config, "tz.offset", 9) == 0) {
 			snprintf(reply, CLI_REPLY_SIZE, "> %d", (int)_prefs->tz_offset);
 		} else if (memcmp(config, "gps diag", 8) == 0) {
-			// What the last module-configuration attempt actually did.
+			/* What the last module-configuration attempt actually did.
+			 * Self-limits on the remote path like cad.stats/meshtimesync:
+			 * gps_get_diag_report() bounds itself by the length it is
+			 * handed, and the full report (long module version + wide
+			 * counters + the no-GPS_SAT_DIAG tail) can exceed the
+			 * caller's packet buffer. */
+			size_t cap = replyCap(sender_timestamp);
 			reply[0] = '>'; reply[1] = ' ';
-			gps_get_diag_report(reply + 2, CLI_REPLY_SIZE - 2);
+			gps_get_diag_report(reply + 2, cap - 2);
 		} else if (memcmp(config, "gps duty", 8) == 0) {
 			uint32_t s = gps_get_poll_interval_sec();  // now-effective value
 			if (s == 0) strcpy(reply, "> always on (0)");
@@ -706,8 +712,7 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
 			/* Runtime state + per-level probe stats live in the radio.
 			 * ZephCore-only; must stay ahead of the "cad" prefix match below.
 			 * Remote replies get the truncated buffer like meshtimesync. */
-			size_t cap = (sender_timestamp == 0) ? CLI_REPLY_SIZE
-												 : CLI_REMOTE_REPLY_SIZE;
+			size_t cap = replyCap(sender_timestamp);
 			int n = snprintf(reply, cap, "> ");
 			if (_callbacks->formatCadStatus(reply + n, (int)cap - n) == 0) {
 				strcpy(reply, "not available");
@@ -758,8 +763,7 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
 				/* Only the local USB CLI (sender_timestamp == 0) gets the
 				 * full evidence table; remote replies are truncated to the
 				 * packet buffer. */
-				size_t cap = (sender_timestamp == 0) ? CLI_REPLY_SIZE
-													 : CLI_REMOTE_REPLY_SIZE;
+				size_t cap = replyCap(sender_timestamp);
 				ts->formatStatus(reply, cap, getRTCClock()->getCurrentTime(),
 						 (uint32_t)(k_uptime_get() / 1000),
 						 _prefs->meshtimesync != 0);
