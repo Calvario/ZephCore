@@ -1127,7 +1127,7 @@ config ZEPHCORE_EASTER_EGG_DOOM
 	  Button UI: triple-press ENTER on the Messages page.
 	  Joystick UI: open the Tools menu and select "Doom".
 	  Press BACK/ESC to exit.
-	  Adds ~5KB flash and ~1.7KB RAM when enabled.
+	  Adds ~7KB flash and ~2KB RAM when enabled.
 
 config ZEPHCORE_UI_JOYSTICK
 	bool

@@ -9,11 +9,17 @@
  *
  * Two levels:
  *   L1 — kill 2 monsters (imp + demon); a portal spawns at a random open tile.
- *   L2 — open arena; a slow, 300-HP boss waits in a random corner. Kite and
- *         shoot it to win. Boss is ~4× slower than the player so you can run,
- *         turn, fire, and sprint away before it reaches you.
+ *   L2 — open arena against a 300-HP boss that waits in a random corner.
  *
- * ~1.9 KB RAM, ~6 KB flash when enabled.
+ * The L2 fight is not a damage race. The boss wears armour that soaks 7/8 of
+ * every shot, and only drops it while its jaw is open — during the wind-up
+ * before it spits a fireball, and on the frames its claws are out in melee.
+ * Jaw open is drawn and computed from one predicate, so what you see is
+ * exactly what you can hurt. Below half HP it enrages: twice the speed, a
+ * shorter cast cycle. Shots and fireballs both need line of sight, which is
+ * what makes the arena pillars and the centre block real cover.
+ *
+ * ~2.0 KB RAM, ~7 KB flash when enabled.
  */
 
 #include "doom_game.h"
@@ -53,9 +59,45 @@ LOG_MODULE_REGISTER(doom_game, CONFIG_ZEPHCORE_BOARD_LOG_LEVEL);
 #define COLLISION_R   (FP_ONE / 4)
 #define MAX_ENEMIES   8
 
-#define ENEMY_SPEED   (FP_ONE / 16)  /* imp / demon */
-#define BOSS_SPEED    (FP_ONE / 32)  /* boss — half of normal, ~4× slower than player */
+#define ENEMY_SPEED   (FP_ONE / 16)  /* imp / demon — half the player's pace */
+#define BOSS_SPEED      (FP_ONE / 32) /* boss phase 1 — a quarter of the player */
+#define BOSS_SPEED_RAGE (FP_ONE / 16) /* boss phase 2 — doubles, still outrunnable */
 #define BOSS_HP       300
+
+#define SHOT_DAMAGE    20
+/*
+ * Armour divisor: shots land for SHOT_DAMAGE/8 = 2 while the jaw is shut.
+ * Sized so that holding the trigger down cannot win. A held trigger lands
+ * ~2.4 of its 14 shots per cast cycle inside the window by luck, for ~71 dmg
+ * — 300 HP would take 4.2 cycles and 59 rounds, and the magazine holds ~45
+ * by the time L2 starts. Playing the tell needs 15 rounds.
+ */
+#define BOSS_GUARD_DIV 8
+
+/*
+ * Boss cast cycle. Every fireball is telegraphed: the boss plants its feet and
+ * opens its jaw for BOSS_WINDUP frames first, and that window is the only time
+ * at range when it takes full damage.
+ */
+#define BOSS_WINDUP           12  /* 0.6 s of open jaw before the spit */
+#define BOSS_CAST_PERIOD      70  /* 3.5 s between casts, phase 1 */
+#define BOSS_CAST_PERIOD_RAGE 45  /* 2.25 s, phase 2 */
+#define BOSS_CAST_MIN_DIST    (FP_ONE * 5 / 2)  /* nearer than this it swings */
+/*
+ * Frames the boss spends backing off after a melee swing. Without this it
+ * closes once and camps in the player's face forever: the cast cycle is held
+ * below BOSS_CAST_MIN_DIST, so the tell never fires again and the fight
+ * collapses into a melee grind with nothing to read. Disengaging restores the
+ * loop — close, swing, back out, cast, close again — and at phase-1 speed 50
+ * frames buys back about 1.5 tiles, just past casting range.
+ */
+#define BOSS_RETREAT          50
+
+#define MAX_FIREBALLS  3
+#define FIREBALL_SPEED (FP_ONE / 6)  /* ~3.3 tiles/s — outruns a straight retreat */
+#define FIREBALL_DMG   18
+#define FIREBALL_LIFE  110           /* frames before it burns out */
+#define FIREBALL_HIT_R FP_HALF
 
 /* Input bitflags */
 #define DINPUT_FWD    BIT(0)
@@ -94,6 +136,23 @@ static inline fixed_t fp_abs(fixed_t x)
 	return x < 0 ? -x : x;
 }
 
+/*
+ * |(dx,dy)| by alpha-max-plus-beta-min (alpha 1, beta 3/8): ~7% worst-case
+ * error, no sqrt and no division. Chase and aim vectors normalise with this.
+ * The code this replaced divided by the *squared* distance, which made every
+ * enemy crawl exponentially slower the further away it stood — the boss ran
+ * at roughly a twentieth of its nominal speed at normal engagement range.
+ */
+static inline fixed_t fp_dist(fixed_t dx, fixed_t dy)
+{
+	fixed_t ax = fp_abs(dx);
+	fixed_t ay = fp_abs(dy);
+	fixed_t hi = ax > ay ? ax : ay;
+	fixed_t lo = ax > ay ? ay : ax;
+
+	return hi + (lo >> 2) + (lo >> 3);
+}
+
 /* ========== GAME TYPES ========== */
 
 enum enemy_type {
@@ -126,11 +185,21 @@ struct doom_enemy {
 	fixed_t x, y;
 	int health;
 	int anim_tick;
+	int cast_tick;    /* boss only: frames left in the current cast cycle */
+	int retreat_tick; /* boss only: frames left disengaging after a swing */
+};
+
+struct doom_fireball {
+	bool    active;
+	fixed_t x, y;
+	fixed_t vx, vy;
+	int     life;
 };
 
 struct doom_state {
 	struct doom_player player;
 	struct doom_enemy enemies[MAX_ENEMIES];
+	struct doom_fireball fireballs[MAX_FIREBALLS];
 	int num_enemies;
 	int level;
 	int score;
@@ -179,6 +248,14 @@ static const struct tone snd_death[] = {
 /* Rising arpeggio — plays when portal opens and again on victory */
 static const struct tone snd_portal[] = {
 	{400, 40}, {600, 40}, {800, 40}, {1100, 80}, {0, 0}
+};
+/* Boss spits — descending whoosh, the audio half of the tell */
+static const struct tone snd_fireball[] = {
+	{900, 25}, {700, 25}, {500, 35}, {0, 0}
+};
+/* Boss crosses half HP and enrages */
+static const struct tone snd_rage[] = {
+	{200, 60}, {160, 60}, {220, 60}, {160, 140}, {0, 0}
 };
 
 static const struct tone *current_sound;
@@ -303,6 +380,36 @@ static uint8_t doom_map_get(int x, int y)
 		return 1;
 	}
 	return current_map[y * MAP_W + x];
+}
+
+/*
+ * True when nothing solid sits on the segment (x0,y0)-(x1,y1). Sampled every
+ * 1/8 tile; walls are whole tiles, so the walk cannot tunnel one. Gates both
+ * the player's hitscan and the boss's fireball — this is what promotes the L2
+ * pillars and centre block from scenery to cover.
+ */
+static bool has_line_of_sight(fixed_t x0, fixed_t y0, fixed_t x1, fixed_t y1)
+{
+	fixed_t dx = x1 - x0;
+	fixed_t dy = y1 - y0;
+	int steps  = (int)(fp_dist(dx, dy) >> (FP_SHIFT - 3));
+
+	if (steps <= 0) return true;
+	if (steps > MAP_W * 8) steps = MAP_W * 8;
+
+	fixed_t sx = dx / steps;
+	fixed_t sy = dy / steps;
+	fixed_t cx = x0;
+	fixed_t cy = y0;
+
+	for (int i = 0; i < steps; i++) {
+		cx += sx;
+		cy += sy;
+		if (doom_map_get(fp_to_int(cx), fp_to_int(cy)) != 0) {
+			return false;
+		}
+	}
+	return true;
 }
 
 /* ========== WALL TEXTURES (8x8 1-bit) ========== */
@@ -449,23 +556,58 @@ static const uint16_t spr_portal_b[16] = {
 	0x0180, 0x0240, 0x0420, 0x0810, 0x1008, 0x2004, 0x4002, 0x8001,
 };
 
-static const uint16_t *get_sprite_16(enum enemy_type type,
-				     enum enemy_state state,
-				     int anim_tick)
-{
-	if (state == ESTATE_DEAD)  return spr_dead;
-	if (state == ESTATE_DYING) return spr_dying;
+/*
+ * Fireball — a solid ball confined to the middle 8 rows of the 16×16 cell, so
+ * it renders at roughly half an enemy's apparent size without the shared
+ * sprite blitter needing a scale argument. Solid, unlike the outlined portal
+ * diamond, so the two never read as the same thing.
+ */
+static const uint16_t spr_fireball[16] = {
+	0x0000, 0x0000, 0x0000, 0x0000,
+	0x0180, 0x03C0, 0x07E0, 0x0FF0,
+	0x0FF0, 0x07E0, 0x03C0, 0x0180,
+	0x0000, 0x0000, 0x0000, 0x0000,
+};
 
-	switch (type) {
+/* Boss phase 2: below half HP it moves twice as fast and casts more often. */
+static inline bool boss_enraged(const struct doom_enemy *e)
+{
+	return e->type == ENEMY_BOSS && e->health <= BOSS_HP / 2;
+}
+
+/*
+ * The boss's one tell. It is fully vulnerable exactly while its jaw is open:
+ * during the fireball wind-up, and on the claws-out frames of a melee swing.
+ * Both the renderer and the damage path call this, so the open-jaw sprite on
+ * screen is a literal readout of the damage window rather than decoration.
+ */
+static bool boss_jaw_open(const struct doom_enemy *e)
+{
+	if (e->type != ENEMY_BOSS) return false;
+
+	if (e->state == ESTATE_ATTACK) {
+		return (e->anim_tick & 4) != 0;
+	}
+	if (e->state != ESTATE_CHASE) {
+		return false;
+	}
+	return e->cast_tick > 0 && e->cast_tick <= BOSS_WINDUP;
+}
+
+static const uint16_t *get_sprite_16(const struct doom_enemy *e)
+{
+	if (e->state == ESTATE_DEAD)  return spr_dead;
+	if (e->state == ESTATE_DYING) return spr_dying;
+
+	switch (e->type) {
 	case ENEMY_IMP:
-		return (state == ESTATE_ATTACK && (anim_tick & 4))
+		return (e->state == ESTATE_ATTACK && (e->anim_tick & 4))
 			? spr_imp_attack : spr_imp_idle;
 	case ENEMY_DEMON:
-		return (state == ESTATE_ATTACK && (anim_tick & 4))
+		return (e->state == ESTATE_ATTACK && (e->anim_tick & 4))
 			? spr_demon_attack : spr_demon_idle;
 	case ENEMY_BOSS:
-		return (state == ESTATE_ATTACK && (anim_tick & 4))
-			? spr_boss_attack : spr_boss_idle;
+		return boss_jaw_open(e) ? spr_boss_attack : spr_boss_idle;
 	default:
 		return spr_imp_idle;
 	}
@@ -584,9 +726,19 @@ static void render_sprites(void)
 
 	for (int i = 0; i < visible; i++) {
 		struct doom_enemy *e = &game.enemies[order[i].idx];
-		render_one_sprite(
-			get_sprite_16(e->type, e->state, e->anim_tick),
-			e->x, e->y, inv_det, p);
+		render_one_sprite(get_sprite_16(e), e->x, e->y, inv_det, p);
+	}
+
+	/*
+	 * Fireballs draw last, over the enemies. They fly toward the player so
+	 * they are almost always the nearest sprite anyway, and the zbuffer
+	 * still hides them behind walls — which is the part that matters for
+	 * reading whether you are actually in cover.
+	 */
+	for (int i = 0; i < MAX_FIREBALLS; i++) {
+		struct doom_fireball *f = &game.fireballs[i];
+		if (!f->active) continue;
+		render_one_sprite(spr_fireball, f->x, f->y, inv_det, p);
 	}
 }
 
@@ -860,6 +1012,33 @@ static void draw_hud(void)
 	draw_number(100, 58, game.score);
 }
 
+/*
+ * L2 only: the boss's HP as a two-pixel bar across the top of the viewport.
+ * Drawn after the raycaster so it sits over the ceiling dither. It blinks once
+ * the boss is enraged, which is the only other signal that phase 2 started.
+ */
+static void draw_boss_bar(void)
+{
+	if (game.level != 2 || game.num_enemies < 1) return;
+
+	const struct doom_enemy *e = &game.enemies[0];
+	if (e->type != ENEMY_BOSS || e->state >= ESTATE_DYING) return;
+
+	/* Clear rows 0-2: the blank third row separates bar from ceiling */
+	for (int x = 0; x < SCREEN_W; x++) {
+		render_fb[x] &= (uint8_t)~0x07;
+	}
+
+	if (boss_enraged(e) && (game.frame_count & 4)) return;
+
+	int hp = e->health < 0 ? 0 : e->health;
+	int w  = (hp * (SCREEN_W - 4)) / BOSS_HP;
+
+	for (int x = 2; x < 2 + w; x++) {
+		render_fb[x] |= 0x03;
+	}
+}
+
 /* ========== GUN SPRITE ========== */
 
 static const uint16_t gun_idle[12] = {
@@ -1114,29 +1293,56 @@ static void handle_shooting(uint32_t input)
 		fixed_t dx = e->x - p->x;
 		fixed_t dy = e->y - p->y;
 
-		fixed_t dist = fp_mul(dx, dx) + fp_mul(dy, dy);
-		if (dist > fp_from_int(10 * 10)) continue;
+		if (fp_dist(dx, dy) > fp_from_int(10)) continue;
 
 		fixed_t dot = fp_mul(dx, p->dir_x) + fp_mul(dy, p->dir_y);
 		if (dot <= 0) continue;
 
 		fixed_t cross = fp_abs(fp_mul(dx, p->dir_y) -
 				       fp_mul(dy, p->dir_x));
+		if (cross >= FP_HALF) continue;
 
-		if (cross < FP_HALF) {
-			e->health -= 20;
-			doom_play_sound(snd_hit);
+		/* Walls stop bullets — cover works both ways now */
+		if (!has_line_of_sight(p->x, p->y, e->x, e->y)) continue;
 
-			if (e->health <= 0) {
-				e->state     = ESTATE_DYING;
-				e->anim_tick = 0;
-				game.score  += (e->type == ENEMY_BOSS)  ? 1000 :
-					       (e->type == ENEMY_DEMON) ? 200  : 100;
-			} else {
+		bool was_above_half = e->health > BOSS_HP / 2;
+		int  dmg            = SHOT_DAMAGE;
+
+		if (e->type == ENEMY_BOSS && !boss_jaw_open(e)) {
+			dmg /= BOSS_GUARD_DIV;
+		}
+
+		e->health -= dmg;
+		doom_play_sound(snd_hit);
+
+		if (e->health <= 0) {
+			e->state     = ESTATE_DYING;
+			e->anim_tick = 0;
+			game.score  += (e->type == ENEMY_BOSS)  ? 1000 :
+				       (e->type == ENEMY_DEMON) ? 200  : 100;
+
+			if (e->type == ENEMY_BOSS) {
+				/* Don't let a fireball already in the air rob
+				 * a won run during the death animation */
+				memset(game.fireballs, 0,
+				       sizeof(game.fireballs));
+			}
+		} else {
+			/*
+			 * Only wake sleepers. Promoting unconditionally, as
+			 * this did before, cancelled an in-progress swing —
+			 * which under the new rules would also slam the jaw
+			 * shut on the player's own damage window.
+			 */
+			if (e->state == ESTATE_IDLE) {
 				e->state = ESTATE_CHASE;
 			}
-			break;
+			if (e->type == ENEMY_BOSS && was_above_half &&
+			    e->health <= BOSS_HP / 2) {
+				doom_play_sound(snd_rage);
+			}
 		}
+		break;
 	}
 }
 
@@ -1226,14 +1432,114 @@ static void advance_to_level2(void)
 	int bi = (int)(game.frame_count % 4);
 
 	memset(game.enemies, 0, sizeof(game.enemies));
+	memset(game.fireballs, 0, sizeof(game.fireballs));
 	game.enemies[0] = (struct doom_enemy){
-		.type   = ENEMY_BOSS,
-		.state  = ESTATE_CHASE,   /* immediately aggressive */
-		.x      = fp_from_int(boss_spots[bi][0]) + FP_HALF,
-		.y      = fp_from_int(boss_spots[bi][1]) + FP_HALF,
-		.health = BOSS_HP,
+		.type      = ENEMY_BOSS,
+		.state     = ESTATE_CHASE,   /* immediately aggressive */
+		.x         = fp_from_int(boss_spots[bi][0]) + FP_HALF,
+		.y         = fp_from_int(boss_spots[bi][1]) + FP_HALF,
+		.health    = BOSS_HP,
+		.cast_tick = BOSS_CAST_PERIOD,
 	};
 	game.num_enemies = 1;
+}
+
+/*
+ * Launch a fireball from the boss toward wherever the player stands at the
+ * moment of release. It does not lead the target, so a sidestep started when
+ * the jaw opens always clears it — standing still never does.
+ */
+static void boss_spit_fireball(const struct doom_enemy *e)
+{
+	struct doom_player *p = &game.player;
+
+	for (int i = 0; i < MAX_FIREBALLS; i++) {
+		struct doom_fireball *f = &game.fireballs[i];
+		if (f->active) continue;
+
+		fixed_t dx = p->x - e->x;
+		fixed_t dy = p->y - e->y;
+		fixed_t d  = fp_dist(dx, dy);
+
+		if (d < FP_ONE / 8) d = FP_ONE / 8;
+
+		f->vx     = fp_mul(fp_div(dx, d), FIREBALL_SPEED);
+		f->vy     = fp_mul(fp_div(dy, d), FIREBALL_SPEED);
+		f->x      = e->x + f->vx;
+		f->y      = e->y + f->vy;
+		f->life   = FIREBALL_LIFE;
+		f->active = true;
+
+		doom_play_sound(snd_fireball);
+		return;
+	}
+}
+
+/*
+ * One frame of the boss's cast cycle, run while chasing. Returns true while
+ * the boss is winding up — jaw open, feet planted, fully vulnerable — which
+ * is the opening the fight is built around. It only arms at range and with
+ * line of sight, so a player who closes to melee or ducks behind the centre
+ * block fights the claws instead of the fire.
+ */
+static bool boss_run_cast_cycle(struct doom_enemy *e, fixed_t dist)
+{
+	struct doom_player *p = &game.player;
+	int period = boss_enraged(e) ? BOSS_CAST_PERIOD_RAGE
+				     : BOSS_CAST_PERIOD;
+
+	if (dist < BOSS_CAST_MIN_DIST ||
+	    !has_line_of_sight(e->x, e->y, p->x, p->y)) {
+		/* Hold the timer above the tell so the jaw never opens dry */
+		if (e->cast_tick <= BOSS_WINDUP) {
+			e->cast_tick = BOSS_WINDUP + 1;
+		}
+		return false;
+	}
+
+	/* Enraging shortens the period; don't strand the timer above it */
+	if (e->cast_tick > period) e->cast_tick = period;
+	if (e->cast_tick > 0)      e->cast_tick--;
+
+	if (e->cast_tick == 0) {
+		boss_spit_fireball(e);
+		e->cast_tick = period;
+		return false;
+	}
+
+	return e->cast_tick <= BOSS_WINDUP;
+}
+
+static void update_fireballs(void)
+{
+	struct doom_player *p = &game.player;
+
+	for (int i = 0; i < MAX_FIREBALLS; i++) {
+		struct doom_fireball *f = &game.fireballs[i];
+		if (!f->active) continue;
+
+		f->x += f->vx;
+		f->y += f->vy;
+
+		if (--f->life <= 0 ||
+		    doom_map_get(fp_to_int(f->x), fp_to_int(f->y)) != 0) {
+			f->active = false;
+			continue;
+		}
+
+		if (fp_dist(p->x - f->x, p->y - f->y) >= FIREBALL_HIT_R) {
+			continue;
+		}
+
+		f->active   = false;
+		p->health  -= FIREBALL_DMG;
+		doom_play_sound(snd_hit);
+
+		if (p->health <= 0) {
+			game.game_over = true;
+			doom_play_sound(snd_death);
+		}
+	}
 }
 
 static void update_enemies(void)
@@ -1244,14 +1550,13 @@ static void update_enemies(void)
 		struct doom_enemy *e = &game.enemies[i];
 		if (e->type == ENEMY_NONE) continue;
 
-		fixed_t spd = (e->type == ENEMY_BOSS) ? BOSS_SPEED : ENEMY_SPEED;
+		fixed_t spd = (e->type != ENEMY_BOSS) ? ENEMY_SPEED :
+			      boss_enraged(e) ? BOSS_SPEED_RAGE : BOSS_SPEED;
 
 		switch (e->state) {
 		case ESTATE_IDLE: {
-			fixed_t dx   = e->x - p->x;
-			fixed_t dy   = e->y - p->y;
-			fixed_t dist = fp_mul(dx, dx) + fp_mul(dy, dy);
-			if (dist < fp_from_int(6 * 6)) {
+			if (fp_dist(e->x - p->x, e->y - p->y) <
+			    fp_from_int(6)) {
 				e->state = ESTATE_CHASE;
 			}
 			break;
@@ -1259,25 +1564,38 @@ static void update_enemies(void)
 		case ESTATE_CHASE: {
 			fixed_t dx   = p->x - e->x;
 			fixed_t dy   = p->y - e->y;
-			fixed_t dist = fp_mul(dx, dx) + fp_mul(dy, dy);
+			fixed_t dist = fp_dist(dx, dy);
+			bool    back = false;
 
-			if (dist < fp_from_int(2)) {
+			if (e->retreat_tick > 0) {
+				e->retreat_tick--;
+				back = true;   /* disengaging after a swing */
+			} else if (dist < FP_ONE + FP_HALF) {
 				e->state     = ESTATE_ATTACK;
 				e->anim_tick = 0;
-			} else {
-				fixed_t move_x = fp_mul(dx, spd) /
-					(fp_to_int(dist) + 1);
-				fixed_t move_y = fp_mul(dy, spd) /
-					(fp_to_int(dist) + 1);
+				break;
+			}
 
-				fixed_t nx = e->x + move_x;
-				fixed_t ny = e->y + move_y;
+			/* A winding-up boss plants its feet for the tell */
+			if (e->type == ENEMY_BOSS &&
+			    boss_run_cast_cycle(e, dist)) {
+				break;
+			}
 
-				if (doom_map_get(fp_to_int(nx),
-						 fp_to_int(ny)) == 0) {
-					e->x = nx;
-					e->y = ny;
-				}
+			/* Retreating skips the range check above, so floor the
+			 * divisor rather than trust dist to be 1.5+ tiles */
+			if (dist < FP_ONE / 4) dist = FP_ONE / 4;
+
+			fixed_t step   = back ? -spd : spd;
+			fixed_t move_x = fp_mul(fp_div(dx, dist), step);
+			fixed_t move_y = fp_mul(fp_div(dy, dist), step);
+
+			fixed_t nx = e->x + move_x;
+			fixed_t ny = e->y + move_y;
+
+			if (doom_map_get(fp_to_int(nx), fp_to_int(ny)) == 0) {
+				e->x = nx;
+				e->y = ny;
 			}
 			break;
 		}
@@ -1296,6 +1614,12 @@ static void update_enemies(void)
 				}
 				e->anim_tick = 0;
 				e->state     = ESTATE_CHASE;
+
+				/* Boss disengages after every swing so its
+				 * ranged tell comes back around */
+				if (e->type == ENEMY_BOSS) {
+					e->retreat_tick = BOSS_RETREAT;
+				}
 			}
 			break;
 		case ESTATE_DYING:
@@ -1351,6 +1675,7 @@ static void game_tick_handler(struct k_work *work)
 	}
 
 	update_enemies();
+	update_fireballs();
 
 	/* L1: spawn portal once both monsters are dead */
 	check_level_complete();
@@ -1372,6 +1697,7 @@ static void game_tick_handler(struct k_work *work)
 
 	memset(render_fb, 0, FB_SIZE);
 	raycaster_render();
+	draw_boss_bar();
 	draw_gun(game.player.firing && fire_cooldown > 2);
 	draw_hud();
 	doom_flush_fb();
