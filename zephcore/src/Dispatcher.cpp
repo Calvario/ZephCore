@@ -260,6 +260,9 @@ uint32_t Dispatcher::msUntilNextMaintenance()
 
 bool Dispatcher::tryParsePacket(Packet *pkt, const uint8_t *raw, int len)
 {
+	/* Check the received extent before reading header/path fields.  The radio
+	 * buffer may be larger than len, but bytes outside len are not packet data. */
+	if (len < 2 || len > MAX_TRANS_UNIT) return false;
 	int i = 0;
 
 	pkt->header = raw[i++];
@@ -269,6 +272,7 @@ bool Dispatcher::tryParsePacket(Packet *pkt, const uint8_t *raw, int len)
 	}
 
 	if (pkt->hasTransportCodes()) {
+		if (len < 6) return false; /* header + two codes + path length */
 		memcpy(&pkt->transport_codes[0], &raw[i], 2); i += 2;
 		memcpy(&pkt->transport_codes[1], &raw[i], 2); i += 2;
 	} else {

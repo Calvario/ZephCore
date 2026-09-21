@@ -6,6 +6,14 @@ build-*/
 **/build-*/
 **/build_*/
 /twister-out*/
+/build-tests/
+/test-results/
+/tests/lab.local.yaml
+
+# Regression suite stays local until it is ready to publish.
+/tests/
+/.github/workflows/tests.yml
+/docs/REGRESSION_TEST_PLAN.md
 
 # West workspace (recreated by west init/update)
 /.west/
