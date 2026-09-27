@@ -6,7 +6,7 @@ manifest:
   projects:
     - name: zephyr
       remote: zephyrproject-rtos
-      revision: 3e7672a71bd954ca46c38c99d8d8f68a0fb23090
+      revision: 1ee3b93134be23c16ab16b9eb4183bfef63447a6
       import: true
 
   self:
