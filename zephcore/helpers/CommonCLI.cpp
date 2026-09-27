@@ -550,6 +550,19 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
 		snprintf(reply, CLI_REPLY_SIZE, "%s (Build: %s)", _callbacks->getFirmwareVer(), _callbacks->getBuildDate());
 	} else if (memcmp(command, "board", 5) == 0) {
 		snprintf(reply, CLI_REPLY_SIZE, "%s", _board->getManufacturerName());
+	} else if (strcmp(command, "power") == 0) {
+		const char* usb_state = _board->hasUsbPowerDetect()
+					    ? (_board->isUsbPowered() ? "yes" : "no")
+					    : "n/a";
+		const char* solar_state = _board->hasSolarChargerDetect()
+					      ? (_board->isSolarChargerActive() ? "yes" : "no")
+					      : "n/a";
+		snprintf(reply, 160, "batt:%u mV usb:%s solar_chg:%s ext:%s charger:%s",
+			 (unsigned)_board->getBattMilliVolts(),
+			 usb_state,
+			 solar_state,
+			 _board->isExternalPowered() ? "yes" : "no",
+			 _board->isChargerActive() ? "yes" : "no");
 	} else if (memcmp(command, "sensor get ", 11) == 0) {
 		const char* key = command + 11;
 		const char* val = _sensors->getSettingByKey(key);
@@ -620,6 +633,21 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
 		} else {
 			gps_request_fresh_fix();
 			strcpy(reply, "ok");
+		}
+	} else if (strcmp(command, "gps diag") == 0) {
+		/* ZEPHCORE: upstream asks the LocationProvider; here the GPS
+		 * manager formats the fields it has (see gps_format_diagnostics). */
+		if (_sensors->isGPSDetected()) {
+			const char* setting = _sensors->getSettingByKey("gps");
+			bool requested = setting != NULL && strcmp(setting, "1") == 0;
+			int prefix_len = snprintf(reply, 160, "req:%u ", requested ? 1U : 0U);
+			if (prefix_len < 0 || prefix_len >= 160) {
+				reply[159] = 0;
+			} else {
+				gps_format_diagnostics(reply + prefix_len, 160 - prefix_len);
+			}
+		} else {
+			strcpy(reply, "gps provider not found");
 		}
 	} else if (memcmp(command, "gps setloc", 10) == 0) {
 		_prefs->node_lat = _sensors->node_lat;

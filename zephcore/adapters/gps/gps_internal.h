@@ -84,6 +84,9 @@ void gps_sat_tally(uint8_t out[5]);
 void gps_power_control(bool on, bool keep_vrtc = false);
 /* The power line or rail if the board has one, else the UART sleep commands. */
 void gps_module_power(bool on, bool keep_vrtc = true);
+/* gps_module_power() calls, for `gps diag` (upstream's bc/sc). */
+extern uint32_t gps_power_on_count;
+extern uint32_t gps_power_off_count;
 /* Suspend/resume the GNSS UART (nRF UARTE: releases HFCLK). */
 void gps_uart_set_power(bool on);
 #if HAS_GPS_POWER_CONTROL
@@ -95,6 +98,12 @@ void gps_dump_gpio_states(void);
 void gps_module_configure(void);
 /* Re-run the UART configuration when `set gps diag 1` asked for it. */
 void gps_diag_maybe_reconfigure(void);
+#if HAS_GPS_UART && defined(CONFIG_ZEPHCORE_GPS_REAPPLY)
+/* CONFIG_ZEPHCORE_GPS_REAPPLY: write the step-th re-sent setting blind
+ * (see the list in gps_module_cfg.cpp). Returns the ms to wait before the
+ * next step, 0 when that was the last. */
+uint32_t gps_module_reapply_step(uint8_t step);
+#endif
 void gps_uart_dump_hw_state(void);
 #if HAS_GPS_UART
 extern const struct device *const gps_uart_dev;

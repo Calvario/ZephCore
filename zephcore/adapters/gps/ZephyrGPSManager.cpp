@@ -56,6 +56,7 @@ static gps_event_callback_t gps_event_cb = NULL;
 #define GPS_ACTION_TIMEOUT  BIT(1)  /* Acquisition timeout → go to standby */
 #define GPS_ACTION_FIX_DONE BIT(2)  /* Got enough good fixes → go to standby */
 #define GPS_ACTION_FIX      BIT(3)  /* A validated fix for gps_fix_cb (fix_pending) */
+#define GPS_ACTION_REAPPLY  BIT(4)  /* Next module re-send step (gps_reapply_step) */
 static atomic_t pending_gps_actions;
 
 /* GPS Power Management State Machine */
@@ -121,6 +122,42 @@ static void gps_start_acquiring(void);
 /* Delayable work for event-driven timers (no polling!) */
 static K_WORK_DELAYABLE_DEFINE(gps_wake_work, gps_wake_work_fn);
 static K_WORK_DELAYABLE_DEFINE(gps_timeout_work, gps_timeout_work_fn);
+
+#if HAS_GPS_UART && defined(CONFIG_ZEPHCORE_GPS_REAPPLY)
+/* CONFIG_ZEPHCORE_GPS_REAPPLY: after each power-on, wait for the module
+ * to boot, then hand the main thread one sentence per step. */
+#define GPS_REAPPLY_BOOT_MS  1000  /* module boot is ~300 ms; margin for slow rails */
+static uint8_t gps_reapply_step;
+static uint32_t gps_reapply_count;  /* completed re-sends, `gps diag` ra: */
+static void gps_reapply_work_fn(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	if (gps_current_state != GPS_STATE_ACQUIRING) {
+		return;
+	}
+	atomic_or(&pending_gps_actions, GPS_ACTION_REAPPLY);
+	if (gps_event_cb) {
+		gps_event_cb();
+	}
+}
+static K_WORK_DELAYABLE_DEFINE(gps_reapply_work, gps_reapply_work_fn);
+
+static void gps_reapply_start(void)
+{
+	gps_reapply_step = 0;
+	k_work_reschedule(&gps_reapply_work, K_MSEC(GPS_REAPPLY_BOOT_MS));
+}
+
+static void gps_reapply_cancel(void)
+{
+	k_work_cancel_delayable(&gps_reapply_work);
+	atomic_and(&pending_gps_actions, ~GPS_ACTION_REAPPLY);
+}
+#else
+static inline void gps_reapply_start(void) { }
+static inline void gps_reapply_cancel(void) { }
+#endif
 
 #else
 static gps_enable_callback_t gps_enable_cb = NULL;
@@ -490,6 +527,7 @@ static void gps_go_to_standby(void)
 	 *   VBACKUP charger keeps the receiver's V_BCKP domain alive, so ephemeris/
 	 *   RTC survive the cut and re-acquisition is a warm/hot start, not cold.
 	 * Other non-GPIO boards: software sleep via UART commands (PMTK + UBX). */
+	gps_reapply_cancel();
 	gps_module_power(false);
 
 	/* Module is off/asleep — release the UART until the next wake
@@ -497,10 +535,10 @@ static void gps_go_to_standby(void)
 	gps_uart_set_power(false);
 	gps_hold_sleep_lock(false);
 
-	/* NOTE: gnss_configured stays true — L76K retains PCAS settings in
-	 * flash across power cycles. Re-running gps_module_configure() after GPIO
-	 * wake would call modem_chat_run_script() before the chip has booted,
-	 * risking a deadlock (modem_chat blocks on system work queue). */
+	/* NOTE: gnss_configured stays true, gps_module_configure() is boot-only:
+	 * after a power restore modem_chat_run_script() would reach a chip that
+	 * has not booted yet (deadlock risk, see gps_wake_work_fn). What a power
+	 * cut loses on CASIC parts is re-sent by gps_reapply_start() instead. */
 
 	/* Schedule next wake (event-driven, no polling!) */
 	k_work_schedule(&gps_wake_work, K_MSEC(wake_interval));
@@ -509,11 +547,12 @@ static void gps_go_to_standby(void)
 /* Wake GPS and start acquiring.
  * GPIO boards: hardware power-on.
  * Non-GPIO boards: UART wake byte (wakes L76K from standby, ZOE-M8Q from backup).
- * Does NOT call gps_module_configure() — constellation/fix-rate settings persist
- * in L76K flash across power cycles. Calling modem_chat_run_script() here
+ * Does NOT call gps_module_configure(). Calling modem_chat_run_script() here
  * would deadlock: the chip needs ~300ms to boot after GPIO power restore,
  * but modem_chat blocks the calling thread waiting for the system work
- * queue which may be processing stale UART data. */
+ * queue which may be processing stale UART data. CASIC settings are NOT
+ * persisted (no PCAS00, see the air530z driver), so they are re-sent blind
+ * a second after power-on (CONFIG_ZEPHCORE_GPS_REAPPLY). */
 static void gps_start_acquiring(void)
 {
 	LOG_INF("GPS: Waking for %s", gps_repeater_mode ? "time sync" : "position fix");
@@ -526,6 +565,7 @@ static void gps_start_acquiring(void)
 	 * goes out, so the first NMEA sentences aren't lost. */
 	gps_uart_set_power(true);
 	gps_module_power(true);
+	gps_reapply_start();
 
 	/* Schedule the standby timeout — unless always-on (interval 0), where the
 	 * GPS stays in continuous acquisition and never sleeps. Every duty window
@@ -824,8 +864,8 @@ void gps_enable(bool enable)
 		 * lock, and the first (longer) acquire window unless always-on. */
 		gps_start_acquiring();
 
-		/* gps_module_configure() runs once at boot (see gps_manager_init path).
-		 * L76K retains PCAS settings in flash across power cycles.
+		/* gps_module_configure() runs once at boot (see gps_manager_init path);
+		 * gps_start_acquiring() re-sends the CASIC settings a power cut loses.
 		 * Do NOT call modem_chat_run_script() here — the chip needs
 		 * ~300ms to boot after GPIO power restore and calling it
 		 * immediately deadlocks the main thread. */
@@ -836,6 +876,7 @@ void gps_enable(bool enable)
 		/* Cancel any pending work */
 		k_work_cancel_delayable(&gps_wake_work);
 		k_work_cancel_delayable(&gps_timeout_work);
+		gps_reapply_cancel();
 
 		/* Power off GPS — warm standby if VRTC available (Arduino sleep_gps),
 		 * full power off otherwise. Warm standby preserves ephemeris/RTC
@@ -1046,6 +1087,56 @@ void gps_get_state_info(struct gps_state_info *info)
 #endif
 }
 
+#if HAS_GNSS
+/* Parsed-sentence count from the GNSS driver (see gps_module_cfg.cpp). */
+extern "C" uint32_t zephcore_gnss_rx_count(void) __attribute__((weak));
+#endif
+
+void gps_format_diagnostics(char *out, size_t out_size)
+{
+	if (out_size == 0) {
+		return;
+	}
+#if HAS_GNSS
+	/* Upstream's keys, where this port has the same quantity: en = module
+	 * powered and searching (standby is off/asleep), ok = checksum-valid
+	 * sentences (the driver parses nothing else), fa = age of the last
+	 * validated fix. */
+	k_mutex_lock(&gps_mutex, K_FOREVER);
+	bool fix = current_pos.valid;
+	unsigned sats = current_pos.satellites;
+	k_mutex_unlock(&gps_mutex);
+
+	char fix_age[11];
+	if (last_fix_uptime_ms > 0) {
+		snprintf(fix_age, sizeof(fix_age), "%lu",
+			 (unsigned long)(uint32_t)(k_uptime_get() - last_fix_uptime_ms));
+	} else {
+		snprintf(fix_age, sizeof(fix_age), "never");
+	}
+
+	char ok[16] = "";
+	if (zephcore_gnss_rx_count != NULL) {
+		snprintf(ok, sizeof(ok), " ok:%lu", (unsigned long)zephcore_gnss_rx_count());
+	}
+
+	/* ZephCore addition: completed CASIC re-sends (CONFIG_ZEPHCORE_GPS_REAPPLY),
+	 * one per power-on that stayed up past GPS_REAPPLY_BOOT_MS. */
+	char ra[16] = "";
+#if HAS_GPS_UART && defined(CONFIG_ZEPHCORE_GPS_REAPPLY)
+	snprintf(ra, sizeof(ra), " ra:%lu", (unsigned long)gps_reapply_count);
+#endif
+
+	snprintf(out, out_size, "en:%u%s sat:%u fix:%u fa:%s bc:%lu sc:%lu%s",
+		 gps_current_state == GPS_STATE_ACQUIRING ? 1U : 0U,
+		 ok, sats, fix ? 1U : 0U, fix_age,
+		 (unsigned long)gps_power_on_count,
+		 (unsigned long)gps_power_off_count, ra);
+#else
+	snprintf(out, out_size, "en:0 sat:0 fix:0");
+#endif
+}
+
 /* Process pending GPS state transitions — called from main thread.
  * Work handlers on the system work queue set flags + signal the main
  * thread via gps_event_cb(). The main thread then calls this function,
@@ -1089,5 +1180,18 @@ void gps_process_event(void)
 			gps_go_to_standby();
 		}
 	}
+
+#if HAS_GPS_UART && defined(CONFIG_ZEPHCORE_GPS_REAPPLY)
+	/* After the transitions: a standby above has already cancelled it. */
+	if ((actions & GPS_ACTION_REAPPLY) && gps_current_state == GPS_STATE_ACQUIRING) {
+		uint32_t gap_ms = gps_module_reapply_step(gps_reapply_step++);
+
+		if (gap_ms > 0) {
+			k_work_reschedule(&gps_reapply_work, K_MSEC(gap_ms));
+		} else {
+			gps_reapply_count++;
+		}
+	}
+#endif
 #endif
 }

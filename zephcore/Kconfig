@@ -1016,6 +1016,40 @@ config ZEPHCORE_GPS_SAT_DIAG
 	  available — this option only adds the per-constellation evidence to
 	  its report.
 
+config ZEPHCORE_GPS_REAPPLY
+	bool "Re-send GNSS module settings after every GPS power-on"
+	depends on GNSS
+	default y
+	help
+	  CASIC receivers (Quectel L76K/L76KB, Air530Z) keep the sentence
+	  selection (PCAS03) and constellation set (PCAS04) in RAM only: nothing
+	  here sends PCAS00 to save them, so a supply cut returns the module to
+	  its factory GPS + BeiDou. Configuration otherwise runs once, at boot,
+	  so a board whose gps off / duty-cycle standby really removes power
+	  would lose GLONASS after its first sleep (upstream MeshCore #3201
+	  re-sends PCAS04 on every start for the same reason).
+
+	  With this on, about one second after each power-on the settings that
+	  are lost with power are written again, blind, one sentence at a time
+	  with the boot sequence's settle gaps, over the GNSS UART from the main
+	  thread (never through modem_chat, whose blocking scripts are unsafe
+	  right after a power restore): PCAS03, PCAS11 (the nav mode, when set)
+	  and PCAS04 last; on generic-NMEA boards, whose module is unknown,
+	  MediaTek's PMTK353 constellations, EASY (PMTK869) and AIC (PMTK286)
+	  first. Both constellation commands restart their own chip's engine; on
+	  a module that kept its settings that is one restart per wake, taken
+	  over leaving one that lost them searching GPS-only. UBX stays
+	  boot-only: CFG-CFG saves it to the module's flash, and repeating it
+	  would wear that flash.
+
+	  No board list: every GNSS board gets it, and it is inert where it is
+	  not needed: receivers ignore the other families' sentences, and one
+	  that only went to standby (Wio Tracker L1's WAKEUP pin) is simply told
+	  what it already has. Costs under 130 UART bytes per wake.
+
+	  Turn it off in a board.conf only with a reason, e.g. a CASIC board
+	  proven to lose fixes to the navigation restart PCAS04 triggers.
+
 endmenu
 
 menu "WiFi OTA Update"

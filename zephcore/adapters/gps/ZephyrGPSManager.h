@@ -53,6 +53,12 @@ void gps_set_diag(bool on);
  * succeeds; reports "never run" if configuration has not happened yet. */
 void gps_get_diag_report(char *buf, size_t len);
 
+/* `gps diag` (upstream's LocationProvider::formatDiagnostics): module on,
+ * NMEA sentences parsed, satellites, fix, fix age in ms, module power-on /
+ * power-off counts. Upstream's UART byte and bad-checksum counters have no
+ * source behind the GNSS API and are left out. */
+void gps_format_diagnostics(char *out, size_t out_size);
+
 /* GPS enable callback - called when GPS is enabled/disabled (for power management) */
 typedef void (*gps_enable_callback_t)(bool enabled);
 void gps_set_enable_callback(gps_enable_callback_t cb);

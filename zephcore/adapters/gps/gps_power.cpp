@@ -532,8 +532,16 @@ static void gps_software_wake(void)
 
 /* Module on or off with whatever this board has: the power GPIO or PMU rail,
  * else the UART sleep commands. keep_vrtc: T1000-E warm standby (off only). */
+uint32_t gps_power_on_count;
+uint32_t gps_power_off_count;
+
 void gps_module_power(bool on, bool keep_vrtc)
 {
+	if (on) {
+		gps_power_on_count++;
+	} else {
+		gps_power_off_count++;
+	}
 #if HAS_GPS_POWER_CONTROL || HAS_GPS_POWER_REGULATOR
 	gps_power_control(on, keep_vrtc);
 #elif HAS_GPS_UART

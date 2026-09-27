@@ -641,4 +641,14 @@ bool ZephyrBoard::isExternalPowered()
 #endif
 }
 
+bool ZephyrBoard::hasUsbPowerDetect() const
+{
+	return IS_ENABLED(CONFIG_SOC_SERIES_NRF52);
+}
+
+bool ZephyrBoard::isUsbPowered()
+{
+	return hasUsbPowerDetect() && isExternalPowered();
+}
+
 } /* namespace mesh */

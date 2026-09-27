@@ -29,9 +29,9 @@ static bool gps_diag_on = false;
  * 3. The script completion callback competes with NMEA processing
  *
  * Safe to call at boot because the driver init already ran and the chip
- * is powered and outputting NMEA. After power cycles, the L76K retains
- * constellation + fix rate settings in internal flash (PCAS commands
- * persist). So we only need to configure once. */
+ * is powered and outputting NMEA. PCAS settings are NOT persisted (nothing
+ * sends PCAS00), so what a power cut loses is re-sent blind after every
+ * power-on instead (gps_module_reapply_step, CONFIG_ZEPHCORE_GPS_REAPPLY). */
 static bool gnss_configured = false;
 
 /* ========== Configuration Diagnostics ==========
@@ -566,6 +566,65 @@ void gps_module_configure(void)
 
 	gnss_configured = true;
 }
+
+#if HAS_GPS_UART && defined(CONFIG_ZEPHCORE_GPS_REAPPLY)
+/* The boot-time settings a power cut loses (see the Kconfig help). One
+ * sentence per step, written with gps_uart_send() directly and no settle
+ * sleep: the caller waits each entry's gap with a work item, so the main
+ * thread only spends the UART time.
+ *
+ * Kept boot-only on purpose:
+ * - UBX: already saved to BBR + flash by CFG-CFG at boot, and repeating it
+ *   would rewrite the module's flash on every wake;
+ * - PCAS02 (1 Hz is the default) and PCAS06 (a query, no state).
+ *
+ * Both constellation commands restart their chip's navigation engine, and a
+ * sentence written into a restarting engine is lost, so each is followed by
+ * the boot sequence's restart settle: PMTK353 first, PCAS04 last. Each only
+ * restarts its own family's chip (the other ignores it). On a MediaTek part
+ * that merely slept this costs one engine restart per wake, accepted
+ * (architect, 2026-09-27): one that lost power is otherwise left searching
+ * GPS-only, which is slower than a restart with every constellation. The
+ * PMTK sentences go only where the module is unknown (the generic-NMEA
+ * path); an API-driver board's module is known CASIC. */
+struct reapply_cmd {
+	const char *sentence;
+	uint16_t gap_ms;        /* wait before the next one */
+};
+
+static const struct reapply_cmd reapply_casic[] = {
+	{ pcas_sentences, GPS_CFG_SETTLE_MS },
+#if CONFIG_ZEPHCORE_GPS_NAV_MODE >= 0
+	/* The driver's GNSS_LUATOS_AIR530Z_NAV_MODE mirrors this value, so
+	 * this matches what either path set at boot. */
+	{ pcas_nav_mode, GPS_CFG_SETTLE_MS },
+#endif
+	{ pcas_constellations, 0 },
+};
+static const struct reapply_cmd reapply_generic[] = {
+	{ pmtk_constellations, GPS_CFG_RESTART_MS },
+	{ pmtk_easy, GPS_CFG_SETTLE_MS },
+	{ pmtk_aic, GPS_CFG_SETTLE_MS },
+	{ pcas_sentences, GPS_CFG_SETTLE_MS },
+#if CONFIG_ZEPHCORE_GPS_NAV_MODE >= 0
+	{ pcas_nav_mode, GPS_CFG_SETTLE_MS },
+#endif
+	{ pcas_constellations, 0 },
+};
+
+uint32_t gps_module_reapply_step(uint8_t step)
+{
+	bool generic = (gps_cfg_diag.path == GPS_CFG_UART);
+	const struct reapply_cmd *list = generic ? reapply_generic : reapply_casic;
+	size_t n = generic ? ARRAY_SIZE(reapply_generic) : ARRAY_SIZE(reapply_casic);
+
+	if (step >= n) {
+		return 0;
+	}
+	gps_uart_send((const uint8_t *)list[step].sentence, strlen(list[step].sentence));
+	return (step + 1 < n) ? list[step].gap_ms : 0;
+}
+#endif
 
 /* ========== GPS UART Diagnostics ========== */
 

@@ -1453,6 +1453,20 @@ void CompanionMesh::onContactResponse(const ContactInfo &contact, const uint8_t 
 		};
 		ui_notify_joystick_event(UI_JOYSTICK_REQ_RESPONSE, contact.id.pub_key, &rr);
 	}
+
+	/* Arduino b204f9a1: let the app know about unknown/unhandled responses
+	 * (eg. push telemetry from a sensor subscription): tag + payload as-is. */
+	{
+		uint8_t rsp[MAX_FRAME_SIZE];
+		int i = 0;
+		rsp[i++] = PUSH_CODE_BINARY_RESPONSE;
+		rsp[i++] = 0;  // reserved
+		int data_len = len;
+		if (data_len > (int)sizeof(rsp) - i) data_len = sizeof(rsp) - i;
+		memcpy(&rsp[i], data, data_len);
+		i += data_len;
+		sendPush(rsp[0], &rsp[1], i - 1);
+	}
 }
 
 /* Raw packet logging - sends all RX packets to app for "heard X repeats" etc */

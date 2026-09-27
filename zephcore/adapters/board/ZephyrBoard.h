@@ -33,6 +33,10 @@ public:
 	void clearBootloaderMagic();      /* Clear stale GPREGRET values at startup */
 	uint8_t getStartupReason() const override;
 	bool isExternalPowered() override;  /* nRF52: VBUS present (USB/charger); else false */
+	/* `power`: nRF52's VBUS detect is a USB-power detect; other platforms
+	 * keep upstream's "n/a". No board reports a charger line yet. */
+	bool hasUsbPowerDetect() const override;
+	bool isUsbPowered() override;
 
 	/* get pwrmgt.*: upstream's power-management getters. */
 	uint16_t getBootVoltage() override { return _boot_mv; }
