@@ -152,10 +152,9 @@
 		regulator-name = "lora-pwr-enable";
 		enable-gpios = <&gpio0 14 GPIO_ACTIVE_HIGH>;
 		regulator-boot-on;
-		/* Documents the LDO + PA settle requirement but does not enforce
-		 * it: regulator-boot-on takes regulator_common_init()'s
-		 * refcount-only branch, so regulator_delay() never runs. The real
-		 * settle time comes from the SX126x driver's own reset (5 ms
+		/* The LDO + PA settle requirement. It runs at boot (Zephyr
+		 * 3b4821f1ba6, pinned from 1.17.5; it was skipped before), but do
+		 * not rely on it alone: the real settle time comes from the SX126x driver's own reset (5 ms
 		 * NRESET pulse + 5 ms wait + BUSY poll) 15 init priorities later.
 		 * See the identical note on rak3401_1watt. */
 		startup-delay-us = <10000>;
@@ -392,7 +391,6 @@
 		size = <16777216>;        /* 2MB = 16Mbit */
 		has-dpd;
 		t-enter-dpd = <3000>;
-		t-exit-dpd = <50000>;     /* 50ms for reliable wakeup */
 		/* quad-enable not needed for single-bit mode */
 	};
 };

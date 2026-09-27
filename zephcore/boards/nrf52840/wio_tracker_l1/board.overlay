@@ -331,7 +331,6 @@ sh1106: &oled {
 		size = <16777216>;        /* 2MB = 16Mbit */
 		has-dpd;
 		t-enter-dpd = <3000>;
-		t-exit-dpd = <50000>;     /* 50ms for reliable wakeup */
 		/* quad-enable not needed for single-bit mode */
 
 		partitions {

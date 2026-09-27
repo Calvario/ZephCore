@@ -359,7 +359,6 @@
 		size = <16777216>;            /* 2MB = 16Mbit */
 		has-dpd;
 		t-enter-dpd = <10000>;
-		t-exit-dpd = <35000>;
 	};
 };
 

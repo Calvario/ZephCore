@@ -67,6 +67,15 @@ static int qspi_rdid_probe(void)
 		return 0;
 	}
 
+	if (!flash->state->initialized) {
+		/* qspi-ext.dtsi defers the flash to first use, and a repeater
+		 * never mounts /ext. Stealing the pins now would break the init
+		 * a later factory reset runs, so there is nothing to probe. */
+		LOG_INF("qspi flash '%s' not initialised yet - RDID probe skipped",
+			flash->name);
+		return 0;
+	}
+
 	if (device_is_ready(flash)) {
 		/* Bit-banging steals the QSPI pins as GPIOs and leaves them
 		 * that way, which would break a flash that just came up fine.

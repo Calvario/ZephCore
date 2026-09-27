@@ -571,7 +571,7 @@
  *         size = <16777216>;
  *         has-dpd;
  *         t-enter-dpd = <3000>;
- *         t-exit-dpd = <30000>;
+ *         (t-exit-dpd comes from qspi-ext.dtsi: 50 us)
  *         quad-enable-requirements = "S2B1v1";
  *     };
  * };

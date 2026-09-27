@@ -1,6 +1,6 @@
 /*
  * SPDX-License-Identifier: MIT
- * QSPI external flash /ext automount — optional add-on for any platform
+ * QSPI external flash /ext — optional add-on for any platform
  *
  * See nrf52_partitions_sdv7.dtsi for full include guide.
  *
@@ -8,13 +8,34 @@
  * and blobs to QSPI flash (more space, faster writes on native 4KB blocks).
  * Prefs and identity stay on internal flash.
  *
- * Requires board DTS to define: qspi_storage_partition
+ * Requires board DTS to define: qspi_flash (the flash device node) and
+ * qspi_storage_partition
  *
  * Usage in board overlay (in addition to partition or filesystem include):
  *   #include "../../common/qspi-ext.dtsi"
  *
  * Works with all platforms using /lfs mount.
  */
+
+/*
+ * The flash is not probed at boot. On boards where it sits behind a switched
+ * rail, the boot-time JEDEC read could beat a cold rail (first boot after a
+ * UF2 update, or a power-up): the driver failed, /ext stayed unmounted and
+ * contacts/channels silently fell back to internal flash. A warm reboot keeps
+ * the rail charged, which is why only updates showed it. The store initialises
+ * the flash and mounts /ext on first use (zephcore_fs_mount_ext()), so /ext is
+ * not automounted either.
+ *
+ * t-exit-dpd (nanoseconds, so 50 us) is how long the driver waits after
+ * Release-from-Deep-Power-Down, which it sends once at init to wake a part a
+ * previous firmware left asleep. Boards used to carry 30, 35 or 50 us each; 50
+ * covers all of them, and the extra few us run once per flash init. It
+ * assumes a powered part, so it does nothing for the cold-rail race above.
+ */
+&qspi_flash {
+	zephyr,deferred-init;
+	t-exit-dpd = <50000>;
+};
 
 / {
 	fstab {
@@ -23,7 +44,6 @@
 			compatible = "zephyr,fstab,littlefs";
 			mount-point = "/ext";
 			partition = <&qspi_storage_partition>;
-			automount;
 			read-size = <16>;
 			prog-size = <16>;
 			cache-size = <64>;

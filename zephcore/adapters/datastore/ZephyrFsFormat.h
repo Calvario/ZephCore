@@ -34,6 +34,16 @@ extern "C" {
  */
 bool zephcore_fs_format_all(bool *out_ext_mounted);
 
+/**
+ * @brief Mount /ext (QSPI) on first use, initialising its deferred flash.
+ *
+ * Idempotent. The flash is zephyr,deferred-init (qspi-ext.dtsi) and /ext is
+ * not automounted, so this is the only way /ext comes up.
+ *
+ * @return true if /ext is mounted; always false on boards with no QSPI.
+ */
+bool zephcore_fs_mount_ext(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -7,6 +7,7 @@
 #include "ZephyrFsUtil.h"
 
 #include <zephyr/devicetree.h>
+#include <zephyr/device.h>
 #include <zephyr/fs/fs.h>
 #include <zephyr/storage/flash_map.h>
 #include <zephyr/logging/log.h>
@@ -34,6 +35,53 @@ static void flatten(uint8_t id, const char *tag)
 		LOG_ERR("format: flatten(%s) failed: %d", tag, rc);
 	}
 	flash_area_close(fap);
+}
+
+#if FIXED_PARTITION_EXISTS(qspi_storage_partition)
+/* qspi-ext.dtsi makes the flash under /ext zephyr,deferred-init, so nothing
+ * probes it at boot. The flash sits behind a GPIO-switched rail on several
+ * boards, and the boot-time JEDEC read went out before a cold rail had come
+ * up: the driver failed, /ext stayed unmounted and contacts silently fell
+ * back to internal flash. A warm reboot keeps the rail charged; the first
+ * boot after a UF2 update (seconds in the bootloader, rail off) did not.
+ * Bringing the part up here, on first use, is long after the rail. Each role
+ * reaches this on its own path, so it is idempotent: -EALREADY means an
+ * earlier call already ran the init, whatever the result was. */
+static void ext_flash_init(void)
+{
+	const struct device *dev = FIXED_PARTITION_DEVICE(qspi_storage_partition);
+
+	if (!device_is_ready(dev)) {
+		int rc = device_init(dev);
+
+		LOG_INF("%s flash init: rc=%d ready=%d", EXT_MNT_POINT, rc,
+			(int)device_is_ready(dev));
+	}
+}
+#endif
+
+bool zephcore_fs_mount_ext(void)
+{
+#if DT_NODE_EXISTS(DT_NODELABEL(qspi_lfs))
+	if (zephcore_fs_is_mounted(EXT_MNT_POINT)) {
+		return true;
+	}
+	ext_flash_init();
+
+	/* fs_mount() auto-formats blank flash and mounts valid data untouched. */
+	FS_FSTAB_DECLARE_ENTRY(DT_NODELABEL(qspi_lfs));
+	int rc = fs_mount(&FS_FSTAB_ENTRY(DT_NODELABEL(qspi_lfs)));
+	bool mounted = zephcore_fs_is_mounted(EXT_MNT_POINT);
+
+	if (mounted) {
+		LOG_INF("%s mounted (rc=%d)", EXT_MNT_POINT, rc);
+	} else {
+		LOG_ERR("%s mount failed (rc=%d)", EXT_MNT_POINT, rc);
+	}
+	return mounted;
+#else
+	return false;
+#endif
 }
 
 bool zephcore_fs_format_all(bool *out_ext_mounted)
@@ -71,6 +119,8 @@ bool zephcore_fs_format_all(bool *out_ext_mounted)
 #endif
 
 #if FIXED_PARTITION_EXISTS(qspi_storage_partition)
+	/* A repeater never mounts /ext, so its flash is still uninitialised. */
+	ext_flash_init();
 	flatten(PARTITION_ID(qspi_storage_partition), "qspi_storage_partition");
 #endif
 
@@ -93,14 +143,8 @@ bool zephcore_fs_format_all(bool *out_ext_mounted)
 	 * contacts/channels save to /lfs and get needlessly migrated back to
 	 * /ext on the next boot ("Migrating contacts to external storage"). */
 	{
-		int ext_rc = fs_mount(&FS_FSTAB_ENTRY(DT_NODELABEL(qspi_lfs)));
-		bool ext_mounted = zephcore_fs_is_mounted(EXT_MNT_POINT);
+		bool ext_mounted = zephcore_fs_mount_ext();
 
-		if (ext_mounted) {
-			LOG_INF("format: %s remounted (rc=%d)", EXT_MNT_POINT, ext_rc);
-		} else {
-			LOG_ERR("format: %s remount failed (rc=%d)", EXT_MNT_POINT, ext_rc);
-		}
 		if (out_ext_mounted) {
 			*out_ext_mounted = ext_mounted;
 		}

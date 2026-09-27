@@ -51,52 +51,13 @@ bool ZephyrDataStore::mount()
 		return false;
 	}
 
-	/* Check if external QSPI was automounted */
-	if (zephcore_fs_is_mounted(extMountPoint())) {
-		ext_lfs_mounted = true;
-		LOG_INF("External QSPI LittleFS at %s (automounted, 100 blobs)", extMountPoint());
-	} else {
-#if DT_NODE_EXISTS(DT_NODELABEL(qspi_lfs))
-		/* Boot-time automount can miss the QSPI on the first boot after a
-		 * factory-erase (blank flash) or an early-boot timing race with QSPI
-		 * init.  Retry the mount explicitly (fs_mount auto-formats blank flash,
-		 * and mounts valid data without touching it) so contacts/channels land
-		 * on /ext.  Without this the store silently falls back to internal /lfs,
-		 * and the next boot that does mount /ext runs a needless contact
-		 * migration — the "Migrating contacts to external storage" churn. */
-#if DT_NODE_HAS_PROP(DT_COMPAT_GET_ANY_STATUS_OKAY(nordic_qspi_nor), zephyr_deferred_init)
-		/* The flash is deferred-init: probing it at boot raced its own
-		 * power rail and the JEDEC read came back 00 00 00, so the
-		 * driver failed and /ext could never mount. Initialising it here
-		 * instead means the part has had until first use to wake up —
-		 * over a second — rather than us guessing a settling delay. */
-		{
-			const struct device *qspi_dev =
-				DEVICE_DT_GET(DT_COMPAT_GET_ANY_STATUS_OKAY(nordic_qspi_nor));
-
-			if (!device_is_ready(qspi_dev)) {
-				int drc = device_init(qspi_dev);
-
-				LOG_INF("QSPI flash deferred init: rc=%d ready=%d",
-					drc, (int)device_is_ready(qspi_dev));
-			}
-		}
-#endif
-
-		FS_FSTAB_DECLARE_ENTRY(DT_NODELABEL(qspi_lfs));
-		int rc = fs_mount(&FS_FSTAB_ENTRY(DT_NODELABEL(qspi_lfs)));
-		if (zephcore_fs_is_mounted(extMountPoint())) {
-			ext_lfs_mounted = true;
-			LOG_INF("External QSPI LittleFS at %s (mounted on retry, rc=%d)",
-				extMountPoint(), rc);
-		} else {
-			ext_lfs_mounted = false;
-			LOG_WRN("External QSPI mount retry failed (rc=%d) - using internal only (20 blobs)", rc);
-		}
-#else
-		ext_lfs_mounted = false;
-		LOG_INF("External QSPI NOT mounted at %s - using internal only (20 blobs)", extMountPoint());
-#endif
+	/* External QSPI: deferred flash init + explicit mount, never at boot.
+	 * If it fails, contacts/channels fall back to internal /lfs, and the
+	 * next boot that does mount /ext keeps the /ext copy. */
+	ext_lfs_mounted = zephcore_fs_mount_ext();
+	if (!ext_lfs_mounted) {
+		LOG_INF("External QSPI not mounted at %s - using internal only (20 blobs)",
+			extMountPoint());
 	}
 
 	return true;

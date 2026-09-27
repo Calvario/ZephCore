@@ -100,6 +100,26 @@ write exactly what is already stored is skipped.
 Pending writes are now flushed before every clean reboot and power-off (CLI, UI, bootloader and OTA
 paths), not only before the companion app's reboot command.
 
+## Contacts and channels no longer disappear after an update
+
+Boards with external QSPI flash keep contacts, channels and the advert cache on it (`/ext`); identity and
+settings stay on the chip's internal flash. On some of these boards the flash is powered through a switched
+rail, and the firmware used to check for the flash very early in boot, just after switching that rail on.
+After a normal reboot the rail is still charged and the flash answers. After a UF2 update the rail has been
+off for the whole time the bootloader ran, the flash was not ready in time, and `/ext` was silently not
+used: the node came up with an empty contact list and default channels, while its name, radio settings
+and keys were all intact. Reported on a ThinkNode M1 upgrading to 1.17.5.
+
+The flash is now brought up when contacts are first loaded instead of during boot, on every board with
+`/ext`: ThinkNode M1, T-Echo, T-Impulse Plus, MeshTracker X1 (which already had this), SenseCAP Solar,
+Wio Tracker L1, Wio Tracker L1 Pro 1W and XIAO nRF52840.
+
+> [!NOTE]
+> **If this happened to you, your contacts were not erased.** They are still on the external flash, and
+> the next boot that finds it brings them back (a plain reboot is usually enough). Contacts and channels
+> added while the list was empty were stored on internal flash instead; they are dropped when the old
+> list returns, so re-add those few by hand.
+
 ## Remote CLI now executes on the device (protocol v14)
 
 The companion protocol's v14 additions — `CMD_RUN_CLI_COMMAND`/`PACKET_CLI_REPLY`, and

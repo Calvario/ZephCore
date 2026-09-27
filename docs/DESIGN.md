@@ -312,6 +312,9 @@ it polls external state. Repeater and room server share one loop (`server_main_c
 
 ### 8.5 Persistence
 - LittleFS `/lfs` (internal) and optional `/ext` (QSPI). BLE bonds in NVS, isolated from LittleFS on nRF52/ESP32.
+- `/ext` is never probed at boot: its flash is deferred-init and `zephcore_fs_mount_ext()` brings it up on first
+  use, since a boot-time probe can beat a switched rail that is still cold (first boot after a UF2 update). If it
+  still fails, the companion falls back to `/lfs` and the next boot that mounts `/ext` keeps the `/ext` copy.
 - Prefs are upstream's `prefs.json` (ZephCore fields under `zc`); the legacy binary layouts are migrated once and
   kept for downgrades.
 - Atomic replace for identity, prefs and channels; contacts on `/ext` only.

@@ -120,10 +120,9 @@
 		regulator-name = "lora-pwr-enable";
 		enable-gpios = <&gpio1 5 GPIO_ACTIVE_HIGH>;
 		regulator-boot-on;
-		/* Documents the module's requirement, but do not rely on it:
-		 * regulator-boot-on sends regulator_common_init() down the
-		 * refcount-only branch, so regulator_delay() never runs and this
-		 * value is inert. The real settle time comes from the SX126x driver's
+		/* The module's requirement. It runs at boot (Zephyr 3b4821f1ba6,
+		 * pinned from 1.17.5; it was skipped before), but do not rely on
+		 * it alone: the real settle time comes from the SX126x driver's
 		 * own reset (5 ms NRESET pulse + 5 ms wait + BUSY poll) before any
 		 * SPI traffic, at LORA_INIT_PRIORITY 90 against this rail's 75.
 		 * Anything put behind this rail that does NOT reset-then-wait needs

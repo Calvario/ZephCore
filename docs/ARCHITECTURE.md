@@ -769,7 +769,9 @@ Full command reference with constraints and remote-admin restrictions: `Repeater
 ### 7.2 DataStore (`adapters/datastore/`)
 
 - **Internal**: LittleFS on flash (`/lfs`), 256-byte cache for reduced flash I/O
-- **External**: Optional LittleFS on QSPI (`/ext`) with auto-migration
+- **External**: Optional LittleFS on QSPI (`/ext`) with auto-migration. The flash is `zephyr,deferred-init` and `/ext` is
+  not automounted (`boards/common/qspi-ext.dtsi`): `zephcore_fs_mount_ext()` brings it up on first use, because a
+  boot-time probe could beat a cold power rail (first boot after a UF2 update) and silently drop to internal flash
 - **BLE bonds**: NVS (`storage_partition`, 0xD0000 on nRF52) via Zephyr settings backend (≥1.16.2)
 - **Prefs**: `prefs.json` through upstream's `ConfigSerializer`, with upstream's key names for shared fields and ZephCore's own under `zc` (see §13); the older binary file is read once to migrate and kept
 - **Contacts**: 152-byte records, stored on external flash if available

@@ -113,12 +113,11 @@
 		regulator-name = "flash-power";
 		enable-gpios = <&gpio0 15 GPIO_ACTIVE_HIGH>;
 		regulator-boot-on;
-		/* Documents the part's requirement, but do not rely on it:
-		 * regulator_fixed_init() drives the enable GPIO active and then
-		 * passes is_enabled=true into regulator_common_init(), which
-		 * takes the refcount-only branch — regulator_delay() sits on the
-		 * other one and never runs. The flash gets its settling time
-		 * from deferred init instead (see the qspi_flash node). */
+		/* Runs at boot: since Zephyr 3b4821f1ba6 (pinned from 1.17.5)
+		 * regulator_fixed_init() sleeps this long after driving a
+		 * regulator-boot-on rail active. Before that it was skipped. The
+		 * flash's real margin is still its deferred init (qspi-ext.dtsi),
+		 * which runs when the store first mounts /ext. */
 		startup-delay-us = <100000>;
 	};
 
@@ -290,9 +289,10 @@
 	 *
 	 * sensor_power comes up at CONFIG_REGULATOR_FIXED_INIT_PRIORITY (75) and
 	 * both drivers run at 90 — microseconds later, with nothing scheduled in
-	 * between on this board. The node's startup-delay-us does not save them:
-	 * with regulator-boot-on, regulator_common_init() takes the refcount-only
-	 * branch and regulator_delay() never runs. Same trap as flash_power below.
+	 * between on this board. The node's startup-delay-us did not save them:
+	 * until Zephyr 3b4821f1ba6 (pinned from 1.17.5) it was skipped for a
+	 * regulator-boot-on rail. It now runs (5 ms), but the parts were never
+	 * validated against it, so the deferral below stays.
 	 * (vin-supply + regulator_enable() would not help either — that applies
 	 * off-on-delay-us, and only on the 0->1 refcount transition.)
 	 *
@@ -365,14 +365,11 @@
 	qspi_flash: qspi_flash@0 {
 		compatible = "nordic,qspi-nor";
 		reg = <0>;
-		/* Do not probe this at boot. The rail is switched on by
-		 * flash-power a few init priorities earlier, and the part is not
-		 * driving the bus yet when the driver's JEDEC read goes out —
-		 * it answers 00 00 00 at 0.4 s and a correct c8 40 17 by 5.9 s
-		 * on the very same boot. A fixed settling delay would only be a
-		 * guess at where in between it wakes; instead the driver is
-		 * initialised on demand, when the store first mounts /ext. */
-		zephyr,deferred-init;
+		/* Not probed at boot: qspi-ext.dtsi makes it zephyr,deferred-init.
+		 * This board is where that came from — probed a few init
+		 * priorities after flash-power switched the rail on, the part
+		 * answered 00 00 00 at 0.4 s and a correct c8 40 17 by 5.9 s on
+		 * the very same boot. */
 		/* Single-line, as every other QSPI board here uses.
 		 *
 		 * Quad needs the part's QE bit set, and the binding defaults
@@ -395,7 +392,6 @@
 		size = <67108864>;            /* 64Mbit = 8MB, in bits */
 		has-dpd;
 		t-enter-dpd = <3000>;
-		t-exit-dpd = <30000>;
 	};
 };
 

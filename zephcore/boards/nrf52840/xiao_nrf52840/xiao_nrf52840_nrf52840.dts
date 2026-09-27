@@ -230,7 +230,6 @@
 		size = <16777216>;
 		has-dpd;
 		t-enter-dpd = <3000>;
-		t-exit-dpd = <50000>;
 	};
 };
 
