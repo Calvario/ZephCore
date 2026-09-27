@@ -1,4 +1,4 @@
-# ZephCore 1.17.6a-zephcore
+# ZephCore 1.17.6-zephcore
 
 A large release: companion firmware now speaks WiFi (TCP, on boards that support it), preferences
 move to upstream's `prefs.json` format, and ESP32-S3 repeaters can finally light-sleep. Underneath,
@@ -6,12 +6,6 @@ the mesh core, radio drivers and companion protocol handling were rebuilt agains
 text so the two codebases read the same again. Also: GPS reliability fixes, more accurate battery
 reporting, reduced flash wear, and the remote CLI (protocol v14) now executes commands sent by
 contacts you have allowed to use it, matching upstream.
-
-> [!IMPORTANT]
-> **This is a pre-release.** The Mesh America configurator keeps offering 1.17.5c; flash this one by
-> hand. ESP32-S3 light sleep was bench-validated on a XIAO ESP32-S3; on the Heltec boards that
-> enable it by default it is build-tested only, so reports from Heltec repeaters are especially
-> welcome (`get pm`, see below).
 
 > [!NOTE]
 > A normal upgrade keeps your identity, settings, contacts and phone pairing. Preferences are
