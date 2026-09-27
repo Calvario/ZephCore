@@ -622,7 +622,7 @@ uint32_t gps_module_reapply_step(uint8_t step)
 		return 0;
 	}
 	gps_uart_send((const uint8_t *)list[step].sentence, strlen(list[step].sentence));
-	return (step + 1 < n) ? list[step].gap_ms : 0;
+	return ((size_t)step + 1 < n) ? list[step].gap_ms : 0;
 }
 #endif
 
