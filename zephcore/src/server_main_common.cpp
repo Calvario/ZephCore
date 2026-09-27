@@ -127,25 +127,29 @@ static struct ring_buf usb_ring_buf;
 static char cli_line_buf[CLI_LINE_BUF_SIZE];
 static char cli_reply_buf[256];
 static uint16_t cli_line_idx;
-/* Last byte seen by cli_rx_work_fn, for collapsing CRLF/LFCR pairs. Persists
- * across work-item invocations, so a pair split across two USB packets still
+/* Last byte seen by cli_rx_bytes, for collapsing CRLF/LFCR pairs. Persists
+ * across calls, so a pair split across two USB packets still
  * compares correctly. */
 static uint8_t cli_prev_byte;
 
-/* Completed CLI lines are handed to the MAIN thread for execution.  Byte
- * assembly + echo (cli_rx_work_fn) runs on sysworkq and touches no mesh
- * state, but handleCommand() mutates the lock-free packet pool / dispatcher
- * that loop() also touches — running it on sysworkq races the main loop.
- * So we queue the finished line and let the event loop run handleCommand(). */
+/* The whole CLI runs on the MAIN thread: byte assembly and echo
+ * (cli_rx_bytes) as well as handleCommand(), which mutates the lock-free
+ * packet pool / dispatcher that loop() also touches.  Keeping the echo there
+ * too makes main the console's only writer, so an echoed keystroke can never
+ * land inside a packet-log line (it did when the echo ran on sysworkq, which
+ * preempts main).  A finished line still passes through the queue. */
 struct cli_cmd_line { char buf[CLI_LINE_BUF_SIZE]; };
 K_MSGQ_DEFINE(cli_cmd_queue, sizeof(struct cli_cmd_line), 4, 4);
 
+/* Set by the ISR when usb_ring_buf is full and it stopped reading the port;
+ * main re-enables RX once it has drained the ring.  Unread bytes wait in the
+ * USB driver (the host is NAKed), so a long paste is never cut. */
+static atomic_t cli_rx_paused;
+
 /* Work items for event-driven processing */
-static void cli_rx_work_fn(struct k_work *work);
 static void maintenance_timer_fn(struct k_timer *timer);
 static void tx_drain_work_fn(struct k_work *work);
 static void initial_advert_work_fn(struct k_work *work);
-K_WORK_DEFINE(cli_rx_work, cli_rx_work_fn);
 K_WORK_DELAYABLE_DEFINE(tx_drain_work, tx_drain_work_fn);
 K_WORK_DELAYABLE_DEFINE(initial_advert_work, initial_advert_work_fn);
 
@@ -194,21 +198,58 @@ static void cli_uart_isr(const struct device *dev, void *user_data)
 
 		if (uart_irq_rx_ready(dev)) {
 			uint8_t buf[64];
-			int recv_len = uart_fifo_read(dev, buf, sizeof(buf));
+			uint32_t room = MIN(sizeof(buf), ring_buf_space_get(&usb_ring_buf));
+			if (room == 0) {
+				/* Ring full: stop reading, main resumes (cli_rx_paused). */
+				atomic_set(&cli_rx_paused, 1);
+				uart_irq_rx_disable(dev);
+				k_event_post(&mesh_events, MESH_EVENT_CLI_RX);
+				break;
+			}
+			int recv_len = uart_fifo_read(dev, buf, room);
 			if (recv_len > 0) {
 				ring_buf_put(&usb_ring_buf, buf, recv_len);
-				k_work_submit(&cli_rx_work);
+				k_event_post(&mesh_events, MESH_EVENT_CLI_RX);
 			}
 		}
 	}
 }
 
-/* CLI RX work - processes line-based CLI commands
- * Matches Arduino behavior: echo each char, then "  -> reply" on enter
- */
-static void cli_rx_work_fn(struct k_work *work)
+#if IS_ENABLED(CONFIG_ZEPHCORE_PACKET_LOGGING)
+/* A packet line ended the echo of a half-typed command (helpers/PacketLog.h).
+ * Main thread only, like everything that writes the console. */
+static bool cli_echo_cut;
+
+extern "C" void zc_console_line_start(void)
 {
-	ARG_UNUSED(work);
+	if (cli_line_idx > 0 && !cli_echo_cut) {
+		cli_print("\r\n");
+		cli_echo_cut = true;
+	}
+}
+
+/* Before echoing more of a cut command, reprint what was typed so far. */
+static void cli_echo_resume(void)
+{
+	if (cli_echo_cut && usb_dev) {
+		for (uint16_t i = 0; i < cli_line_idx; i++) {
+			uart_poll_out(usb_dev, cli_line_buf[i]);
+		}
+	}
+	cli_echo_cut = false;
+}
+#else
+static inline void cli_echo_resume(void) {}
+#endif
+
+/* CLI RX, on the main thread - assembles line-based CLI commands.
+ * Matches Arduino behavior: echo each char, then "  -> reply" on enter.
+ * Returns true after queueing one finished line (the caller runs it before
+ * reading on, so a pasted block cannot overflow the 4-deep queue), false once
+ * the ring is empty.
+ */
+static bool cli_rx_bytes(void)
+{
 	uint8_t byte;
 
 	while (ring_buf_get(&usb_ring_buf, &byte, 1) == 1) {
@@ -237,21 +278,22 @@ static void cli_rx_work_fn(struct k_work *work)
 					cli_line_buf, cli_line_idx > 40 ? "..." : "");
 			}
 
-			/* Hand the command to the main thread (see cli_cmd_queue).
-			 * The reply + trailing newline are emitted there, exactly
-			 * matching the previous inline output order. */
+			/* Queue it for process_cli_commands(), which the caller
+			 * runs before reading on; the reply + trailing newline are
+			 * emitted there. */
 			struct cli_cmd_line c;
 			strncpy(c.buf, cli_line_buf, sizeof(c.buf) - 1);
 			c.buf[sizeof(c.buf) - 1] = '\0';
-			if (k_msgq_put(&cli_cmd_queue, &c, K_NO_WAIT) == 0) {
-				k_event_post(&mesh_events, MESH_EVENT_CLI_RX);
-			} else {
-				cli_print("\r\n  -> busy\r\n");
-			}
 			cli_line_idx = 0;
+			cli_echo_resume();   /* nothing left to reprint: just clears */
+			if (k_msgq_put(&cli_cmd_queue, &c, K_NO_WAIT) == 0) {
+				return true;
+			}
+			cli_print("\r\n  -> busy\r\n");
 		} else if (byte == 0x7F || byte == 0x08) {
 			/* Backspace - echo backspace sequence */
 			if (cli_line_idx > 0) {
+				cli_echo_resume();
 				cli_line_idx--;
 				if (usb_dev) {
 					uart_poll_out(usb_dev, '\b');
@@ -261,12 +303,14 @@ static void cli_rx_work_fn(struct k_work *work)
 			}
 		} else if (cli_line_idx < sizeof(cli_line_buf) - 1) {
 			/* Echo character back (like Arduino) */
+			cli_echo_resume();
 			if (usb_dev) {
 				uart_poll_out(usb_dev, byte);
 			}
 			cli_line_buf[cli_line_idx++] = (char)byte;
 		}
 	}
+	return false;
 }
 
 #ifdef ZEPHCORE_LORA
@@ -498,13 +542,22 @@ static void server_event_loop(void)
 			gps_process_event();
 		}
 
-#ifdef ZEPHCORE_LORA
-		/* Run queued CLI commands here (main thread) BEFORE loop() drains
-		 * any outbound packets they enqueued — keeps all mesh-state
-		 * mutation on the main thread (see cli_cmd_queue). */
+		/* Console input: assemble + echo, then run each finished line here
+		 * (main thread) BEFORE loop() drains any outbound packets it
+		 * enqueued — keeps all mesh-state mutation, and every console
+		 * write, on the main thread (see cli_cmd_queue). */
 		if (events & MESH_EVENT_CLI_RX) {
-			process_cli_commands();
+			while (cli_rx_bytes()) {
+#ifdef ZEPHCORE_LORA
+				process_cli_commands();
+#endif
+			}
+			if (atomic_cas(&cli_rx_paused, 1, 0) && usb_dev) {
+				uart_irq_rx_enable(usb_dev);
+			}
 		}
+
+#ifdef ZEPHCORE_LORA
 
 		/* Deferred boot advert — sent on the main thread (see
 		 * initial_advert_work_fn); loop() below drains the queued packet. */

@@ -16,6 +16,13 @@
 
 #if IS_ENABLED(CONFIG_ZEPHCORE_PACKET_LOGGING)
 
+/* Called before every packet line; defined by the role's main
+ * (server_main_common.cpp, main_observer.cpp, main_companion.cpp). If the
+ * user is part-way through typing a CLI command, its echo is ended with a
+ * newline first, so a packet line always starts at column 0 for consumers
+ * that parse the console line by line. */
+extern "C" void zc_console_line_start(void);
+
 static inline bool packet_log_has_addrs(uint8_t ptype)
 {
 	return ptype == PAYLOAD_TYPE_PATH || ptype == PAYLOAD_TYPE_REQ ||
@@ -29,6 +36,7 @@ static inline void packet_log_rx(const char *datetime, const mesh::Packet *pkt,
 	static char hash_hex[MAX_HASH_SIZE * 2 + 1];
 	uint8_t ptype = pkt->getPayloadType();
 
+	zc_console_line_start();
 	pkt->calculatePacketHash(packet_hash);
 	mesh::Utils::toHex(hash_hex, packet_hash, MAX_HASH_SIZE);
 	if (packet_log_has_addrs(ptype)) {
@@ -52,6 +60,7 @@ static inline void packet_log_tx(const char *datetime, const mesh::Packet *pkt)
 {
 	uint8_t ptype = pkt->getPayloadType();
 
+	zc_console_line_start();
 	if (packet_log_has_addrs(ptype)) {
 		printk("%s: TX, len=%d (type=%d, route=%s, payload_len=%d) [%02X -> %02X]\n",
 			datetime, pkt->getRawLength(), ptype,

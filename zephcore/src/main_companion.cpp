@@ -72,6 +72,14 @@ LOG_MODULE_REGISTER(zephcore_main, CONFIG_ZEPHCORE_MAIN_LOG_LEVEL);
 #include <app/PowerPolicy.h>
 #endif
 
+#if IS_ENABLED(CONFIG_ZEPHCORE_PACKET_LOGGING)
+/* helpers/PacketLog.h hook, a no-op here: packet_logging.conf is for the
+ * repeater, room server and observer consoles. A companion's USB port carries
+ * the binary app protocol, and its text CLI echoes through its own TX ring
+ * (adapters/usb/ZephyrCompanionUSB.cpp). */
+extern "C" void zc_console_line_start(void) {}
+#endif
+
 /* Without this a BLE controller assert freezes the CPU at top IRQ priority
  * with no output; log the location and reboot. */
 #if IS_ENABLED(CONFIG_BT_CTLR_ASSERT_HANDLER)

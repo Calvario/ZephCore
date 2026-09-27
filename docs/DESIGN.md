@@ -242,6 +242,9 @@ sequenceDiagram
   which only enqueue and signal.
 - R6.3 No busy-wait or unbounded blocking on the main thread.
 - R6.4 The radio is RX 24/7; it is never PM-suspended.
+- R6.5 The text console of the servers and the observer has one writer, the main thread: CLI echo, replies and
+  packet-log lines. A second writer in a context that preempts it (the echo once ran on sysworkq) or that it
+  preempts (the log thread) splits lines, and line-parsing consumers such as observer feeds lose packets.
 
 ### 6.2 Execution contexts
 
@@ -315,6 +318,9 @@ it polls external state. Repeater and room server share one loop (`server_main_c
 
 ### 8.6 Observability
 - Zephyr logging per module; `debug.conf`; RTT on nRF, console on ESP32.
+- Packet logging (`packet_logging.conf`): upstream's `MESH_PACKET_LOGGING` RAW/RX/TX lines through `printk`, with
+  the logging subsystem off so they share the console only with the CLI (R6.5). Every packet is one whole line
+  starting at column 0, also while a host is typing commands (bench-verified SF7 BW62.5 to BW500).
 - CLI `get`/`stats-*`, `get pwrmgt.bootreason` (reset cause, shutdown reason, and the last fatal error with its pc).
 - Host regression suite (`tests/`, CI with ASan/UBSan) over the production sources.
 

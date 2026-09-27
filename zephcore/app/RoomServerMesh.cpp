@@ -280,6 +280,7 @@ void RoomServerMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int le
   /* Arduino-compatible RAW packet hex dump */
   static char hex_buf[MAX_TRANS_UNIT * 2 + 1];
   mesh::Utils::toHex(hex_buf, raw, len);
+  zc_console_line_start();
   printk("%s RAW: %s\n", getLogDateTime(), hex_buf);
 #endif
   (void)snr;
@@ -930,7 +931,7 @@ void RoomServerMesh::handleCommand(uint32_t sender_timestamp, char* command, cha
   }
 
   /* Blank line: nothing to run.  The USB reader forwards these (see
-   * cli_rx_work_fn) because `region load` commits on one -- which is
+   * cli_rx_bytes) because `region load` commits on one -- which is
    * handled above, before this returns. */
   if (StrHelper::isBlank(command)) { reply[0] = 0; return; }
 

@@ -93,10 +93,6 @@ module = ZEPHCORE_UI_ACTIONS
 module-str = zephcore_ui_actions
 source "$(ZEPHYR_BASE)/subsys/logging/Kconfig.template.log_config"
 
-module = ZEPHCORE_WIFI_OTA
-module-str = zephcore_wifi_ota
-source "$(ZEPHYR_BASE)/subsys/logging/Kconfig.template.log_config"
-
 module = ZEPHCORE_OBSERVER
 module-str = zephcore_observer
 source "$(ZEPHYR_BASE)/subsys/logging/Kconfig.template.log_config"
@@ -737,20 +733,14 @@ menu "Debug & Logging"
 config ZEPHCORE_PACKET_LOGGING
 	bool "Enable mesh packet logging"
 	default n
-	depends on LOG
+	depends on PRINTK
 	help
 	  Log all RX and TX mesh packets in Arduino-compatible format.
 	  Output format matches Arduino MESH_PACKET_LOGGING exactly:
 	  "HH:MM:SS - D/M/YYYY U: RX, len=N (type=N, route=D/F, payload_len=N) SNR=N RSSI=N score=N time=N hash=XXXX [XX -> XX]"
-
-config ZEPHCORE_PACKET_LOGGING_ONLY
-	bool "Quiet mode - only packet logs, no debug spam"
-	default n
-	depends on ZEPHCORE_PACKET_LOGGING
-	help
-	  When enabled, suppresses all other log messages and only outputs
-	  packet logging (RAW, RX, TX lines). Uses printk() to bypass
-	  log level filtering.
+	  The lines are printk(), so they need no logging subsystem:
+	  packet_logging.conf keeps CONFIG_LOG=n and the console carries
+	  nothing else.
 
 endmenu
 

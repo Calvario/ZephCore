@@ -152,6 +152,25 @@ partial ZephCore-specific decode.
 - Sprites are now drawn with a one-pixel black halo so they stay visible against similarly-lit
   backgrounds.
 
+## Packet logging you can feed to an observer
+
+Repeater and room-server builds with `packet_logging.conf` (the Arduino-format `RAW:` / `RX,` / `TX,` lines
+that tools such as mctomqtt read from the USB port) now give exactly one whole line per packet:
+
+- **Only packet lines and CLI replies on the port.** The Zephyr logging subsystem is off in these builds, so
+  `<inf>` lines (GPS fixes and the like) no longer appear, and can no longer land in the middle of a packet line.
+- **Sending commands no longer breaks packet lines.** The CLI echoed typed characters from a background thread
+  that could interrupt a packet line mid-way; a tool asking `get public.key` while traffic flowed could corrupt the
+  line being printed. The echo now runs on the same thread as the packet log.
+- **Every packet line starts at the beginning of a line**, even while someone is halfway through typing a
+  command: the partial command is moved aside and reprinted on the next keystroke.
+- A long paste into the CLI is no longer cut when the device is busy; input now waits instead of being dropped.
+
+Bench-tested with a T1000-E receiving bursts from a second node on SF7 at 62.5, 125, 250 and 500 kHz, short and
+maximum-length packets, with and without a host typing into the port: every packet received was logged whole.
+The same builds also caught a regression in the Zephyr version this release moves to, which would have cut any
+USB console output longer than 64 bytes (packet lines, CLI replies); it is patched, and never shipped.
+
 ---
 
 ## Also in this release
@@ -180,3 +199,5 @@ partial ZephCore-specific decode.
   variants and capabilities, replacing board-name regex lists scattered across the build scripts.
 - **System design docs published**: `docs/DESIGN.md` and nine architecture decision records covering
   the choices made in this restructure.
+- **`healthcheck.conf` now logs.** It never turned the logging subsystem on, so a repeater built with it
+  printed nothing. A few configuration lines that had no effect on any build were removed.

@@ -212,6 +212,32 @@ static void print_banner(void)
 
 /* ========== CLI RX processing ========== */
 
+#if IS_ENABLED(CONFIG_ZEPHCORE_PACKET_LOGGING)
+/* A packet line ended the echo of a half-typed command (helpers/PacketLog.h). */
+static bool cli_echo_cut;
+
+extern "C" void zc_console_line_start(void)
+{
+	if (cli_line_idx > 0 && !cli_echo_cut) {
+		cli_print("\r\n");
+		cli_echo_cut = true;
+	}
+}
+
+/* Before echoing more of a cut command, reprint what was typed so far. */
+static void cli_echo_resume(void)
+{
+	if (cli_echo_cut && usb_dev) {
+		for (uint16_t i = 0; i < cli_line_idx; i++) {
+			uart_poll_out(usb_dev, cli_line[i]);
+		}
+	}
+	cli_echo_cut = false;
+}
+#else
+static inline void cli_echo_resume(void) {}
+#endif
+
 static void process_cli_rx(void)
 {
 	uint8_t byte;
@@ -237,15 +263,18 @@ static void process_cli_rx(void)
 				}
 				cli_line_idx = 0;
 			}
+			cli_echo_resume();   /* nothing left to reprint: just clears */
 			cli_print("\r\n");
 		} else if (byte == 0x7F || byte == 0x08) {
 			if (cli_line_idx > 0) {
+				cli_echo_resume();
 				cli_line_idx--;
 				uart_poll_out(usb_dev, '\b');
 				uart_poll_out(usb_dev, ' ');
 				uart_poll_out(usb_dev, '\b');
 			}
 		} else if (cli_line_idx < sizeof(cli_line) - 1) {
+			cli_echo_resume();
 			uart_poll_out(usb_dev, byte);
 			cli_line[cli_line_idx++] = (char)byte;
 		}

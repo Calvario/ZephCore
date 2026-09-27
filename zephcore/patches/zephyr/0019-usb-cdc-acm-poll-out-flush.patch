@@ -1,0 +1,49 @@
+USB CDC ACM: cdc_acm_poll_out() flushes a full TX buffer instead of dropping.
+
+6d69698de74 ("cdc_acm: tx throughput improvements", merged 2026-09-25)
+replaced the TX ring buffer with net_bufs. poll_out() now only fills the one
+`current` 64 B buffer, and moving on to the next is left to tx_fifo_work. A
+printk burst from a thread that does not yield (a packet log line is 100-300 B)
+fills that buffer and every further byte is discarded ("No TX buffer available,
+discard data") because the work item cannot run meanwhile: RAW hex cut after
+~64 B, RX lines losing their start, CLI replies such as `get public.key`
+corrupted. The old ring buffer accepted ~1 KB per burst.
+
+Enqueue the full buffer from poll_out() (thread context only) and retry once.
+It never blocks, so an unplugged host cannot hang the caller; bytes are
+dropped only when the buffer pool is exhausted, as before the rewrite.
+
+Found 2026-09-26 with a rak3401_1watt repeater + packet_logging.conf feeding
+mctomqtt. Not fixed on Zephyr main as of 3e7672a71bd; no upstream issue found.
+
+diff --git a/subsys/usb/device_next/class/usbd_cdc_acm.c b/subsys/usb/device_next/class/usbd_cdc_acm.c
+index 3957daa167b..5492f6c5ce4 100644
+--- a/subsys/usb/device_next/class/usbd_cdc_acm.c
++++ b/subsys/usb/device_next/class/usbd_cdc_acm.c
+@@ -1143,6 +1143,7 @@ static void cdc_acm_poll_out(const struct device *dev, const unsigned char c)
+ 	struct cdc_acm_uart_data *const data = dev->data;
+ 	k_spinlock_key_t key;
+ 	uint32_t wrote;
++	bool flushed = false;
+ 
+ 	while (true) {
+ 		key = k_spin_lock(&data->lock);
+@@ -1153,6 +1154,18 @@ static void cdc_acm_poll_out(const struct device *dev, const unsigned char c)
+ 			break;
+ 		}
+ 
++		/* ZephCore: the current buffer is full. Hand it to the USB stack
++		 * now and continue in a fresh one from the pool, rather than
++		 * discarding until tx_fifo_work runs (it cannot run while this
++		 * thread is inside a long printk burst). Drops only once the pool
++		 * itself is exhausted, as the old ring buffer did.
++		 */
++		if (!flushed && !k_is_in_isr()) {
++			flushed = true;
++			cdc_acm_tx_fifo_enqueue(dev);
++			continue;
++		}
++
+ 		if (k_is_in_isr() || !data->flow_ctrl) {
+ 			LOG_WRN_ONCE("No TX buffer available, discard data");
+ 			goto cdc_acm_poll_out_schedule;
