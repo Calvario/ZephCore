@@ -69,6 +69,9 @@ void mesh_save_display_rotate(bool rotated);
 void mesh_save_input_rotate(bool rotated);
 /* path_hash_mode: 0/1/2 → 1/2/3 bytes per hop appended to outbound flood path */
 void mesh_save_path_hash_mode(uint8_t mode);
+/* Telemetry request policy (TELEM_MODE_*: 0 deny, 1 contact flags, 2 allow all).
+ * The flash write is deferred to the mesh thread. */
+void mesh_save_telemetry_modes(uint8_t base, uint8_t loc, uint8_t env);
 /* GPS duty-cycle interval in seconds (0 = always on). Applied live immediately
  * (lightweight); the flash write is deferred to the mesh thread. */
 void mesh_save_gps_duty_sec(uint32_t sec);

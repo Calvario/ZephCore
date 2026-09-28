@@ -49,6 +49,7 @@ LOG_MODULE_REGISTER(zephcore_ui_actions, CONFIG_ZEPHCORE_UI_ACTIONS_LOG_LEVEL);
 #define UI_ACTION_GPS_DUTY_SAVE     BIT(12)
 #define UI_ACTION_DISPLAY_ROTATE_SAVE BIT(13)
 #define UI_ACTION_INPUT_ROTATE_SAVE BIT(14)
+#define UI_ACTION_TELEMETRY_SAVE    BIT(15)
 
 /* Module-local pointers, set by init */
 static CompanionMesh *s_mesh;
@@ -77,6 +78,7 @@ static atomic_t pending_path_hash_mode;
 static atomic_t pending_gps_duty_sec;
 static atomic_t pending_display_rotate;
 static atomic_t pending_input_rotate;
+static atomic_t pending_telemetry_modes;
 
 extern "C" void ui_mesh_actions_init(struct k_event *mesh_events,
 				     uint32_t mesh_event_ui_action,
@@ -171,6 +173,15 @@ extern "C" void mesh_save_path_hash_mode(uint8_t mode)
 {
 	atomic_set(&pending_path_hash_mode, (atomic_val_t)mode);
 	atomic_or(&pending_ui_actions, UI_ACTION_PATH_HASH_MODE_SAVE);
+	k_event_post(s_mesh_events, s_mesh_event_ui_action);
+}
+
+extern "C" void mesh_save_telemetry_modes(uint8_t base, uint8_t loc, uint8_t env)
+{
+	/* Packed as CMD_SET_OTHER_PARAMS does: (env << 4) | (loc << 2) | base */
+	atomic_set(&pending_telemetry_modes,
+		   (atomic_val_t)(((env & 0x03) << 4) | ((loc & 0x03) << 2) | (base & 0x03)));
+	atomic_or(&pending_ui_actions, UI_ACTION_TELEMETRY_SAVE);
 	k_event_post(s_mesh_events, s_mesh_event_ui_action);
 }
 
@@ -309,6 +320,17 @@ extern "C" void mesh_handle_ui_actions(void)
 		if (mode > 2) mode = 2;  /* clamp to valid range (0-2 → 1-3 bytes) */
 		s_mesh->prefs.path_hash_mode = mode;
 		LOG_INF("path_hash_mode=%d (%d bytes per hop)", mode, mode + 1);
+		need_save = true;
+	}
+
+	if (actions & UI_ACTION_TELEMETRY_SAVE) {
+		uint8_t m = (uint8_t)atomic_get(&pending_telemetry_modes);
+		s_mesh->prefs.telemetry_mode_base = m & 0x03;
+		s_mesh->prefs.telemetry_mode_loc = (m >> 2) & 0x03;
+		s_mesh->prefs.telemetry_mode_env = (m >> 4) & 0x03;
+		LOG_INF("telemetry modes base=%d loc=%d env=%d (button)",
+			s_mesh->prefs.telemetry_mode_base, s_mesh->prefs.telemetry_mode_loc,
+			s_mesh->prefs.telemetry_mode_env);
 		need_save = true;
 	}
 

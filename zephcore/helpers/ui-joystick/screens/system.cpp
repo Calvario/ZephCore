@@ -1015,6 +1015,11 @@ bool TelemetryScreen::handleInput(char c)
 				char notice[32];
 				snprintf(notice, sizeof(notice), "%s: %s", label, kStates[*field]);
 				_task->showAlert(notice, 1000);
+				/* Persist it: the toggle used to change RAM only, so the
+				 * policy silently reverted on the next reboot. */
+				mesh_save_telemetry_modes(prefs->telemetry_mode_base,
+							  prefs->telemetry_mode_loc,
+							  prefs->telemetry_mode_env);
 			}
 		}
 		return true;
